@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Build output
+backend/dist/
+widget/dist/
+
+# Environment files
+.env
+backend/.env
+
+# OS files
+.DS_Store
+
+# Brainstorm sessions
+.superpowers/
+
+# Editor
+.vscode/
+.idea/
