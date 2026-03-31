@@ -16,6 +16,7 @@ const reportStateFn: FunctionDeclaration = {
     properties: {
       mode: {
         type: SchemaType.STRING,
+        format: 'enum',
         enum: ['berater', 'anfrage', 'service', 'undetermined'],
         description: 'The current conversation mode',
       },
