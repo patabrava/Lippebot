@@ -360,11 +360,7 @@ function init(): void {
   const script = document.currentScript || document.querySelector('script[data-api-url]');
   if (!script) return;
 
-  const apiUrl = script.getAttribute('data-api-url');
-  if (!apiUrl) {
-    console.error('Sarah Widget: data-api-url attribute is required');
-    return;
-  }
+  const apiUrl = script.getAttribute('data-api-url')?.trim() || window.location.origin;
 
   const delay = parseInt(script.getAttribute('data-delay') || '3000', 10);
   const greeting = script.getAttribute('data-greeting') || undefined;
