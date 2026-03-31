@@ -4,7 +4,15 @@ import { z } from 'zod';
 import type { GeminiService } from '../services/gemini.js';
 import type { PipedriveService } from '../services/pipedrive.js';
 import type { EmailService } from '../services/email.js';
-import type { ChatMessage } from '../types/index.js';
+import type { ChatMessage, LeadData, ServiceData } from '../types/index.js';
+
+function hasRequiredLeadFields(data: Record<string, unknown>): data is LeadData {
+  return !!(data.firstName && data.lastName && data.phone && data.postalCode && data.city && data.availability);
+}
+
+function hasRequiredServiceFields(data: Record<string, unknown>): data is ServiceData {
+  return !!(data.customerName && data.phone && data.issueDescription);
+}
 
 const chatRequestSchema = z.object({
   sessionId: z.string().min(1),
@@ -84,6 +92,40 @@ export function createChatRoute(deps: ChatDeps): Hono {
             } catch (err) {
               console.error('Service activity creation error:', err);
             }
+          }
+        }
+
+        // If Gemini used report_state with complete data (instead of submit_lead/submit_service_request),
+        // trigger Pipedrive/email based on mode + collected data completeness
+        const collectedObj = lastCollectedData as Record<string, unknown>;
+        if (lastMode === 'anfrage' && hasRequiredLeadFields(collectedObj)) {
+          try {
+            if (deps.pipedrive.isConfigured()) {
+              const result = await deps.pipedrive.createLead(collectedObj as LeadData);
+              await stream.writeSSE({
+                data: JSON.stringify({ type: 'action', action: 'create_lead', data: result }),
+              });
+            }
+            if (deps.email.isConfigured() && deps.notificationEmailTo) {
+              await deps.email.sendLeadNotification(deps.notificationEmailTo, collectedObj as LeadData);
+            }
+          } catch (err) {
+            console.error('Lead creation from state error:', err);
+          }
+        }
+        if (lastMode === 'service' && hasRequiredServiceFields(collectedObj)) {
+          try {
+            if (deps.pipedrive.isConfigured()) {
+              const result = await deps.pipedrive.createServiceActivity(collectedObj as ServiceData);
+              await stream.writeSSE({
+                data: JSON.stringify({ type: 'action', action: 'create_service', data: result }),
+              });
+            }
+            if (deps.email.isConfigured() && deps.serviceEmailTo) {
+              await deps.email.sendServiceNotification(deps.serviceEmailTo, collectedObj as ServiceData);
+            }
+          } catch (err) {
+            console.error('Service creation from state error:', err);
           }
         }
 

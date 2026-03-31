@@ -2,8 +2,9 @@ import {
   GoogleGenerativeAI,
   type FunctionDeclaration,
   SchemaType,
-  type GenerateContentRequest,
   type Content,
+  type Part,
+  FunctionCallingMode,
 } from '@google/generative-ai';
 import type { ChatMessage, Mode, LeadData, ServiceData, ConversationState } from '../types/index.js';
 import { buildSystemPrompt } from '../prompts/system-prompt.js';
@@ -50,7 +51,7 @@ const reportStateFn: FunctionDeclaration = {
 
 const submitLeadFn: FunctionDeclaration = {
   name: 'submit_lead',
-  description: 'Submit a qualified lead when all required contact information has been collected.',
+  description: 'Submit a qualified lead when all required contact information has been collected. After calling this, generate a warm confirmation message.',
   parameters: {
     type: SchemaType.OBJECT,
     properties: {
@@ -75,7 +76,7 @@ const submitLeadFn: FunctionDeclaration = {
 
 const submitServiceRequestFn: FunctionDeclaration = {
   name: 'submit_service_request',
-  description: 'Submit a service request when the customer has described their issue and provided contact info.',
+  description: 'Submit a service request when the customer has described their issue and provided contact info. After calling this, generate a warm confirmation message.',
   parameters: {
     type: SchemaType.OBJECT,
     properties: {
@@ -89,20 +90,32 @@ const submitServiceRequestFn: FunctionDeclaration = {
   },
 };
 
-export interface GeminiStreamResult {
-  textStream: AsyncIterable<string>;
-  getState: () => Promise<ConversationState | null>;
-  getLeadData: () => Promise<LeadData | null>;
-  getServiceData: () => Promise<ServiceData | null>;
-}
+const allFunctionDeclarations = [reportStateFn, submitLeadFn, submitServiceRequestFn];
 
 export function createGeminiService(apiKey: string) {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
     model: 'gemini-2.5-flash',
     systemInstruction: buildSystemPrompt(),
-    tools: [{ functionDeclarations: [reportStateFn, submitLeadFn, submitServiceRequestFn] }],
+    tools: [{ functionDeclarations: allFunctionDeclarations }],
   });
+
+  function extractFunctionCalls(parts: Part[]): Array<{ name: string; args: Record<string, unknown> }> {
+    const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    for (const part of parts) {
+      if (part.functionCall) {
+        calls.push({ name: part.functionCall.name, args: (part.functionCall.args || {}) as Record<string, unknown> });
+      }
+    }
+    return calls;
+  }
+
+  function extractText(parts: Part[]): string {
+    return parts
+      .filter((p) => 'text' in p && p.text)
+      .map((p) => (p as { text: string }).text)
+      .join('');
+  }
 
   async function* streamChat(
     sessionId: string,
@@ -115,44 +128,110 @@ export function createGeminiService(apiKey: string) {
     leadData?: LeadData;
     serviceData?: ServiceData;
   }> {
+    // Build conversation contents
     const contents: Content[] = history.map((msg) => ({
       role: msg.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: msg.content }],
     }));
     contents.push({ role: 'user', parts: [{ text: message }] });
 
+    // First call: stream the initial response
     const result = await model.generateContentStream({ contents });
 
+    let allResponseParts: Part[] = [];
+
     for await (const chunk of result.stream) {
-      // Handle text parts
       const text = chunk.text();
       if (text) {
         yield { type: 'token', content: text };
       }
 
-      // Handle function calls
+      // Collect all parts for function call detection after stream completes
       const candidates = chunk.candidates;
       if (candidates) {
         for (const candidate of candidates) {
-          for (const part of candidate.content.parts) {
-            if (part.functionCall) {
-              const { name, args } = part.functionCall;
-              if (name === 'report_state') {
-                yield {
-                  type: 'state',
-                  state: {
-                    sessionId,
-                    mode: (args as { mode: Mode }).mode,
-                    collectedData: (args as { collectedData?: Record<string, unknown> }).collectedData || {},
-                  },
-                };
-              } else if (name === 'submit_lead') {
-                yield { type: 'lead', leadData: args as LeadData };
-              } else if (name === 'submit_service_request') {
-                yield { type: 'service', serviceData: args as ServiceData };
-              }
-            }
+          if (candidate.content?.parts) {
+            allResponseParts.push(...candidate.content.parts);
           }
+        }
+      }
+    }
+
+    // After stream completes, check for function calls in the aggregated response
+    const response = await result.response;
+    const responseParts = response.candidates?.[0]?.content?.parts || [];
+    const functionCalls = extractFunctionCalls(responseParts);
+
+    // Process function calls
+    let hasActionCalls = false;
+    const functionResponses: Part[] = [];
+
+    for (const call of functionCalls) {
+      if (call.name === 'report_state') {
+        yield {
+          type: 'state',
+          state: {
+            sessionId,
+            mode: (call.args as { mode: Mode }).mode,
+            collectedData: (call.args as { collectedData?: Record<string, unknown> }).collectedData || {},
+          },
+        };
+        functionResponses.push({
+          functionResponse: { name: 'report_state', response: { success: true } },
+        });
+      } else if (call.name === 'submit_lead') {
+        yield { type: 'lead', leadData: call.args as LeadData };
+        hasActionCalls = true;
+        functionResponses.push({
+          functionResponse: {
+            name: 'submit_lead',
+            response: { success: true, message: 'Lead wurde erfolgreich erstellt. Bitte bestätige dem Kunden warmherzig.' },
+          },
+        });
+      } else if (call.name === 'submit_service_request') {
+        yield { type: 'service', serviceData: call.args as ServiceData };
+        hasActionCalls = true;
+        functionResponses.push({
+          functionResponse: {
+            name: 'submit_service_request',
+            response: { success: true, message: 'Service-Anfrage wurde erfolgreich erstellt. Bitte bestätige dem Kunden.' },
+          },
+        });
+      }
+    }
+
+    // If there were action function calls (submit_lead, submit_service_request),
+    // send function responses back to Gemini and stream the confirmation message
+    if (hasActionCalls && functionResponses.length > 0) {
+      const followUpContents: Content[] = [
+        ...contents,
+        { role: 'model', parts: responseParts },
+        { role: 'function', parts: functionResponses },
+      ];
+
+      const followUpResult = await model.generateContentStream({ contents: followUpContents });
+
+      for await (const chunk of followUpResult.stream) {
+        const text = chunk.text();
+        if (text) {
+          yield { type: 'token', content: text };
+        }
+      }
+
+      // Check for report_state in follow-up
+      const followUpResponse = await followUpResult.response;
+      const followUpParts = followUpResponse.candidates?.[0]?.content?.parts || [];
+      const followUpCalls = extractFunctionCalls(followUpParts);
+      for (const call of followUpCalls) {
+        if (call.name === 'report_state') {
+          yield {
+            type: 'state',
+            state: {
+              sessionId,
+              mode: (call.args as { mode: Mode }).mode,
+              collectedData: (call.args as { collectedData?: Record<string, unknown> }).collectedData || {},
+            },
+          };
         }
       }
     }
