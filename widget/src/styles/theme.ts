@@ -204,6 +204,65 @@ const CSS = `
   word-wrap: break-word;
 }
 
+.sarah-msg-bubble p {
+  margin: 0;
+}
+.sarah-msg-bubble p + p,
+.sarah-msg-bubble ul + p,
+.sarah-msg-bubble ol + p,
+.sarah-msg-bubble p + ul,
+.sarah-msg-bubble p + ol,
+.sarah-msg-bubble ul + ul,
+.sarah-msg-bubble ol + ol,
+.sarah-msg-bubble .sarah-md-heading + p,
+.sarah-msg-bubble .sarah-md-heading + ul,
+.sarah-msg-bubble .sarah-md-heading + ol {
+  margin-top: 0.6em;
+}
+.sarah-msg-bubble ul,
+.sarah-msg-bubble ol {
+  margin: 0;
+  padding-left: 1.2em;
+}
+.sarah-msg-bubble li + li {
+  margin-top: 0.25em;
+}
+.sarah-msg-bubble strong {
+  font-weight: 700;
+}
+.sarah-msg-bubble em {
+  font-style: italic;
+}
+.sarah-msg-bubble code {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: 0.92em;
+  background: rgba(28, 39, 64, 0.08);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+.sarah-msg-bubble a {
+  color: ${COLORS.lippeBlau};
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.sarah-msg.user .sarah-msg-bubble a {
+  color: ${COLORS.white};
+}
+.sarah-msg-bubble .sarah-md-heading {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.sarah-msg-bubble .sarah-md-heading-1 {
+  font-size: 1.12em;
+}
+.sarah-msg-bubble .sarah-md-heading-2 {
+  font-size: 1.05em;
+}
+.sarah-msg-bubble .sarah-md-heading-3 {
+  font-size: 1em;
+}
+
 /* Quick actions */
 .sarah-quick-actions {
   display: flex;

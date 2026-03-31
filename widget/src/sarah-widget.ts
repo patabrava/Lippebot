@@ -1,6 +1,7 @@
 import { injectStyles } from './styles/theme.js';
 import { ChatHistory } from './storage/history.js';
 import { sendMessage } from './api/client.js';
+import { renderMarkdown } from './utils/markdown.js';
 
 const CHAT_ICON = `<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`;
 const CLOSE_ICON = '\u2715';
@@ -173,7 +174,7 @@ class SarahWidget {
     if (type === 'bot') {
       wrapper.innerHTML = `
         <div class="sarah-msg-avatar">S</div>
-        <div class="sarah-msg-bubble">${this.escapeHtml(text)}</div>
+        <div class="sarah-msg-bubble">${renderMarkdown(text)}</div>
       `;
     } else {
       wrapper.innerHTML = `
@@ -254,7 +255,7 @@ class SarahWidget {
             streamBubble = this.createStreamingBubble();
           }
           fullResponse += token;
-          streamBubble.textContent = fullResponse;
+          streamBubble.innerHTML = renderMarkdown(fullResponse);
           this.scrollToBottom();
         },
         onDone: () => {
