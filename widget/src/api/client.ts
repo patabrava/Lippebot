@@ -18,6 +18,26 @@ export function parseSSELine(line: string): SSEEvent | null {
   }
 }
 
+function dispatchSSEEvent(
+  event: SSEEvent,
+  options: ChatClientOptions,
+): void {
+  switch (event.type) {
+    case 'token':
+      if (event.content) options.onToken(event.content);
+      break;
+    case 'done':
+      options.onDone(event.mode || 'undetermined', event.collectedData || {});
+      break;
+    case 'action':
+      if (event.action) options.onAction(event.action, event.data || {});
+      break;
+    case 'error':
+      options.onError(event.error || 'Unbekannter Fehler');
+      break;
+  }
+}
+
 export interface ChatClientOptions {
   apiUrl: string;
   onToken: (text: string) => void;
@@ -58,27 +78,24 @@ export async function sendMessage(
     if (done) break;
 
     buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
+    const lines = buffer.split(/\r?\n/);
     buffer = lines.pop() || '';
 
     for (const line of lines) {
       const event = parseSSELine(line);
       if (!event) continue;
+      dispatchSSEEvent(event, options);
+    }
+  }
 
-      switch (event.type) {
-        case 'token':
-          if (event.content) options.onToken(event.content);
-          break;
-        case 'done':
-          options.onDone(event.mode || 'undetermined', event.collectedData || {});
-          break;
-        case 'action':
-          if (event.action) options.onAction(event.action, event.data || {});
-          break;
-        case 'error':
-          options.onError(event.error || 'Unbekannter Fehler');
-          break;
-      }
+  // Flush any buffered tail in case the server/proxy ended the stream
+  // without a trailing newline. This is common with streaming proxies.
+  buffer += decoder.decode();
+  const tail = buffer.trim();
+  if (tail) {
+    const event = parseSSELine(tail);
+    if (event) {
+      dispatchSSEEvent(event, options);
     }
   }
 }

@@ -20,4 +20,9 @@ describe('parseSSELine', () => {
   it('returns null for non-data lines', () => {
     expect(parseSSELine('event: message')).toBeNull();
   });
+
+  it('parses a line without a trailing newline', () => {
+    const result = parseSSELine('data: {"type":"error","error":"Boom"}');
+    expect(result).toEqual({ type: 'error', error: 'Boom' });
+  });
 });
