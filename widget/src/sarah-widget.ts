@@ -16,6 +16,17 @@ const QUICK_ACTIONS = [
   'Service & Wartung',
 ];
 
+interface AssistantBubbleState {
+  row: HTMLDivElement;
+  content: HTMLDivElement;
+  continueBtn: HTMLButtonElement;
+  resizeObserver?: ResizeObserver;
+}
+
+interface AssistantBubble extends AssistantBubbleState {
+  bubble: HTMLDivElement;
+}
+
 class SarahWidget {
   private apiUrl: string;
   private history: ChatHistory;
@@ -150,32 +161,33 @@ class SarahWidget {
     this.messagesEl!.innerHTML = '';
     const messages = this.history.getMessages();
     for (const msg of messages) {
-      this.appendMessageEl(msg.role === 'user' ? 'user' : 'bot', msg.content);
+      this.appendMessageEl(msg.role === 'user' ? 'user' : 'bot', msg.content, false);
     }
-    this.scrollToBottom();
   }
 
   private addBotMessage(text: string): void {
     this.history.addMessage('assistant', text);
-    this.appendMessageEl('bot', text);
-    this.scrollToBottom();
+    this.appendMessageEl('bot', text, true);
   }
 
   private addUserMessage(text: string): void {
     this.history.addMessage('user', text);
-    this.appendMessageEl('user', text);
-    this.scrollToBottom();
+    this.appendMessageEl('user', text, false);
   }
 
-  private appendMessageEl(type: 'bot' | 'user', text: string): void {
+  private appendMessageEl(type: 'bot' | 'user', text: string, reveal = false): void {
     const wrapper = document.createElement('div');
     wrapper.className = `sarah-msg ${type}`;
 
     if (type === 'bot') {
-      wrapper.innerHTML = `
-        <div class="sarah-msg-avatar">S</div>
-        <div class="sarah-msg-bubble">${renderMarkdown(text)}</div>
-      `;
+      const bubble = this.createAssistantBubble();
+      bubble.content.innerHTML = renderMarkdown(text);
+      this.messagesEl!.appendChild(bubble.row);
+      if (reveal) {
+        requestAnimationFrame(() => this.scrollAssistantRowIntoView(bubble.row));
+      }
+      requestAnimationFrame(() => this.syncAssistantBubble(bubble));
+      return;
     } else {
       wrapper.innerHTML = `
         <div class="sarah-msg-bubble">${this.escapeHtml(text)}</div>
@@ -185,16 +197,55 @@ class SarahWidget {
     this.messagesEl!.appendChild(wrapper);
   }
 
-  private createStreamingBubble(): HTMLDivElement {
-    const wrapper = document.createElement('div');
-    wrapper.className = 'sarah-msg bot';
+  private createAvatar(): HTMLDivElement {
+    const avatar = document.createElement('div');
+    avatar.className = 'sarah-msg-avatar';
+    avatar.textContent = 'S';
+    return avatar;
+  }
+
+  private createAssistantBubble(): AssistantBubble {
+    const row = document.createElement('div');
+    row.className = 'sarah-msg bot';
 
     const bubble = document.createElement('div');
-    bubble.className = 'sarah-msg-bubble';
+    bubble.className = 'sarah-msg-bubble sarah-msg-bubble--assistant';
 
-    wrapper.innerHTML = `<div class="sarah-msg-avatar">S</div>`;
-    wrapper.appendChild(bubble);
-    this.messagesEl!.appendChild(wrapper);
+    const content = document.createElement('div');
+    content.className = 'sarah-msg-content';
+
+    const continueBtn = document.createElement('button');
+    continueBtn.type = 'button';
+    continueBtn.className = 'sarah-msg-continue';
+    continueBtn.innerHTML = '↓';
+    continueBtn.setAttribute('aria-label', 'Weiter zum nächsten Abschnitt');
+    continueBtn.addEventListener('click', () => {
+      const step = Math.max(Math.round(content.clientHeight * 0.9), 120);
+      content.scrollBy({ top: step, behavior: 'smooth' });
+    });
+
+    const resizeObserver = new ResizeObserver(() => this.syncAssistantBubble({ content, continueBtn }));
+    resizeObserver.observe(content);
+    content.addEventListener('scroll', () => this.syncAssistantBubble({ content, continueBtn }));
+
+    bubble.appendChild(content);
+    bubble.appendChild(continueBtn);
+    row.appendChild(this.createAvatar());
+    row.appendChild(bubble);
+
+    return { row, bubble, content, continueBtn, resizeObserver };
+  }
+
+  private syncAssistantBubble(bubble: AssistantBubbleState): void {
+    const canScroll = bubble.content.scrollHeight > bubble.content.clientHeight + 1;
+    const atBottom = bubble.content.scrollTop + bubble.content.clientHeight >= bubble.content.scrollHeight - 1;
+    bubble.continueBtn.style.display = canScroll && !atBottom ? 'flex' : 'none';
+  }
+
+  private createStreamingBubble(): AssistantBubble {
+    const bubble = this.createAssistantBubble();
+    this.messagesEl!.appendChild(bubble.row);
+    requestAnimationFrame(() => this.scrollAssistantRowIntoView(bubble.row));
 
     return bubble;
   }
@@ -207,7 +258,6 @@ class SarahWidget {
       <div class="sarah-typing"><span></span><span></span><span></span></div>
     `;
     this.messagesEl!.appendChild(wrapper);
-    this.scrollToBottom();
     return wrapper;
   }
 
@@ -227,7 +277,6 @@ class SarahWidget {
     }
 
     this.messagesEl!.appendChild(container);
-    this.scrollToBottom();
   }
 
   private async handleSend(): Promise<void> {
@@ -243,7 +292,8 @@ class SarahWidget {
     this.sendBtn!.disabled = true;
 
     const typingEl = this.showTypingIndicator();
-    let streamBubble: HTMLDivElement | null = null;
+    requestAnimationFrame(() => this.scrollElementIntoView(typingEl));
+    let streamBubble: AssistantBubble | null = null;
     let fullResponse = '';
 
     await sendMessage(
@@ -255,8 +305,9 @@ class SarahWidget {
             streamBubble = this.createStreamingBubble();
           }
           fullResponse += token;
-          streamBubble.innerHTML = renderMarkdown(fullResponse);
-          this.scrollToBottom();
+          streamBubble.content.innerHTML = renderMarkdown(fullResponse);
+          this.scrollAssistantRowIntoView(streamBubble.row, false);
+          this.syncAssistantBubble(streamBubble);
         },
         onDone: () => {
           if (typingEl.parentNode) typingEl.remove();
@@ -280,16 +331,27 @@ class SarahWidget {
     this.inputEl!.focus();
   }
 
-  private scrollToBottom(): void {
-    if (this.messagesEl) {
-      this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
-    }
-  }
-
   private escapeHtml(text: string): string {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  private scrollAssistantRowIntoView(row: HTMLDivElement, smooth = true): void {
+    this.scrollElementIntoView(row, 'end', smooth);
+  }
+
+  private scrollElementIntoView(element: HTMLElement, align: 'start' | 'end' = 'start', smooth = true): void {
+    if (!this.messagesEl) return;
+    const offset =
+      align === 'end'
+        ? Math.max(element.offsetTop + element.offsetHeight - this.messagesEl.clientHeight + 12, 0)
+        : Math.max(element.offsetTop - 12, 0);
+    this.messagesEl.scrollTo({ top: offset, behavior: smooth ? 'smooth' : 'auto' });
+  }
+
+  private disposeAssistantBubble(bubble: AssistantBubble | null): void {
+    bubble?.resizeObserver?.disconnect();
   }
 }
 

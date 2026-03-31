@@ -191,6 +191,10 @@ const CSS = `
   border-radius: 4px 14px 14px 14px;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
+.sarah-msg.bot .sarah-msg-bubble--assistant {
+  position: relative;
+  padding-bottom: 30px;
+}
 .sarah-msg.user .sarah-msg-bubble {
   background: ${COLORS.lippeBlau};
   color: ${COLORS.white};
@@ -204,43 +208,53 @@ const CSS = `
   word-wrap: break-word;
 }
 
-.sarah-msg-bubble p {
+.sarah-msg-content {
+  max-height: 170px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding-right: 2px;
+}
+.sarah-msg-content::-webkit-scrollbar {
+  display: none;
+}
+.sarah-msg-content p {
   margin: 0;
 }
-.sarah-msg-bubble p + p,
-.sarah-msg-bubble ul + p,
-.sarah-msg-bubble ol + p,
-.sarah-msg-bubble p + ul,
-.sarah-msg-bubble p + ol,
-.sarah-msg-bubble ul + ul,
-.sarah-msg-bubble ol + ol,
-.sarah-msg-bubble .sarah-md-heading + p,
-.sarah-msg-bubble .sarah-md-heading + ul,
-.sarah-msg-bubble .sarah-md-heading + ol {
+.sarah-msg-content p + p,
+.sarah-msg-content ul + p,
+.sarah-msg-content ol + p,
+.sarah-msg-content p + ul,
+.sarah-msg-content p + ol,
+.sarah-msg-content ul + ul,
+.sarah-msg-content ol + ol,
+.sarah-msg-content .sarah-md-heading + p,
+.sarah-msg-content .sarah-md-heading + ul,
+.sarah-msg-content .sarah-md-heading + ol {
   margin-top: 0.6em;
 }
-.sarah-msg-bubble ul,
-.sarah-msg-bubble ol {
+.sarah-msg-content ul,
+.sarah-msg-content ol {
   margin: 0;
   padding-left: 1.2em;
 }
-.sarah-msg-bubble li + li {
+.sarah-msg-content li + li {
   margin-top: 0.25em;
 }
-.sarah-msg-bubble strong {
+.sarah-msg-content strong {
   font-weight: 700;
 }
-.sarah-msg-bubble em {
+.sarah-msg-content em {
   font-style: italic;
 }
-.sarah-msg-bubble code {
+.sarah-msg-content code {
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
   font-size: 0.92em;
   background: rgba(28, 39, 64, 0.08);
   padding: 0.1em 0.35em;
   border-radius: 4px;
 }
-.sarah-msg-bubble a {
+.sarah-msg-content a {
   color: ${COLORS.lippeBlau};
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -248,19 +262,42 @@ const CSS = `
 .sarah-msg.user .sarah-msg-bubble a {
   color: ${COLORS.white};
 }
-.sarah-msg-bubble .sarah-md-heading {
+.sarah-msg-content .sarah-md-heading {
   font-family: 'Outfit', sans-serif;
   font-weight: 600;
   line-height: 1.25;
 }
-.sarah-msg-bubble .sarah-md-heading-1 {
+.sarah-msg-content .sarah-md-heading-1 {
   font-size: 1.12em;
 }
-.sarah-msg-bubble .sarah-md-heading-2 {
+.sarah-msg-content .sarah-md-heading-2 {
   font-size: 1.05em;
 }
-.sarah-msg-bubble .sarah-md-heading-3 {
+.sarah-msg-content .sarah-md-heading-3 {
   font-size: 1em;
+}
+
+.sarah-msg-continue {
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  transform: translateX(-50%);
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(0, 106, 171, 0.9);
+  color: ${COLORS.white};
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  font-size: 16px;
+  line-height: 1;
+}
+.sarah-msg-continue:hover {
+  background: ${COLORS.lippeBlau};
 }
 
 /* Quick actions */
