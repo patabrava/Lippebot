@@ -85,7 +85,7 @@ const CSS = `
   right: 24px;
   width: ${DIMENSIONS.panelWidth}px;
   height: ${DIMENSIONS.panelHeight}px;
-  background: ${COLORS.white};
+  background: ${COLORS.lightCream};
   border-radius: 16px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
   flex-direction: column;
