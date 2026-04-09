@@ -4,7 +4,7 @@ export const COLORS = {
   tiefblau: '#1C2740',
   warmOrange: '#E58434',
   softApricot: '#FFD9A0',
-  lightCream: '#FFF2E2',
+  lightCream: '#FFF8EF',
   white: '#FFFFFF',
 } as const;
 
