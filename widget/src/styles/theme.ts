@@ -332,7 +332,7 @@ const CSS = `
   display: flex;
   align-items: center;
   gap: 8px;
-  background: ${COLORS.white};
+  background: ${COLORS.lightCream};
 }
 
 .sarah-input {
