@@ -2,6 +2,79 @@ import type { LeadData, ServiceData } from '../types/index.js';
 
 const PIPEDRIVE_API_BASE = 'https://api.pipedrive.com/v1';
 
+const dealFieldKeys = {
+  stairLocation: 'aff4a71d003cb374585aeef67732b05828b62050',
+  stairType: '36241991692b59873ce73c478b98aab6ad4054c1',
+  buildingType: '9c08a82b8cad15eab222f89a6a961c59bc8c95e3',
+  liftType: '684a7860061d276f4a76498fd1653d721e37cb6f',
+} as const;
+
+const liftTypeMappings: Record<NonNullable<LeadData['liftType']>, number> = {
+  rollstuhlgeeignet: 125,
+  sitzlift: 128,
+};
+
+const buildingTypeMappings: Record<NonNullable<LeadData['buildingType']>, number> = {
+  einfamilienhaus: 122,
+  mehrfamilienhaus: 123,
+};
+
+const stairTypeMappings: Record<NonNullable<LeadData['stairType']>, number> = {
+  kurvig: 120,
+  gerade: 121,
+};
+
+const stairLocationMappings: Record<NonNullable<LeadData['stairLocation']>, number> = {
+  aussen: 119,
+  innen: 118,
+};
+
+function normalizePhoneNumber(phone?: string): string {
+  if (!phone) return 'nicht ausgefüllt';
+  const compact = phone.replace(/\s+/g, '');
+  if (compact.startsWith('0')) {
+    return compact.replace(/^0/, '0049');
+  }
+  if (compact.startsWith('+49')) {
+    return compact.replace(/^\+49/, '0049');
+  }
+  return compact;
+}
+
+function normalizeEmail(email?: string): string | undefined {
+  return email && email.trim() ? email.toLowerCase().trim() : undefined;
+}
+
+function capitalize(value?: string): string {
+  if (!value || !value.trim()) return 'nicht ausgefüllt';
+  return value.trim().charAt(0).toUpperCase() + value.trim().slice(1).toLowerCase();
+}
+
+function normalizePostalCode(postalCode?: string): string {
+  if (!postalCode) return 'nicht ausgefüllt';
+  const trimmed = postalCode.toString().trim();
+  return /^\d+$/.test(trimmed) ? trimmed : 'nicht ausgefüllt';
+}
+
+function buildDealCustomFields(data: LeadData): Record<string, number> {
+  const customFields: Record<string, number> = {};
+
+  if (data.stairLocation && stairLocationMappings[data.stairLocation]) {
+    customFields[dealFieldKeys.stairLocation] = stairLocationMappings[data.stairLocation];
+  }
+  if (data.stairType && stairTypeMappings[data.stairType]) {
+    customFields[dealFieldKeys.stairType] = stairTypeMappings[data.stairType];
+  }
+  if (data.buildingType && buildingTypeMappings[data.buildingType]) {
+    customFields[dealFieldKeys.buildingType] = buildingTypeMappings[data.buildingType];
+  }
+  if (data.liftType && liftTypeMappings[data.liftType]) {
+    customFields[dealFieldKeys.liftType] = liftTypeMappings[data.liftType];
+  }
+
+  return customFields;
+}
+
 export function createPipedriveService(apiKey: string, pipelineId: number, stageId: number) {
   const configured = apiKey.length > 0;
 
@@ -24,10 +97,18 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
   async function createLead(data: LeadData): Promise<{ personId: number; dealId: number }> {
     if (!configured) throw new Error('Pipedrive not configured');
 
+    const firstName = capitalize(data.firstName);
+    const lastName = capitalize(data.lastName);
+    const phone = normalizePhoneNumber(data.phone);
+    const email = normalizeEmail(data.email);
+    const street = capitalize(data.street);
+    const postalCode = normalizePostalCode(data.postalCode);
+    const city = capitalize(data.city);
+
     const person = await apiCall('/persons', {
-      name: `${data.firstName} ${data.lastName}`,
-      phone: [{ value: data.phone, primary: true }],
-      ...(data.email ? { email: [{ value: data.email, primary: true }] } : {}),
+      name: `${firstName} ${lastName}`,
+      phone: [{ value: phone, primary: true }],
+      ...(email ? { email: [{ value: email, primary: true }] } : {}),
     });
 
     const dealNotes = [
@@ -35,18 +116,20 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
       `Verlauf: ${data.stairType || 'k.A.'}`,
       `Gebäude: ${data.buildingType || 'k.A.'}`,
       `Lifttyp: ${data.liftType || 'k.A.'}`,
-      `Adresse: ${data.street || ''} ${data.postalCode} ${data.city}`.trim(),
+      `Adresse: ${street}, ${postalCode} ${city}`,
+      `PLZ: ${postalCode}`,
       `Erreichbarkeit: ${data.availability}`,
       data.message ? `Nachricht: ${data.message}` : '',
       `Newsletter: ${data.newsletter || 'k.A.'}`,
     ].filter(Boolean).join('\n');
 
     const deal = await apiCall('/deals', {
-      title: `Sarah Lead: ${data.firstName} ${data.lastName}`,
+      title: `Sarah Lead: ${firstName} ${lastName}`,
       person_id: person.id,
       pipeline_id: pipelineId,
       stage_id: stageId,
       visible_to: 3,
+      ...buildDealCustomFields(data),
     });
 
     // Add note to deal

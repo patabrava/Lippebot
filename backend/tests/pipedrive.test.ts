@@ -12,7 +12,7 @@ describe('createPipedriveService', () => {
     expect(service.isConfigured()).toBe(true);
   });
 
-  it('createLead builds correct person and deal payload', async () => {
+  it('createLead normalizes contact fields and sends custom option IDs', async () => {
     const mockFetch = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -30,11 +30,13 @@ describe('createPipedriveService', () => {
 
     const service = createPipedriveService('test-key', 2, 3);
     const result = await service.createLead({
-      firstName: 'Max',
-      lastName: 'Mustermann',
-      phone: '0123456789',
+      firstName: 'max',
+      lastName: 'MUSTERMANN',
+      phone: '05261 9666 0',
+      email: ' MAX@EXAMPLE.DE ',
       postalCode: '12345',
-      city: 'Lemgo',
+      city: 'lemgo',
+      street: 'musterstrasse 1',
       availability: '08:00 - 12:00',
       stairLocation: 'innen',
       stairType: 'kurvig',
@@ -48,7 +50,8 @@ describe('createPipedriveService', () => {
     expect(personCall[0]).toContain('/persons');
     const personBody = JSON.parse(personCall[1].body);
     expect(personBody.name).toBe('Max Mustermann');
-    expect(personBody.phone).toEqual([{ value: '0123456789', primary: true }]);
+    expect(personBody.phone).toEqual([{ value: '0049526196660', primary: true }]);
+    expect(personBody.email).toEqual([{ value: 'max@example.de', primary: true }]);
 
     const dealCall = mockFetch.mock.calls[1];
     expect(dealCall[0]).toContain('/deals');
@@ -56,6 +59,48 @@ describe('createPipedriveService', () => {
     expect(dealBody.person_id).toBe(123);
     expect(dealBody.pipeline_id).toBe(2);
     expect(dealBody.stage_id).toBe(3);
+    expect(dealBody.aff4a71d003cb374585aeef67732b05828b62050).toBe(118);
+    expect(dealBody['36241991692b59873ce73c478b98aab6ad4054c1']).toBe(120);
+    expect(dealBody['9c08a82b8cad15eab222f89a6a961c59bc8c95e3']).toBe(122);
+    expect(dealBody['684a7860061d276f4a76498fd1653d721e37cb6f']).toBe(128);
+
+    vi.unstubAllGlobals();
+  });
+
+  it('createLead omits custom option fields when values are unknown', async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { id: 123 } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { id: 456 } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { id: 789 } }),
+      });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const service = createPipedriveService('test-key', 2, 3);
+    await service.createLead({
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      phone: '+49 5261 96660',
+      postalCode: 'abc',
+      city: 'Lemgo',
+      availability: '12:00 - 16:00',
+    });
+
+    const dealBody = JSON.parse(mockFetch.mock.calls[1][1].body);
+    expect(dealBody.aff4a71d003cb374585aeef67732b05828b62050).toBeUndefined();
+    expect(dealBody['36241991692b59873ce73c478b98aab6ad4054c1']).toBeUndefined();
+    expect(dealBody['9c08a82b8cad15eab222f89a6a961c59bc8c95e3']).toBeUndefined();
+    expect(dealBody['684a7860061d276f4a76498fd1653d721e37cb6f']).toBeUndefined();
+
+    const noteBody = JSON.parse(mockFetch.mock.calls[2][1].body);
+    expect(noteBody.content).toContain('PLZ: nicht ausgefüllt');
 
     vi.unstubAllGlobals();
   });
