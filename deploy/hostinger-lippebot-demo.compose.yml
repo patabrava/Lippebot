@@ -39,7 +39,7 @@ services:
       cp /app/repo/deploy/widget-test-index.html /app/repo/widget/dist/index.html &&
       npm init -y >/dev/null 2>&1 &&
       npm i express http-proxy-middleware >/dev/null 2>&1 &&
-      node -e "const express=require('express');const {createProxyMiddleware}=require('http-proxy-middleware');const app=express();app.use('/api',createProxyMiddleware({target:'http://sarah-backend:3000/api',changeOrigin:false,ws:true,pathRewrite:{'^/api':''}}));app.use(express.static('/app/repo/widget/dist'));app.use((req,res)=>res.sendFile('/app/repo/widget/dist/index.html'));app.listen(8080,'0.0.0.0');"
+      node /app/repo/deploy/widget-proxy-server.cjs
       '
     ports:
       - "8085:8080"
