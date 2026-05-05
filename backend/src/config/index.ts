@@ -1,7 +1,25 @@
 import { z } from 'zod';
 
+function parseBoolean(value: string | undefined, defaultValue: boolean): boolean {
+  if (value === undefined) {
+    return defaultValue;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['false', '0', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  return defaultValue;
+}
+
 const configSchema = z.object({
-  geminiApiKey: z.string().min(1),
+  vertexAiEnabled: z.boolean().default(true),
+  vertexAiProjectId: z.string().min(1),
+  vertexAiLocation: z.string().min(1).default('us-central1'),
   pipedriveApiKey: z.string().default(''),
   pipedrivePipelineId: z.coerce.number().default(1),
   pipedriveStageId: z.coerce.number().default(1),
@@ -20,7 +38,9 @@ export type Config = z.infer<typeof configSchema>;
 
 export function loadConfig(): Config {
   return configSchema.parse({
-    geminiApiKey: process.env.GEMINI_API_KEY,
+    vertexAiEnabled: parseBoolean(process.env.VERTEX_AI_ENABLED, true),
+    vertexAiProjectId: process.env.VERTEX_AI_PROJECT_ID || process.env.GCP_PROJECT_ID,
+    vertexAiLocation: process.env.VERTEX_AI_LOCATION || process.env.GCP_LOCATION,
     pipedriveApiKey: process.env.PIPEDRIVE_API_KEY,
     pipedrivePipelineId: process.env.PIPEDRIVE_PIPELINE_ID,
     pipedriveStageId: process.env.PIPEDRIVE_STAGE_ID,

@@ -9,7 +9,11 @@ import { createChatRoute } from './routes/chat.js';
 
 const config = loadConfig();
 
-const gemini = createGeminiService(config.geminiApiKey);
+const gemini = createGeminiService({
+  projectId: config.vertexAiProjectId,
+  location: config.vertexAiLocation,
+  enabled: config.vertexAiEnabled,
+});
 const pipedrive = createPipedriveService(config.pipedriveApiKey, config.pipedrivePipelineId, config.pipedriveStageId);
 const email = createEmailService({
   host: config.smtpHost,

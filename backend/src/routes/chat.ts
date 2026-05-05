@@ -6,11 +6,23 @@ import type { PipedriveService } from '../services/pipedrive.js';
 import type { EmailService } from '../services/email.js';
 import type { ChatMessage, LeadData, ServiceData } from '../types/index.js';
 
-function hasRequiredLeadFields(data: Record<string, unknown>): data is LeadData {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function hasRequiredLeadFields(data: unknown): data is LeadData {
+  if (!isRecord(data)) {
+    return false;
+  }
+
   return !!(data.firstName && data.lastName && data.phone && data.postalCode && data.city && data.availability);
 }
 
-function hasRequiredServiceFields(data: Record<string, unknown>): data is ServiceData {
+function hasRequiredServiceFields(data: unknown): data is ServiceData {
+  if (!isRecord(data)) {
+    return false;
+  }
+
   return !!(data.customerName && data.phone && data.issueDescription);
 }
 

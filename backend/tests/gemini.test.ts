@@ -3,7 +3,10 @@ import { createGeminiService } from '../src/services/gemini.js';
 
 describe('createGeminiService', () => {
   it('creates a service with streamChat method', () => {
-    const service = createGeminiService('fake-key');
+    const service = createGeminiService({
+      projectId: 'test-project',
+      location: 'us-central1',
+    });
     expect(service).toHaveProperty('streamChat');
     expect(typeof service.streamChat).toBe('function');
   });
