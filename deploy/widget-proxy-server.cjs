@@ -7,9 +7,12 @@ const distDir = '/app/repo/widget/dist';
 app.use(
   '/api',
   createProxyMiddleware({
-    target: 'http://sarah-backend:3000',
+    target: 'http://sarah-backend:3000/api',
     changeOrigin: false,
     ws: true,
+    pathRewrite: {
+      '^/api': '',
+    },
   }),
 );
 
