@@ -37,6 +37,7 @@ services:
       npm ci >/dev/null &&
       npm run build >/dev/null &&
       cp /app/repo/deploy/widget-test-index.html /app/repo/widget/dist/index.html &&
+      cd /app/repo &&
       npm init -y >/dev/null 2>&1 &&
       npm i express http-proxy-middleware >/dev/null 2>&1 &&
       node /app/repo/deploy/widget-proxy-server.cjs
