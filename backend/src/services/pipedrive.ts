@@ -29,6 +29,36 @@ const stairLocationMappings: Record<NonNullable<LeadData['stairLocation']>, numb
   innen: 118,
 };
 
+const optionAliases = {
+  stairLocation: {
+    außentreppe: 'aussen',
+    aussentreppe: 'aussen',
+    außen: 'aussen',
+    aussen: 'aussen',
+    innentreppe: 'innen',
+    innen: 'innen',
+  },
+  stairType: {
+    kurvig: 'kurvig',
+    gerade: 'gerade',
+  },
+  buildingType: {
+    einfamilienhaus: 'einfamilienhaus',
+    mehrfamilienhaus: 'mehrfamilienhaus',
+  },
+  liftType: {
+    rollstuhlgeeignet: 'rollstuhlgeeignet',
+    rollstuhl: 'rollstuhlgeeignet',
+    plattformlift: 'rollstuhlgeeignet',
+    sitzlift: 'sitzlift',
+  },
+} as const;
+
+function normalizeOptionValue(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  return value.trim().toLowerCase().replace(/\s+/g, '');
+}
+
 function normalizePhoneNumber(phone?: string): string {
   if (!phone) return 'nicht ausgefüllt';
   const compact = phone.replace(/\s+/g, '');
@@ -58,18 +88,22 @@ function normalizePostalCode(postalCode?: string): string {
 
 function buildDealCustomFields(data: LeadData): Record<string, number> {
   const customFields: Record<string, number> = {};
+  const stairLocation = optionAliases.stairLocation[normalizeOptionValue(data.stairLocation) as keyof typeof optionAliases.stairLocation];
+  const stairType = optionAliases.stairType[normalizeOptionValue(data.stairType) as keyof typeof optionAliases.stairType];
+  const buildingType = optionAliases.buildingType[normalizeOptionValue(data.buildingType) as keyof typeof optionAliases.buildingType];
+  const liftType = optionAliases.liftType[normalizeOptionValue(data.liftType) as keyof typeof optionAliases.liftType];
 
-  if (data.stairLocation && stairLocationMappings[data.stairLocation]) {
-    customFields[dealFieldKeys.stairLocation] = stairLocationMappings[data.stairLocation];
+  if (stairLocation && stairLocationMappings[stairLocation]) {
+    customFields[dealFieldKeys.stairLocation] = stairLocationMappings[stairLocation];
   }
-  if (data.stairType && stairTypeMappings[data.stairType]) {
-    customFields[dealFieldKeys.stairType] = stairTypeMappings[data.stairType];
+  if (stairType && stairTypeMappings[stairType]) {
+    customFields[dealFieldKeys.stairType] = stairTypeMappings[stairType];
   }
-  if (data.buildingType && buildingTypeMappings[data.buildingType]) {
-    customFields[dealFieldKeys.buildingType] = buildingTypeMappings[data.buildingType];
+  if (buildingType && buildingTypeMappings[buildingType]) {
+    customFields[dealFieldKeys.buildingType] = buildingTypeMappings[buildingType];
   }
-  if (data.liftType && liftTypeMappings[data.liftType]) {
-    customFields[dealFieldKeys.liftType] = liftTypeMappings[data.liftType];
+  if (liftType && liftTypeMappings[liftType]) {
+    customFields[dealFieldKeys.liftType] = liftTypeMappings[liftType];
   }
 
   return customFields;

@@ -105,6 +105,45 @@ describe('createPipedriveService', () => {
     vi.unstubAllGlobals();
   });
 
+  it('createLead maps German display labels to custom option IDs', async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { id: 123 } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { id: 456 } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { id: 789 } }),
+      });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const service = createPipedriveService('test-key', 2, 3);
+    await service.createLead({
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      phone: '05261 96660',
+      postalCode: '12345',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00',
+      stairLocation: 'Innentreppe' as never,
+      stairType: 'Kurvig' as never,
+      buildingType: 'Einfamilienhaus' as never,
+      liftType: 'Sitzlift' as never,
+    });
+
+    const dealBody = JSON.parse(mockFetch.mock.calls[1][1].body);
+    expect(dealBody.aff4a71d003cb374585aeef67732b05828b62050).toBe(118);
+    expect(dealBody['36241991692b59873ce73c478b98aab6ad4054c1']).toBe(120);
+    expect(dealBody['9c08a82b8cad15eab222f89a6a961c59bc8c95e3']).toBe(122);
+    expect(dealBody['684a7860061d276f4a76498fd1653d721e37cb6f']).toBe(128);
+
+    vi.unstubAllGlobals();
+  });
+
   it('createServiceActivity builds correct activity payload', async () => {
     const mockFetch = vi.fn()
       .mockResolvedValueOnce({
