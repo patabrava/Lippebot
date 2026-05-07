@@ -51,4 +51,61 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('LL12');
     expect(prompt).toContain('Konstanz');
   });
+
+  it('declares a Gesprächsstil section before the modes', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('## Gesprächsstil');
+    const styleIdx = prompt.indexOf('## Gesprächsstil');
+    const modesIdx = prompt.indexOf('## Deine drei Modi');
+    expect(styleIdx).toBeGreaterThan(-1);
+    expect(modesIdx).toBeGreaterThan(styleIdx);
+  });
+
+  it('caps response length and forbids bullet lists in advisor replies', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('maximal 2–3 Sätze');
+    expect(prompt).toContain('Keine Bulletpoints');
+  });
+
+  it('requires every reply to end with a question or short handoff', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Beende jede Antwort mit einer kurzen Frage');
+  });
+
+  it('tells Sarah to ask instead of guessing when uncertain', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Wenn etwas unklar ist, frag nach');
+  });
+
+  it('limits advisor answers to one knowledge-base fact per turn', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('maximal einen Fakt aus der Wissensdatenbank pro Turn');
+    expect(prompt).toContain('Lade den Nutzer ein, nachzufragen');
+  });
+
+  it('lists varied micro-acknowledgements Sarah may rotate', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Klar.');
+    expect(prompt).toContain('Verstehe.');
+    expect(prompt).toContain('Gute Frage.');
+    expect(prompt).toContain('Sehr gerne.');
+    expect(prompt).toContain('Macht Sinn.');
+  });
+
+  it('restricts "Gute Frage." to actual questions and offers data-reply alternatives', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('nur, wenn der Nutzer wirklich eine Frage gestellt hat');
+    expect(prompt).toContain('nicht nach Datenangaben');
+    expect(prompt).toContain('Nach Datenangaben passt eher');
+    expect(prompt).toContain('Danke.');
+    expect(prompt).toContain('Verstanden.');
+  });
+
+  it('includes few-shot examples of the desired Sarah register', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('## Beispiele für Sarahs Tonfall');
+    expect(prompt).toContain('Beispiel 1');
+    expect(prompt).toContain('Beispiel 2');
+    expect(prompt).toContain('Beispiel 3');
+  });
 });

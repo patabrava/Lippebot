@@ -7,8 +7,23 @@ const CHAT_ICON = `<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4
 const CLOSE_ICON = '\u2715';
 const SEND_ICON = `<svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>`;
 
-const GREETING = 'Hallo! Ich bin Sarah. Kann ich dir helfen?';
-const OPENING_MESSAGE = 'Hallo! Ich bin Sarah, deine persönliche Beraterin bei LIPPE Lift. \u{1F60A} Wie kann ich dir heute helfen?';
+export const GREETINGS = [
+  'Hallo! Ich bin Sarah. Kann ich dir helfen?',
+  'Hi! Ich bin Sarah \u{1F44B} Frag mich gerne alles rund um Treppenlifte.',
+  'Servus! Sarah hier. Suchst du den passenden Lift?',
+  'Hey! Ich bin Sarah. Was kann ich dir zeigen?',
+];
+
+export const OPENING_MESSAGES = [
+  'Hallo! Ich bin Sarah, deine persönliche Beraterin bei LIPPE Lift. \u{1F60A} Womit kann ich dir helfen?',
+  'Hi! Sarah von LIPPE Lift hier. Erzähl mir, worum es geht — ich helfe dir weiter.',
+  'Schön, dass du da bist! Ich bin Sarah. Magst du wissen, welcher Lift zu dir passt, hast eine Frage zur Förderung, oder geht es um Service?',
+];
+
+export function pickGreeting<T>(pool: readonly T[], rng: () => number = Math.random): T {
+  const idx = Math.min(Math.floor(rng() * pool.length), pool.length - 1);
+  return pool[idx]!;
+}
 
 const QUICK_ACTIONS = [
   'Welcher Lift passt zu mir?',
@@ -72,7 +87,7 @@ class SarahWidget {
     if (this.isOpen || this.greetingEl) return;
     this.greetingEl = document.createElement('div');
     this.greetingEl.className = 'sarah-greeting';
-    this.greetingEl.textContent = `\u{1F44B} ${GREETING}`;
+    this.greetingEl.textContent = `\u{1F44B} ${pickGreeting(GREETINGS)}`;
     this.greetingEl.addEventListener('click', () => this.toggle());
     this.container.appendChild(this.greetingEl);
   }
@@ -146,7 +161,7 @@ class SarahWidget {
       this.inputEl!.focus();
 
       if (this.history.getMessages().length === 0) {
-        this.addBotMessage(OPENING_MESSAGE);
+        this.addBotMessage(pickGreeting(OPENING_MESSAGES));
         this.renderQuickActions();
       } else {
         this.restoreMessages();
