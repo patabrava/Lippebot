@@ -92,6 +92,15 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('Macht Sinn.');
   });
 
+  it('restricts "Gute Frage." to actual questions and offers data-reply alternatives', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('nur, wenn der Nutzer wirklich eine Frage gestellt hat');
+    expect(prompt).toContain('nicht nach Datenangaben');
+    expect(prompt).toContain('Nach Datenangaben passt eher');
+    expect(prompt).toContain('Danke.');
+    expect(prompt).toContain('Verstanden.');
+  });
+
   it('includes few-shot examples of the desired Sarah register', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('## Beispiele für Sarahs Tonfall');
