@@ -25,6 +25,7 @@ describe('buildSystemPrompt', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('Kundensegment');
     expect(prompt).toContain('Privatperson oder Firmenkunde');
+    expect(prompt).toContain('spätestens zusammen mit den Kontaktdaten');
   });
 
   it('includes boundary rules', () => {
