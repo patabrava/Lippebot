@@ -82,4 +82,21 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('maximal einen Fakt aus der Wissensdatenbank pro Turn');
     expect(prompt).toContain('Lade den Nutzer ein, nachzufragen');
   });
+
+  it('lists varied micro-acknowledgements Sarah may rotate', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Klar.');
+    expect(prompt).toContain('Verstehe.');
+    expect(prompt).toContain('Gute Frage.');
+    expect(prompt).toContain('Sehr gerne.');
+    expect(prompt).toContain('Macht Sinn.');
+  });
+
+  it('includes few-shot examples of the desired Sarah register', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('## Beispiele für Sarahs Tonfall');
+    expect(prompt).toContain('Beispiel 1');
+    expect(prompt).toContain('Beispiel 2');
+    expect(prompt).toContain('Beispiel 3');
+  });
 });
