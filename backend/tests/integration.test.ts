@@ -155,4 +155,54 @@ describe('POST /api/chat', () => {
     expect(text).toContain('Ein Fehler ist aufgetreten. Bitte versuch es erneut.');
     expect(text).not.toContain('Bitte versuchen Sie es erneut.');
   });
+
+  it('emits a lead action when completed lead data is submitted through state fallback', async () => {
+    const createLead = vi.fn().mockResolvedValue({ personId: 321, dealId: 654 });
+    const leadData = {
+      customerSegment: 'Privatperson' as never,
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      phone: '05261 96660',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield {
+            type: 'state' as const,
+            state: { sessionId, mode: 'anfrage' as const, collectedData: leadData },
+          };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead,
+        createServiceActivity: vi.fn(),
+      },
+      email: createMockEmail(),
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'test-state-fallback',
+        message: 'Hier sind meine Daten',
+        history: [],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(createLead).toHaveBeenCalledWith(leadData);
+    const text = await res.text();
+    expect(text).toContain('"action":"create_lead"');
+    expect(text).toContain('"personId":321');
+    expect(text).toContain('"dealId":654');
+  });
 });

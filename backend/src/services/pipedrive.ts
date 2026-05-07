@@ -178,10 +178,11 @@ function buildDealCustomFields(data: LeadData): Record<string, number> {
 
 export function createPipedriveService(apiKey: string, pipelineId: number, stageId: number) {
   const configured = apiKey.length > 0;
+  const recentlyResolvedPersonIds = new Map<string, number>();
 
-  async function apiCall(endpoint: string, body: Record<string, unknown>): Promise<{ id: number }> {
+  async function apiCall(endpoint: string, body: Record<string, unknown>, method = 'POST'): Promise<{ id: number }> {
     const response = await fetch(`${PIPEDRIVE_API_BASE}${endpoint}?api_token=${apiKey}`, {
-      method: 'POST',
+      method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
@@ -195,6 +196,74 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     return result.data;
   }
 
+  async function searchPerson(term: string, fields: 'email' | 'phone'): Promise<number | undefined> {
+    const params = new URLSearchParams({
+      api_token: apiKey,
+      term,
+      fields,
+      exact_match: 'true',
+    });
+    const response = await fetch(`${PIPEDRIVE_API_BASE}/persons/search?${params.toString()}`);
+    if (!response.ok) {
+      throw new Error(`Pipedrive API error: ${response.status} ${response.statusText}`);
+    }
+    const result = await response.json() as {
+      success: boolean;
+      data: { items?: Array<{ item?: { id: number } }> };
+    };
+    if (!result.success) {
+      throw new Error('Pipedrive API returned success: false');
+    }
+    return result.data.items?.[0]?.item?.id;
+  }
+
+  function cachePersonId(personId: number, email: string | undefined, phone: string): void {
+    if (email) {
+      recentlyResolvedPersonIds.set(`email:${email}`, personId);
+    }
+    recentlyResolvedPersonIds.set(`phone:${phone}`, personId);
+  }
+
+  async function findExistingPerson(email: string | undefined, phone: string): Promise<number | undefined> {
+    if (email) {
+      const cachedPersonId = recentlyResolvedPersonIds.get(`email:${email}`);
+      if (cachedPersonId) return cachedPersonId;
+    }
+    const cachedPhonePersonId = recentlyResolvedPersonIds.get(`phone:${phone}`);
+    if (cachedPhonePersonId) return cachedPhonePersonId;
+
+    if (email) {
+      const personId = await searchPerson(email, 'email');
+      if (personId) {
+        cachePersonId(personId, email, phone);
+        return personId;
+      }
+    }
+    const personId = await searchPerson(phone, 'phone');
+    if (personId) {
+      cachePersonId(personId, email, phone);
+    }
+    return personId;
+  }
+
+  function buildPersonPayload(data: LeadData, firstName: string, lastName: string, phone: string, email: string | undefined, street: string, postalCode: string, city: string): Record<string, unknown> {
+    return {
+      name: `${firstName} ${lastName}`,
+      owner_id: STEPHANIE_KREUZBUSCH_USER_ID,
+      phone: [{ value: phone, primary: true }],
+      ...(email ? { email: [{ value: email, primary: true }] } : {}),
+      ...buildPersonCustomFields(data, street, postalCode, city),
+    };
+  }
+
+  async function createPerson(data: LeadData, firstName: string, lastName: string, phone: string, email: string | undefined, street: string, postalCode: string, city: string): Promise<{ id: number }> {
+    return apiCall('/persons', buildPersonPayload(data, firstName, lastName, phone, email, street, postalCode, city));
+  }
+
+  async function updatePerson(personId: number, data: LeadData, firstName: string, lastName: string, phone: string, email: string | undefined, street: string, postalCode: string, city: string): Promise<void> {
+    await apiCall(`/persons/${personId}`, buildPersonPayload(data, firstName, lastName, phone, email, street, postalCode, city), 'PUT');
+  }
+
   async function createLead(data: LeadData): Promise<{ personId: number; dealId: number }> {
     if (!configured) throw new Error('Pipedrive not configured');
 
@@ -206,13 +275,12 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     const postalCode = normalizePostalCode(data.postalCode);
     const city = capitalize(data.city);
 
-    const person = await apiCall('/persons', {
-      name: `${firstName} ${lastName}`,
-      owner_id: STEPHANIE_KREUZBUSCH_USER_ID,
-      phone: [{ value: phone, primary: true }],
-      ...(email ? { email: [{ value: email, primary: true }] } : {}),
-      ...buildPersonCustomFields(data, street, postalCode, city),
-    });
+    const existingPersonId = await findExistingPerson(email, phone);
+    const personId = existingPersonId ?? (await createPerson(data, firstName, lastName, phone, email, street, postalCode, city)).id;
+    cachePersonId(personId, email, phone);
+    if (existingPersonId) {
+      await updatePerson(existingPersonId, data, firstName, lastName, phone, email, street, postalCode, city);
+    }
 
     const dealNotes = [
       `Treppe: ${data.stairLocation || 'k.A.'}`,
@@ -228,7 +296,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
 
     const deal = await apiCall('/deals', {
       title: `Sarah Lead: ${firstName} ${lastName}`,
-      person_id: person.id,
+      person_id: personId,
       pipeline_id: pipelineId,
       stage_id: stageId,
       visible_to: 3,
@@ -244,7 +312,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
       pinned_to_deal_flag: 1,
     }).catch(() => {}); // non-critical
 
-    return { personId: person.id, dealId: deal.id };
+    return { personId, dealId: deal.id };
   }
 
   async function createServiceActivity(data: ServiceData): Promise<{ personId: number; activityId: number }> {
