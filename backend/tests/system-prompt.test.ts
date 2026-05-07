@@ -76,4 +76,10 @@ describe('buildSystemPrompt', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('Wenn etwas unklar ist, frag nach');
   });
+
+  it('limits advisor answers to one knowledge-base fact per turn', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('maximal einen Fakt aus der Wissensdatenbank pro Turn');
+    expect(prompt).toContain('Lade den Nutzer ein, nachzufragen');
+  });
 });
