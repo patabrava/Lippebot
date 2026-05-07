@@ -51,4 +51,29 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('LL12');
     expect(prompt).toContain('Konstanz');
   });
+
+  it('declares a Gesprächsstil section before the modes', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('## Gesprächsstil');
+    const styleIdx = prompt.indexOf('## Gesprächsstil');
+    const modesIdx = prompt.indexOf('## Deine drei Modi');
+    expect(styleIdx).toBeGreaterThan(-1);
+    expect(modesIdx).toBeGreaterThan(styleIdx);
+  });
+
+  it('caps response length and forbids bullet lists in advisor replies', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('maximal 2–3 Sätze');
+    expect(prompt).toContain('Keine Bulletpoints');
+  });
+
+  it('requires every reply to end with a question or short handoff', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Beende jede Antwort mit einer kurzen Frage');
+  });
+
+  it('tells Sarah to ask instead of guessing when uncertain', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Wenn etwas unklar ist, frag nach');
+  });
 });
