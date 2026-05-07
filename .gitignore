@@ -15,6 +15,9 @@ backend/.env
 # Brainstorm sessions
 .superpowers/
 
+# Local git worktrees
+.worktrees/
+
 # Editor
 .vscode/
 .idea/
