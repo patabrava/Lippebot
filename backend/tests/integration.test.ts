@@ -125,4 +125,34 @@ describe('POST /api/chat', () => {
     expect(createLead).toHaveBeenCalledTimes(1);
     expect(await res.text()).toContain('"action":"create_lead"');
   });
+
+  it('streams du-form fallback copy when chat generation fails', async () => {
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          throw new Error('upstream exhausted');
+        },
+      },
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'test-error-copy',
+        message: 'Hallo',
+        history: [],
+      }),
+    });
+
+    const text = await res.text();
+    expect(text).toContain('Ein Fehler ist aufgetreten. Bitte versuch es erneut.');
+    expect(text).not.toContain('Bitte versuchen Sie es erneut.');
+  });
 });

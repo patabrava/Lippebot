@@ -151,7 +151,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
       } catch (err) {
         console.error('Chat stream error:', err);
         await stream.writeSSE({
-          data: JSON.stringify({ type: 'error', error: 'Ein Fehler ist aufgetreten. Bitte versuchen Sie es erneut.' }),
+          data: JSON.stringify({ type: 'error', error: 'Ein Fehler ist aufgetreten. Bitte versuch es erneut.' }),
         });
       }
     });

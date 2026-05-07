@@ -7,8 +7,8 @@ const CHAT_ICON = `<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4
 const CLOSE_ICON = '\u2715';
 const SEND_ICON = `<svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>`;
 
-const GREETING = 'Hallo! Ich bin Sarah. Kann ich Ihnen helfen?';
-const OPENING_MESSAGE = 'Hallo! Ich bin Sarah, Ihre persönliche Beraterin bei LIPPE Lift. \u{1F60A} Wie kann ich Ihnen heute helfen?';
+const GREETING = 'Hallo! Ich bin Sarah. Kann ich dir helfen?';
+const OPENING_MESSAGE = 'Hallo! Ich bin Sarah, deine persönliche Beraterin bei LIPPE Lift. \u{1F60A} Wie kann ich dir heute helfen?';
 
 const QUICK_ACTIONS = [
   'Welcher Lift passt zu mir?',

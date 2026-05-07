@@ -25,7 +25,24 @@ describe('buildSystemPrompt', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('Kundensegment');
     expect(prompt).toContain('Privatperson oder Firmenkunde');
-    expect(prompt).toContain('spätestens zusammen mit den Kontaktdaten');
+    expect(prompt).toContain('spätestens vor den Kontaktdaten');
+    expect(prompt).toContain('in einer einzelnen Frage');
+  });
+
+  it('instructs Sarah to use du by default and switch to Sie only on request', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Du duzt die Kunden standardmaessig');
+    expect(prompt).toContain('Wechsle nur dann zu Sie');
+  });
+
+  it('instructs Sarah to ask exactly one lead question at a time', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Frage immer nur eine einzige neue Information pro Antwort ab');
+    expect(prompt).toContain('Stelle niemals mehrere Fragen auf einmal');
+    expect(prompt).toContain('Deine Antwort darf maximal ein Fragezeichen enthalten');
+    expect(prompt).toContain('beginne mit: "Ist der Lift für drinnen oder draußen?"');
+    expect(prompt).toContain('Wenn du nach dem Namen fragst, formuliere: "Wie ist dein Name?"');
+    expect(prompt).toContain('An welcher Adresse brauchst du den Lift?');
   });
 
   it('includes boundary rules', () => {

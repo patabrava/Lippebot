@@ -65,7 +65,7 @@ export async function sendMessage(
   });
 
   if (!response.ok || !response.body) {
-    options.onError('Sarah ist gerade nicht erreichbar. Bitte versuchen Sie es später erneut.');
+    options.onError('Sarah ist gerade nicht erreichbar. Bitte versuch es später erneut.');
     return;
   }
 
