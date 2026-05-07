@@ -30,6 +30,24 @@ describe('ChatHistory', () => {
     expect(newHistory.getMessages()[0].content).toBe('Test');
   });
 
+  it('does not restore old pre-du-flow history', () => {
+    localStorage.setItem('sarah-chat-history', JSON.stringify({
+      sessionId: 'old-session',
+      messages: [
+        {
+          role: 'assistant',
+          content: 'Hallo! Ich bin Sarah, Ihre persönliche Beraterin bei LIPPE Lift.',
+          timestamp: Date.now(),
+        },
+      ],
+      lastUpdated: Date.now(),
+    }));
+
+    const newHistory = new ChatHistory();
+    expect(newHistory.getMessages()).toEqual([]);
+    expect(localStorage.getItem('sarah-chat-history')).toBeNull();
+  });
+
   it('clears messages', () => {
     history.addMessage('user', 'Test');
     history.clear();
@@ -38,9 +56,9 @@ describe('ChatHistory', () => {
 
   it('expires after TTL', () => {
     history.addMessage('user', 'Old message');
-    const data = JSON.parse(localStorage.getItem('sarah-chat-history')!);
+    const data = JSON.parse(localStorage.getItem('sarah-chat-history-v2-du-flow')!);
     data.lastUpdated = Date.now() - (8 * 24 * 60 * 60 * 1000);
-    localStorage.setItem('sarah-chat-history', JSON.stringify(data));
+    localStorage.setItem('sarah-chat-history-v2-du-flow', JSON.stringify(data));
 
     const newHistory = new ChatHistory();
     expect(newHistory.getMessages()).toEqual([]);

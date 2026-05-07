@@ -10,7 +10,8 @@ interface StoredData {
   lastUpdated: number;
 }
 
-const STORAGE_KEY = 'sarah-chat-history';
+const LEGACY_STORAGE_KEY = 'sarah-chat-history';
+const STORAGE_KEY = 'sarah-chat-history-v2-du-flow';
 const TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 function generateId(): string {
@@ -26,6 +27,7 @@ export class ChatHistory {
 
   private load(): StoredData {
     try {
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return { sessionId: generateId(), messages: [], lastUpdated: Date.now() };
 
