@@ -1,6 +1,7 @@
 import type { LeadData, ServiceData } from '../types/index.js';
 
 const PIPEDRIVE_API_BASE = 'https://api.pipedrive.com/v1';
+const STEPHANIE_KREUZBUSCH_USER_ID = 24093350;
 
 const dealFieldKeys = {
   stairLocation: 'aff4a71d003cb374585aeef67732b05828b62050',
@@ -76,6 +77,18 @@ const optionAliases = {
     plattformlift: 'rollstuhlgeeignet',
     sitzlift: 'sitzlift',
   },
+  customerSegment: {
+    privatperson: 'privatperson',
+    privat: 'privatperson',
+    privateperson: 'privatperson',
+    firma: 'firma',
+    firmenkunde: 'firma',
+    firmenkundin: 'firma',
+    geschaeftskunde: 'firma',
+    geschäftskunde: 'firma',
+    b2b: 'firma',
+    unternehmen: 'firma',
+  },
 } as const;
 
 function normalizeOptionValue(value: unknown): string | undefined {
@@ -138,8 +151,9 @@ function buildPersonCustomFields(data: LeadData, street: string, postalCode: str
 
 function buildDealCustomFields(data: LeadData): Record<string, number> {
   const customFields: Record<string, number> = { ...defaultDealCustomFields };
-  if (data.customerSegment && customerSegmentMappings[data.customerSegment]) {
-    customFields[dealFieldKeys.customerSegment] = customerSegmentMappings[data.customerSegment];
+  const customerSegment = optionAliases.customerSegment[normalizeOptionValue(data.customerSegment) as keyof typeof optionAliases.customerSegment];
+  if (customerSegment && customerSegmentMappings[customerSegment]) {
+    customFields[dealFieldKeys.customerSegment] = customerSegmentMappings[customerSegment];
   }
   const stairLocation = optionAliases.stairLocation[normalizeOptionValue(data.stairLocation) as keyof typeof optionAliases.stairLocation];
   const stairType = optionAliases.stairType[normalizeOptionValue(data.stairType) as keyof typeof optionAliases.stairType];
@@ -194,6 +208,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
 
     const person = await apiCall('/persons', {
       name: `${firstName} ${lastName}`,
+      owner_id: STEPHANIE_KREUZBUSCH_USER_ID,
       phone: [{ value: phone, primary: true }],
       ...(email ? { email: [{ value: email, primary: true }] } : {}),
       ...buildPersonCustomFields(data, street, postalCode, city),
@@ -217,7 +232,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
       pipeline_id: pipelineId,
       stage_id: stageId,
       visible_to: 3,
-      owner_id: 24093350,
+      user_id: STEPHANIE_KREUZBUSCH_USER_ID,
       [dealFieldKeys.requestDate]: today(),
       ...buildDealCustomFields(data),
     });

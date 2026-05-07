@@ -15,7 +15,7 @@ function hasRequiredLeadFields(data: unknown): data is LeadData {
     return false;
   }
 
-  return !!(data.firstName && data.lastName && data.phone && data.postalCode && data.city && data.availability);
+  return !!(data.customerSegment && data.firstName && data.lastName && data.phone && data.postalCode && data.city && data.availability);
 }
 
 function hasRequiredServiceFields(data: unknown): data is ServiceData {
@@ -63,6 +63,8 @@ export function createChatRoute(deps: ChatDeps): Hono {
 
         let lastMode = 'undetermined';
         let lastCollectedData = {};
+        let leadActionAttempted = false;
+        let serviceActionAttempted = false;
 
         for await (const event of gen) {
           if (event.type === 'token' && event.content) {
@@ -75,6 +77,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
           }
 
           if (event.type === 'lead' && event.leadData) {
+            leadActionAttempted = true;
             try {
               if (deps.pipedrive.isConfigured()) {
                 const result = await deps.pipedrive.createLead(event.leadData);
@@ -91,6 +94,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
           }
 
           if (event.type === 'service' && event.serviceData) {
+            serviceActionAttempted = true;
             try {
               if (deps.pipedrive.isConfigured()) {
                 const result = await deps.pipedrive.createServiceActivity(event.serviceData);
@@ -110,7 +114,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
         // If Gemini used report_state with complete data (instead of submit_lead/submit_service_request),
         // trigger Pipedrive/email based on mode + collected data completeness
         const collectedObj = lastCollectedData as Record<string, unknown>;
-        if (lastMode === 'anfrage' && hasRequiredLeadFields(collectedObj)) {
+        if (!leadActionAttempted && lastMode === 'anfrage' && hasRequiredLeadFields(collectedObj)) {
           try {
             if (deps.pipedrive.isConfigured()) {
               const result = await deps.pipedrive.createLead(collectedObj as LeadData);
@@ -125,7 +129,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
             console.error('Lead creation from state error:', err);
           }
         }
-        if (lastMode === 'service' && hasRequiredServiceFields(collectedObj)) {
+        if (!serviceActionAttempted && lastMode === 'service' && hasRequiredServiceFields(collectedObj)) {
           try {
             if (deps.pipedrive.isConfigured()) {
               const result = await deps.pipedrive.createServiceActivity(collectedObj as ServiceData);

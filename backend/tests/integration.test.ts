@@ -77,4 +77,52 @@ describe('POST /api/chat', () => {
     expect(text).toContain('"type":"done"');
     expect(text).toContain('"mode":"berater"');
   });
+
+  it('does not run state fallback after a lead action was already emitted', async () => {
+    const createLead = vi.fn().mockResolvedValue({ personId: 123, dealId: 456 });
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          const leadData = {
+            customerSegment: 'Privatperson' as never,
+            firstName: 'Max',
+            lastName: 'Mustermann',
+            phone: '05261 96660',
+            postalCode: '32657',
+            city: 'Lemgo',
+            availability: '08:00 - 12:00' as const,
+          };
+          yield { type: 'lead' as const, leadData };
+          yield {
+            type: 'state' as const,
+            state: { sessionId, mode: 'anfrage' as const, collectedData: leadData },
+          };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead,
+        createServiceActivity: vi.fn(),
+      },
+      email: createMockEmail(),
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'test-duplicate-guard',
+        message: 'Hallo',
+        history: [],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(createLead).toHaveBeenCalledTimes(1);
+    expect(await res.text()).toContain('"action":"create_lead"');
+  });
 });
