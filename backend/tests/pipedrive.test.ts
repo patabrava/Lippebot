@@ -301,7 +301,7 @@ describe('createPipedriveService', () => {
       street: 'musterstrasse 1',
       availability: '08:00 - 12:00',
       customerSegment: 'privatperson',
-      stairLocation: 'innen',
+      stairLocation: 'Innenbereich' as never,
       stairType: 'kurvig',
       buildingType: 'einfamilienhaus',
       liftType: 'sitzlift',
@@ -379,7 +379,7 @@ describe('createPipedriveService', () => {
     expect(dealBody['684a7860061d276f4a76498fd1653d721e37cb6f']).toBeUndefined();
 
     const noteBody = JSON.parse(mockFetch.mock.calls[3][1].body);
-    expect(noteBody.content).toContain('PLZ: nicht ausgefüllt');
+    expect(noteBody.content).toBe('Erreichbarkeit: 12:00 - 16:00');
 
     vi.unstubAllGlobals();
   });
@@ -423,6 +423,53 @@ describe('createPipedriveService', () => {
     expect(dealBody['36241991692b59873ce73c478b98aab6ad4054c1']).toBe(120);
     expect(dealBody['9c08a82b8cad15eab222f89a6a961c59bc8c95e3']).toBe(122);
     expect(dealBody['684a7860061d276f4a76498fd1653d721e37cb6f']).toBe(128);
+
+    vi.unstubAllGlobals();
+  });
+
+  it('createLead only stores non-structured data in the deal note', async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { items: [] } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { id: 123 } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { id: 456 } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { id: 789 } }),
+      });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const service = createPipedriveService('test-key', 2, 3);
+    await service.createLead({
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      phone: '05261 96660',
+      street: 'Musterstrasse 1',
+      postalCode: '12345',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00',
+      customerSegment: 'privatperson',
+      stairLocation: 'innen',
+      stairType: 'gerade',
+      buildingType: 'einfamilienhaus',
+      liftType: 'rollstuhlgeeignet',
+      newsletter: 'Ja',
+      message: 'Bitte am besten vormittags anrufen.',
+    });
+
+    const noteBody = JSON.parse(mockFetch.mock.calls[3][1].body);
+    expect(noteBody.content).toBe('Erreichbarkeit: 08:00 - 12:00\nNachricht: Bitte am besten vormittags anrufen.');
+    expect(noteBody.content).not.toContain('Treppe:');
+    expect(noteBody.content).not.toContain('Adresse:');
+    expect(noteBody.content).not.toContain('Newsletter:');
 
     vi.unstubAllGlobals();
   });

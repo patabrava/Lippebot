@@ -64,7 +64,7 @@ const submitLeadFn: FunctionDeclaration = {
       message: { type: FunctionDeclarationSchemaType.STRING },
       newsletter: { type: FunctionDeclarationSchemaType.STRING },
     },
-    required: ['customerSegment', 'firstName', 'lastName', 'phone', 'postalCode', 'city', 'availability'],
+    required: ['customerSegment', 'firstName', 'lastName', 'phone', 'street', 'postalCode', 'city', 'availability'],
   },
 };
 

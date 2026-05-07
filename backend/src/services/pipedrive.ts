@@ -60,8 +60,14 @@ const optionAliases = {
     aussentreppe: 'aussen',
     außen: 'aussen',
     aussen: 'aussen',
+    draußen: 'aussen',
+    draussen: 'aussen',
+    aussenbereich: 'aussen',
+    außenbereich: 'aussen',
     innentreppe: 'innen',
     innen: 'innen',
+    drinnen: 'innen',
+    innenbereich: 'innen',
   },
   stairType: {
     kurvig: 'kurvig',
@@ -283,15 +289,8 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     }
 
     const dealNotes = [
-      `Treppe: ${data.stairLocation || 'k.A.'}`,
-      `Verlauf: ${data.stairType || 'k.A.'}`,
-      `Gebäude: ${data.buildingType || 'k.A.'}`,
-      `Lifttyp: ${data.liftType || 'k.A.'}`,
-      `Adresse: ${street}, ${postalCode} ${city}`,
-      `PLZ: ${postalCode}`,
       `Erreichbarkeit: ${data.availability}`,
       data.message ? `Nachricht: ${data.message}` : '',
-      `Newsletter: ${data.newsletter || 'k.A.'}`,
     ].filter(Boolean).join('\n');
 
     const deal = await apiCall('/deals', {
@@ -305,12 +304,14 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
       ...buildDealCustomFields(data),
     });
 
-    // Add note to deal
-    await apiCall('/notes', {
-      deal_id: deal.id,
-      content: dealNotes,
-      pinned_to_deal_flag: 1,
-    }).catch(() => {}); // non-critical
+    if (dealNotes) {
+      // Only store values without dedicated Pipedrive fields as note content.
+      await apiCall('/notes', {
+        deal_id: deal.id,
+        content: dealNotes,
+        pinned_to_deal_flag: 1,
+      }).catch(() => {}); // non-critical
+    }
 
     return { personId, dealId: deal.id };
   }
