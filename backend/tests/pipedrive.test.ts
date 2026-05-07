@@ -38,6 +38,7 @@ describe('createPipedriveService', () => {
       city: 'lemgo',
       street: 'musterstrasse 1',
       availability: '08:00 - 12:00',
+      customerSegment: 'privatperson',
       stairLocation: 'innen',
       stairType: 'kurvig',
       buildingType: 'einfamilienhaus',
@@ -52,6 +53,9 @@ describe('createPipedriveService', () => {
     expect(personBody.name).toBe('Max Mustermann');
     expect(personBody.phone).toEqual([{ value: '0049526196660', primary: true }]);
     expect(personBody.email).toEqual([{ value: 'max@example.de', primary: true }]);
+    expect(personBody['2f068d0e83a4ea944b6f91f97769a45557b62425']).toBe('Musterstrasse 1, 12345 Lemgo');
+    expect(personBody['43c2a08a7993307990ced6639183ca91f7608b2b']).toBe('152');
+    expect(personBody.e0cb479c4f405997f2e53b58ddc84ecb6d4c7b49).toBe(140);
 
     const dealCall = mockFetch.mock.calls[1];
     expect(dealCall[0]).toContain('/deals');
@@ -59,6 +63,10 @@ describe('createPipedriveService', () => {
     expect(dealBody.person_id).toBe(123);
     expect(dealBody.pipeline_id).toBe(2);
     expect(dealBody.stage_id).toBe(3);
+    expect(dealBody['59745cb0d3eb04f89e70543d01f49813175ad6a3']).toBe(56);
+    expect(dealBody['300c5e3ef98a1a25e2f80262af2bd0942b95c231']).toBe(177);
+    expect(dealBody.eaf2557e218e842227f803c4abdc665291c99b91).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(dealBody.owner_id).toBe(24093350);
     expect(dealBody.aff4a71d003cb374585aeef67732b05828b62050).toBe(118);
     expect(dealBody['36241991692b59873ce73c478b98aab6ad4054c1']).toBe(120);
     expect(dealBody['9c08a82b8cad15eab222f89a6a961c59bc8c95e3']).toBe(122);
@@ -91,9 +99,12 @@ describe('createPipedriveService', () => {
       postalCode: 'abc',
       city: 'Lemgo',
       availability: '12:00 - 16:00',
+      customerSegment: 'firma',
     });
 
     const dealBody = JSON.parse(mockFetch.mock.calls[1][1].body);
+    expect(dealBody['59745cb0d3eb04f89e70543d01f49813175ad6a3']).toBe(57);
+    expect(dealBody['300c5e3ef98a1a25e2f80262af2bd0942b95c231']).toBe(177);
     expect(dealBody.aff4a71d003cb374585aeef67732b05828b62050).toBeUndefined();
     expect(dealBody['36241991692b59873ce73c478b98aab6ad4054c1']).toBeUndefined();
     expect(dealBody['9c08a82b8cad15eab222f89a6a961c59bc8c95e3']).toBeUndefined();

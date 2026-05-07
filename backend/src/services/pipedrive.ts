@@ -7,11 +7,35 @@ const dealFieldKeys = {
   stairType: '36241991692b59873ce73c478b98aab6ad4054c1',
   buildingType: '9c08a82b8cad15eab222f89a6a961c59bc8c95e3',
   liftType: '684a7860061d276f4a76498fd1653d721e37cb6f',
+  customerSegment: '59745cb0d3eb04f89e70543d01f49813175ad6a3',
+  requestDate: 'eaf2557e218e842227f803c4abdc665291c99b91',
+  channel: '300c5e3ef98a1a25e2f80262af2bd0942b95c231',
+} as const;
+
+const personFieldKeys = {
+  address: '2f068d0e83a4ea944b6f91f97769a45557b62425',
+  marketingOptIn: 'fd1928c889e5888dd2b7964ab9f2d8c129d1aa40',
+  optInChannel: 'e0cb479c4f405997f2e53b58ddc84ecb6d4c7b49',
+  role: '43c2a08a7993307990ced6639183ca91f7608b2b',
+} as const;
+
+const defaultDealCustomFields = {
+  [dealFieldKeys.channel]: 177, // Inbound HP "Sarah"
+} as const;
+
+const defaultPersonCustomFields = {
+  [personFieldKeys.optInChannel]: 140, // Kontaktformular
+  [personFieldKeys.role]: '152', // Wirtschaftlicher Entscheider
 } as const;
 
 const liftTypeMappings: Record<NonNullable<LeadData['liftType']>, number> = {
   rollstuhlgeeignet: 125,
   sitzlift: 128,
+};
+
+const customerSegmentMappings: Record<NonNullable<LeadData['customerSegment']>, number> = {
+  privatperson: 56,
+  firma: 57,
 };
 
 const buildingTypeMappings: Record<NonNullable<LeadData['buildingType']>, number> = {
@@ -86,8 +110,37 @@ function normalizePostalCode(postalCode?: string): string {
   return /^\d+$/.test(trimmed) ? trimmed : 'nicht ausgefüllt';
 }
 
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function buildAddress(street: string, postalCode: string, city: string): string | undefined {
+  if (street === 'nicht ausgefüllt') return undefined;
+  const locality = [postalCode, city].filter((part) => part !== 'nicht ausgefüllt').join(' ');
+  return [street, locality].filter(Boolean).join(', ');
+}
+
+function buildPersonCustomFields(data: LeadData, street: string, postalCode: string, city: string): Record<string, number | string> {
+  const customFields: Record<string, number | string> = { ...defaultPersonCustomFields };
+  const address = buildAddress(street, postalCode, city);
+
+  if (address) {
+    customFields[personFieldKeys.address] = address;
+  }
+  if (data.newsletter === 'Ja') {
+    customFields[personFieldKeys.marketingOptIn] = 138;
+  } else if (data.newsletter === 'Nein') {
+    customFields[personFieldKeys.marketingOptIn] = 139;
+  }
+
+  return customFields;
+}
+
 function buildDealCustomFields(data: LeadData): Record<string, number> {
-  const customFields: Record<string, number> = {};
+  const customFields: Record<string, number> = { ...defaultDealCustomFields };
+  if (data.customerSegment && customerSegmentMappings[data.customerSegment]) {
+    customFields[dealFieldKeys.customerSegment] = customerSegmentMappings[data.customerSegment];
+  }
   const stairLocation = optionAliases.stairLocation[normalizeOptionValue(data.stairLocation) as keyof typeof optionAliases.stairLocation];
   const stairType = optionAliases.stairType[normalizeOptionValue(data.stairType) as keyof typeof optionAliases.stairType];
   const buildingType = optionAliases.buildingType[normalizeOptionValue(data.buildingType) as keyof typeof optionAliases.buildingType];
@@ -143,6 +196,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
       name: `${firstName} ${lastName}`,
       phone: [{ value: phone, primary: true }],
       ...(email ? { email: [{ value: email, primary: true }] } : {}),
+      ...buildPersonCustomFields(data, street, postalCode, city),
     });
 
     const dealNotes = [
@@ -163,6 +217,8 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
       pipeline_id: pipelineId,
       stage_id: stageId,
       visible_to: 3,
+      owner_id: 24093350,
+      [dealFieldKeys.requestDate]: today(),
       ...buildDealCustomFields(data),
     });
 

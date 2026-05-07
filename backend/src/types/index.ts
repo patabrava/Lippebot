@@ -13,6 +13,7 @@ export interface ChatRequest {
 export type Mode = 'berater' | 'anfrage' | 'service' | 'undetermined';
 
 export interface LeadData {
+  customerSegment?: 'privatperson' | 'firma';
   stairLocation?: 'innen' | 'aussen';
   stairType?: 'gerade' | 'kurvig';
   buildingType?: 'einfamilienhaus' | 'mehrfamilienhaus';

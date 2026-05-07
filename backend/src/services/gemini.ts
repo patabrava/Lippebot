@@ -17,6 +17,7 @@ const reportStateFn: FunctionDeclaration = {
         type: FunctionDeclarationSchemaType.OBJECT,
         description: 'Any lead or service data collected so far',
         properties: {
+          customerSegment: { type: FunctionDeclarationSchemaType.STRING },
           stairLocation: { type: FunctionDeclarationSchemaType.STRING },
           stairType: { type: FunctionDeclarationSchemaType.STRING },
           buildingType: { type: FunctionDeclarationSchemaType.STRING },
@@ -47,6 +48,7 @@ const submitLeadFn: FunctionDeclaration = {
   parameters: {
     type: FunctionDeclarationSchemaType.OBJECT,
     properties: {
+      customerSegment: { type: FunctionDeclarationSchemaType.STRING },
       stairLocation: { type: FunctionDeclarationSchemaType.STRING },
       stairType: { type: FunctionDeclarationSchemaType.STRING },
       buildingType: { type: FunctionDeclarationSchemaType.STRING },
@@ -62,7 +64,7 @@ const submitLeadFn: FunctionDeclaration = {
       message: { type: FunctionDeclarationSchemaType.STRING },
       newsletter: { type: FunctionDeclarationSchemaType.STRING },
     },
-    required: ['firstName', 'lastName', 'phone', 'postalCode', 'city', 'availability'],
+    required: ['customerSegment', 'firstName', 'lastName', 'phone', 'postalCode', 'city', 'availability'],
   },
 };
 

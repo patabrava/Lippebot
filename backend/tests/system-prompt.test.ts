@@ -21,6 +21,12 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('Service-Modus');
   });
 
+  it('asks for customer segment in lead capture', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Kundensegment');
+    expect(prompt).toContain('Privatperson oder Firmenkunde');
+  });
+
   it('includes boundary rules', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('Preise nennen');
