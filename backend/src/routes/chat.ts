@@ -15,7 +15,16 @@ function hasRequiredLeadFields(data: unknown): data is LeadData {
     return false;
   }
 
-  return !!(data.customerSegment && data.firstName && data.lastName && data.phone && data.postalCode && data.city && data.availability);
+  return !!(
+    data.customerSegment
+    && data.firstName
+    && data.lastName
+    && data.phone
+    && data.street
+    && data.postalCode
+    && data.city
+    && data.availability
+  );
 }
 
 function hasRequiredServiceFields(data: unknown): data is ServiceData {
@@ -44,8 +53,42 @@ interface ChatDeps {
   serviceEmailTo: string;
 }
 
+type LeadActionResult = { personId: number; dealId: number };
+
 export function createChatRoute(deps: ChatDeps): Hono {
   const app = new Hono();
+  const completedLeadActions = new Map<string, LeadActionResult>();
+
+  async function emitLeadAction(
+    stream: Parameters<Parameters<typeof streamSSE>[1]>[0],
+    sessionId: string,
+    leadData: LeadData,
+    errorLabel: string,
+  ): Promise<void> {
+    const existingResult = completedLeadActions.get(sessionId);
+    if (existingResult) {
+      await stream.writeSSE({
+        data: JSON.stringify({ type: 'action', action: 'create_lead', data: existingResult, duplicate: true }),
+      });
+      return;
+    }
+
+    try {
+      let result: LeadActionResult | undefined;
+      if (deps.pipedrive.isConfigured()) {
+        result = await deps.pipedrive.createLead(leadData);
+        completedLeadActions.set(sessionId, result);
+        await stream.writeSSE({
+          data: JSON.stringify({ type: 'action', action: 'create_lead', data: result }),
+        });
+      }
+      if (deps.email.isConfigured() && deps.notificationEmailTo) {
+        await deps.email.sendLeadNotification(deps.notificationEmailTo, leadData);
+      }
+    } catch (err) {
+      console.error(errorLabel, err);
+    }
+  }
 
   app.post('/api/chat', async (c) => {
     const body = await c.req.json();
@@ -78,19 +121,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
 
           if (event.type === 'lead' && event.leadData) {
             leadActionAttempted = true;
-            try {
-              if (deps.pipedrive.isConfigured()) {
-                const result = await deps.pipedrive.createLead(event.leadData);
-                await stream.writeSSE({
-                  data: JSON.stringify({ type: 'action', action: 'create_lead', data: result }),
-                });
-              }
-              if (deps.email.isConfigured() && deps.notificationEmailTo) {
-                await deps.email.sendLeadNotification(deps.notificationEmailTo, event.leadData);
-              }
-            } catch (err) {
-              console.error('Lead creation error:', err);
-            }
+            await emitLeadAction(stream, sessionId, event.leadData, 'Lead creation error:');
           }
 
           if (event.type === 'service' && event.serviceData) {
@@ -115,19 +146,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
         // trigger Pipedrive/email based on mode + collected data completeness
         const collectedObj = lastCollectedData as Record<string, unknown>;
         if (!leadActionAttempted && lastMode === 'anfrage' && hasRequiredLeadFields(collectedObj)) {
-          try {
-            if (deps.pipedrive.isConfigured()) {
-              const result = await deps.pipedrive.createLead(collectedObj as LeadData);
-              await stream.writeSSE({
-                data: JSON.stringify({ type: 'action', action: 'create_lead', data: result }),
-              });
-            }
-            if (deps.email.isConfigured() && deps.notificationEmailTo) {
-              await deps.email.sendLeadNotification(deps.notificationEmailTo, collectedObj as LeadData);
-            }
-          } catch (err) {
-            console.error('Lead creation from state error:', err);
-          }
+          await emitLeadAction(stream, sessionId, collectedObj as LeadData, 'Lead creation from state error:');
         }
         if (!serviceActionAttempted && lastMode === 'service' && hasRequiredServiceFields(collectedObj)) {
           try {
