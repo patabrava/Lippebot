@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
 import { createChatRoute } from '../src/routes/chat.js';
 import type { GeminiService } from '../src/services/gemini.js';
@@ -23,6 +23,8 @@ function createMockPipedrive(): PipedriveService {
     isConfigured: () => false,
     createLead: vi.fn(),
     createServiceActivity: vi.fn(),
+    resolveSupportPerson: vi.fn(),
+    createSupportNote: vi.fn(),
   };
 }
 
@@ -31,11 +33,16 @@ function createMockEmail(): EmailService {
     isConfigured: () => false,
     sendLeadNotification: vi.fn(),
     sendServiceNotification: vi.fn(),
+    sendSupportNotification: vi.fn(),
   };
 }
 
 describe('POST /api/chat', () => {
   let app: Hono;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   beforeEach(() => {
     const chatRoute = createChatRoute({
@@ -104,6 +111,8 @@ describe('POST /api/chat', () => {
         isConfigured: () => true,
         createLead,
         createServiceActivity: vi.fn(),
+        resolveSupportPerson: vi.fn(),
+        createSupportNote: vi.fn(),
       },
       email: createMockEmail(),
       notificationEmailTo: '',
@@ -182,6 +191,8 @@ describe('POST /api/chat', () => {
         isConfigured: () => true,
         createLead,
         createServiceActivity: vi.fn(),
+        resolveSupportPerson: vi.fn(),
+        createSupportNote: vi.fn(),
       },
       email: createMockEmail(),
       notificationEmailTo: '',
@@ -233,6 +244,8 @@ describe('POST /api/chat', () => {
         isConfigured: () => true,
         createLead,
         createServiceActivity: vi.fn(),
+        resolveSupportPerson: vi.fn(),
+        createSupportNote: vi.fn(),
       },
       email: createMockEmail(),
       notificationEmailTo: '',
@@ -264,5 +277,298 @@ describe('POST /api/chat', () => {
     expect(secondText).toContain('"action":"create_lead"');
     expect(secondText).toContain('"dealId":654');
     expect(secondText).toContain('"duplicate":true');
+  });
+
+  it('creates a compact support note and sends one routed support email for a unique match', async () => {
+    const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
+    const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
+    const createServiceActivity = vi.fn();
+    const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
+    const supportData = {
+      customerName: 'Maria Schmidt',
+      phone: '05261 96660',
+      category: 'technik' as const,
+      issueDescription: 'Lift bleibt im Erdgeschoss stehen.',
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'service' as const, serviceData: supportData };
+          yield { type: 'state' as const, state: { sessionId, mode: 'service' as const, collectedData: supportData } };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead: vi.fn(),
+        createServiceActivity,
+        resolveSupportPerson,
+        createSupportNote,
+      },
+      email: {
+        isConfigured: () => true,
+        sendLeadNotification: vi.fn(),
+        sendServiceNotification: vi.fn(),
+        sendSupportNotification,
+      },
+      notificationEmailTo: '',
+      serviceEmailTo: 'caechma@gmail.com',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'support-unique', message: 'Mein Lift ist kaputt', history: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(resolveSupportPerson).toHaveBeenCalledWith(supportData);
+    expect(createSupportNote).toHaveBeenCalledWith(501, supportData);
+    expect(createServiceActivity).not.toHaveBeenCalled();
+    expect(sendSupportNotification).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
+      data: supportData,
+      intendedInbox: 'technik@lippelift.de',
+      matchState: 'unique',
+      noteStatus: 'created',
+    }));
+    expect(text).toContain('"action":"create_service"');
+    expect(text).toContain('"status":"accepted"');
+    expect(text).not.toContain('"matchState"');
+    expect(text).not.toContain('technik@lippelift.de');
+    expect(text).not.toContain('caechma@gmail.com');
+    expect(text).not.toContain('Pipedrive');
+    expect(text).not.toContain('CRM');
+  });
+
+  it('does not create a Pipedrive note for unresolved support matches but still sends the email', async () => {
+    const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unresolved', candidateCount: 0 });
+    const createSupportNote = vi.fn();
+    const createServiceActivity = vi.fn();
+    const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
+    const supportData = {
+      customerName: 'Unbekannter Kunde',
+      category: 'finance' as const,
+      issueDescription: 'Frage zu einer Rechnung.',
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          yield { type: 'service' as const, serviceData: supportData };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead: vi.fn(),
+        createServiceActivity,
+        resolveSupportPerson,
+        createSupportNote,
+      },
+      email: {
+        isConfigured: () => true,
+        sendLeadNotification: vi.fn(),
+        sendServiceNotification: vi.fn(),
+        sendSupportNotification,
+      },
+      notificationEmailTo: '',
+      serviceEmailTo: 'caechma@gmail.com',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'support-unresolved', message: 'Rechnung', history: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    await res.text();
+    expect(createSupportNote).not.toHaveBeenCalled();
+    expect(createServiceActivity).not.toHaveBeenCalled();
+    expect(sendSupportNotification).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
+      intendedInbox: 'finance@lippelift.de',
+      matchState: 'unresolved',
+      noteStatus: 'skipped',
+    }));
+  });
+
+  it('still sends the support email when the unique-match note write fails', async () => {
+    const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
+    const createSupportNote = vi.fn().mockRejectedValue(new Error('Pipedrive API error: 500 Internal Server Error'));
+    const createServiceActivity = vi.fn();
+    const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const supportData = {
+      customerName: 'Maria Schmidt',
+      category: 'lossau' as const,
+      issueDescription: 'Ersatzteil fuer die Schiene benoetigt.',
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          yield { type: 'service' as const, serviceData: supportData };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead: vi.fn(),
+        createServiceActivity,
+        resolveSupportPerson,
+        createSupportNote,
+      },
+      email: {
+        isConfigured: () => true,
+        sendLeadNotification: vi.fn(),
+        sendServiceNotification: vi.fn(),
+        sendSupportNotification,
+      },
+      notificationEmailTo: '',
+      serviceEmailTo: 'caechma@gmail.com',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'support-note-fails', message: 'Ersatzteil', history: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    await res.text();
+    expect(createServiceActivity).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith('Support note creation error:', expect.any(Error));
+    expect(sendSupportNotification).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
+      intendedInbox: 'lossau@lippelift.de',
+      matchState: 'unique',
+      noteStatus: 'failed',
+      noteError: 'Pipedrive API error: 500 Internal Server Error',
+    }));
+
+    errorSpy.mockRestore();
+  });
+
+  it('does not duplicate the support note when the support email fails after a unique match', async () => {
+    const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
+    const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
+    const sendSupportNotification = vi.fn().mockRejectedValue(new Error('SMTP unavailable'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const supportData = {
+      customerName: 'Maria Schmidt',
+      category: 'technik' as const,
+      issueDescription: 'Lift bleibt stehen.',
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          yield { type: 'service' as const, serviceData: supportData };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead: vi.fn(),
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson,
+        createSupportNote,
+      },
+      email: {
+        isConfigured: () => true,
+        sendLeadNotification: vi.fn(),
+        sendServiceNotification: vi.fn(),
+        sendSupportNotification,
+      },
+      notificationEmailTo: '',
+      serviceEmailTo: 'caechma@gmail.com',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const requestBody = { sessionId: 'support-email-fails', message: 'Lift kaputt', history: [] };
+
+    const first = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    expect(first.status).toBe(200);
+    const firstText = await first.text();
+    expect(firstText).toContain('"status":"accepted"');
+    expect(firstText).not.toContain('SMTP unavailable');
+
+    const second = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    expect(second.status).toBe(200);
+    const secondText = await second.text();
+
+    expect(createSupportNote).toHaveBeenCalledTimes(1);
+    expect(sendSupportNotification).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith('Support email notification error:', expect.any(Error));
+    expect(secondText).toContain('"duplicate":true');
+    expect(secondText).not.toContain('SMTP unavailable');
+  });
+
+  it('does not run a second support handoff for the same session', async () => {
+    const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
+    const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
+    const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
+    const supportData = {
+      customerName: 'Maria Schmidt',
+      category: 'technik' as const,
+      issueDescription: 'Lift bleibt stehen.',
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          yield { type: 'service' as const, serviceData: supportData };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead: vi.fn(),
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson,
+        createSupportNote,
+      },
+      email: {
+        isConfigured: () => true,
+        sendLeadNotification: vi.fn(),
+        sendServiceNotification: vi.fn(),
+        sendSupportNotification,
+      },
+      notificationEmailTo: '',
+      serviceEmailTo: 'caechma@gmail.com',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const requestBody = { sessionId: 'support-same-session', message: 'Lift kaputt', history: [] };
+
+    const first = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+
+    expect(first.status).toBe(200);
+    await first.text();
+
+    const second = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+
+    expect(second.status).toBe(200);
+    expect(resolveSupportPerson).toHaveBeenCalledTimes(1);
+    expect(createSupportNote).toHaveBeenCalledTimes(1);
+    expect(sendSupportNotification).toHaveBeenCalledTimes(1);
+    const secondText = await second.text();
+    expect(secondText).toContain('"action":"create_service"');
+    expect(secondText).toContain('"status":"accepted"');
+    expect(secondText).toContain('"duplicate":true');
+    expect(secondText).not.toContain('technik@lippelift.de');
   });
 });

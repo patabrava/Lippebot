@@ -4,7 +4,14 @@ import { z } from 'zod';
 import type { GeminiService } from '../services/gemini.js';
 import type { PipedriveService } from '../services/pipedrive.js';
 import type { EmailService } from '../services/email.js';
-import type { ChatMessage, LeadData, ServiceData } from '../types/index.js';
+import type {
+  ChatMessage,
+  LeadData,
+  SupportData,
+  SupportHandoffResult,
+  SupportNoteStatus,
+} from '../types/index.js';
+import { getSupportInbox, resolveSupportCategory } from '../support/support-routing.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -27,12 +34,12 @@ function hasRequiredLeadFields(data: unknown): data is LeadData {
   );
 }
 
-function hasRequiredServiceFields(data: unknown): data is ServiceData {
+function hasRequiredServiceFields(data: unknown): data is SupportData {
   if (!isRecord(data)) {
     return false;
   }
 
-  return !!(data.customerName && data.phone && data.issueDescription);
+  return !!(data.customerName && data.category && data.issueDescription);
 }
 
 const chatRequestSchema = z.object({
@@ -54,10 +61,14 @@ interface ChatDeps {
 }
 
 type LeadActionResult = { personId: number; dealId: number };
+type SupportClientActionResult = { status: 'accepted' };
+
+const supportClientActionResult: SupportClientActionResult = { status: 'accepted' };
 
 export function createChatRoute(deps: ChatDeps): Hono {
   const app = new Hono();
   const completedLeadActions = new Map<string, LeadActionResult>();
+  const completedSupportActions = new Map<string, SupportHandoffResult>();
 
   async function emitLeadAction(
     stream: Parameters<Parameters<typeof streamSSE>[1]>[0],
@@ -88,6 +99,79 @@ export function createChatRoute(deps: ChatDeps): Hono {
     } catch (err) {
       console.error(errorLabel, err);
     }
+  }
+
+  async function emitSupportAction(
+    stream: Parameters<Parameters<typeof streamSSE>[1]>[0],
+    sessionId: string,
+    supportData: SupportData,
+  ): Promise<void> {
+    const existingResult = completedSupportActions.get(sessionId);
+    if (existingResult) {
+      await stream.writeSSE({
+        data: JSON.stringify({ type: 'action', action: 'create_service', data: supportClientActionResult, duplicate: true }),
+      });
+      return;
+    }
+
+    const category = resolveSupportCategory(supportData);
+    const normalizedSupportData = { ...supportData, category };
+    const intendedInbox = getSupportInbox(category);
+    const emailRecipient = deps.serviceEmailTo || 'caechma@gmail.com';
+
+    let matchState: SupportHandoffResult['matchState'] = 'unresolved';
+    let personId: number | undefined;
+    let noteStatus: SupportNoteStatus = 'skipped';
+    let noteError: string | undefined;
+
+    if (deps.pipedrive.isConfigured()) {
+      try {
+        const match = await deps.pipedrive.resolveSupportPerson(normalizedSupportData);
+        matchState = match.matchState;
+        personId = match.personId;
+      } catch (err) {
+        console.error('Support person resolution error:', err);
+      }
+
+      if (matchState === 'unique' && personId) {
+        try {
+          await deps.pipedrive.createSupportNote(personId, normalizedSupportData);
+          noteStatus = 'created';
+        } catch (err) {
+          noteStatus = 'failed';
+          noteError = err instanceof Error ? err.message : String(err);
+          console.error('Support note creation error:', err);
+        }
+      }
+    }
+
+    const result: SupportHandoffResult = {
+      matchState,
+      personId,
+      intendedInbox,
+      emailRecipient,
+      noteStatus,
+      noteError,
+    };
+    completedSupportActions.set(sessionId, result);
+
+    try {
+      if (deps.email.isConfigured() && emailRecipient) {
+        await deps.email.sendSupportNotification(emailRecipient, {
+          data: normalizedSupportData,
+          intendedInbox,
+          matchState,
+          noteStatus,
+          noteError,
+        });
+      }
+    } catch (err) {
+      console.error('Support email notification error:', err);
+    }
+
+    await stream.writeSSE({
+      data: JSON.stringify({ type: 'action', action: 'create_service', data: supportClientActionResult }),
+    });
   }
 
   app.post('/api/chat', async (c) => {
@@ -126,19 +210,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
 
           if (event.type === 'service' && event.serviceData) {
             serviceActionAttempted = true;
-            try {
-              if (deps.pipedrive.isConfigured()) {
-                const result = await deps.pipedrive.createServiceActivity(event.serviceData);
-                await stream.writeSSE({
-                  data: JSON.stringify({ type: 'action', action: 'create_service', data: result }),
-                });
-              }
-              if (deps.email.isConfigured() && deps.serviceEmailTo) {
-                await deps.email.sendServiceNotification(deps.serviceEmailTo, event.serviceData);
-              }
-            } catch (err) {
-              console.error('Service activity creation error:', err);
-            }
+            await emitSupportAction(stream, sessionId, event.serviceData);
           }
         }
 
@@ -149,19 +221,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
           await emitLeadAction(stream, sessionId, collectedObj as LeadData, 'Lead creation from state error:');
         }
         if (!serviceActionAttempted && lastMode === 'service' && hasRequiredServiceFields(collectedObj)) {
-          try {
-            if (deps.pipedrive.isConfigured()) {
-              const result = await deps.pipedrive.createServiceActivity(collectedObj as ServiceData);
-              await stream.writeSSE({
-                data: JSON.stringify({ type: 'action', action: 'create_service', data: result }),
-              });
-            }
-            if (deps.email.isConfigured() && deps.serviceEmailTo) {
-              await deps.email.sendServiceNotification(deps.serviceEmailTo, collectedObj as ServiceData);
-            }
-          } catch (err) {
-            console.error('Service creation from state error:', err);
-          }
+          await emitSupportAction(stream, sessionId, collectedObj as SupportData);
         }
 
         await stream.writeSSE({
