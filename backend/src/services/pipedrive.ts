@@ -1,4 +1,5 @@
-import type { LeadData, ServiceData } from '../types/index.js';
+import { buildSupportNoteContent } from '../support/support-routing.js';
+import type { LeadData, ServiceData, SupportData, SupportMatchResult } from '../types/index.js';
 
 const PIPEDRIVE_API_BASE = 'https://api.pipedrive.com/v1';
 const STEPHANIE_KREUZBUSCH_USER_ID = 24093350;
@@ -223,6 +224,88 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     return result.data.items?.[0]?.item?.id;
   }
 
+  function normalizeFullName(name?: string): string {
+    return name ? name.trim().replace(/\s+/g, ' ').toLowerCase() : '';
+  }
+
+  async function searchPeople(term: string, fields: 'name' | 'email' | 'phone'): Promise<number[]> {
+    const params = new URLSearchParams({
+      api_token: apiKey,
+      term,
+      fields,
+      exact_match: 'true',
+    });
+    const response = await fetch(`${PIPEDRIVE_API_BASE}/persons/search?${params.toString()}`);
+    if (!response.ok) {
+      throw new Error(`Pipedrive API error: ${response.status} ${response.statusText}`);
+    }
+    const result = await response.json() as {
+      success: boolean;
+      data: { items?: Array<{ item?: { id: number; name?: string } }> };
+    };
+    if (!result.success) {
+      throw new Error('Pipedrive API returned success: false');
+    }
+    return (result.data.items ?? [])
+      .map((entry) => entry.item?.id)
+      .filter((id): id is number => typeof id === 'number');
+  }
+
+  function resolveCandidateIntersection(nameMatches: number[], disambiguationMatches: number[]): SupportMatchResult {
+    const candidateIds = new Set(nameMatches);
+    const matchingCandidates = disambiguationMatches.filter((personId) => candidateIds.has(personId));
+    if (matchingCandidates.length === 1) {
+      return { matchState: 'unique', personId: matchingCandidates[0], candidateCount: 1 };
+    }
+    if (matchingCandidates.length > 1) {
+      return { matchState: 'ambiguous', candidateCount: matchingCandidates.length };
+    }
+    return { matchState: 'unresolved', candidateCount: 0 };
+  }
+
+  async function resolveSupportPerson(data: SupportData): Promise<SupportMatchResult> {
+    if (!configured) throw new Error('Pipedrive not configured');
+
+    const normalizedName = normalizeFullName(data.customerName);
+    if (!normalizedName) {
+      return { matchState: 'unresolved', candidateCount: 0 };
+    }
+
+    const nameMatches = await searchPeople(normalizedName, 'name');
+    if (nameMatches.length === 1) {
+      return { matchState: 'unique', personId: nameMatches[0], candidateCount: 1 };
+    }
+
+    const email = normalizeEmail(data.email);
+    const phone = data.phone?.trim() ? normalizePhoneNumber(data.phone) : undefined;
+
+    if (nameMatches.length > 1 && !email && !phone) {
+      return { matchState: 'ambiguous', candidateCount: nameMatches.length };
+    }
+
+    if (email) {
+      const emailMatches = await searchPeople(email, 'email');
+      if (nameMatches.length > 1) {
+        return resolveCandidateIntersection(nameMatches, emailMatches);
+      }
+      return emailMatches.length === 1
+        ? { matchState: 'unique', personId: emailMatches[0], candidateCount: 1 }
+        : { matchState: 'unresolved', candidateCount: emailMatches.length };
+    }
+
+    if (phone) {
+      const phoneMatches = await searchPeople(phone, 'phone');
+      if (nameMatches.length > 1) {
+        return resolveCandidateIntersection(nameMatches, phoneMatches);
+      }
+      return phoneMatches.length === 1
+        ? { matchState: 'unique', personId: phoneMatches[0], candidateCount: 1 }
+        : { matchState: 'unresolved', candidateCount: phoneMatches.length };
+    }
+
+    return { matchState: 'unresolved', candidateCount: nameMatches.length };
+  }
+
   function cachePersonId(personId: number, email: string | undefined, phone: string): void {
     if (email) {
       recentlyResolvedPersonIds.set(`email:${email}`, personId);
@@ -339,10 +422,24 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     return { personId: person.id, activityId: activity.id };
   }
 
+  async function createSupportNote(personId: number, data: SupportData): Promise<{ noteId: number }> {
+    if (!configured) throw new Error('Pipedrive not configured');
+
+    const note = await apiCall('/notes', {
+      person_id: personId,
+      content: buildSupportNoteContent(data, 'unique'),
+      pinned_to_person_flag: 1,
+    });
+
+    return { noteId: note.id };
+  }
+
   return {
     isConfigured: () => configured,
     createLead,
     createServiceActivity,
+    resolveSupportPerson,
+    createSupportNote,
   };
 }
 
