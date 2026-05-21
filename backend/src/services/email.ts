@@ -1,5 +1,12 @@
 import nodemailer from 'nodemailer';
-import type { LeadData, ServiceData } from '../types/index.js';
+import { buildSupportEmailHtml, buildSupportEmailSubject } from '../support/support-routing.js';
+import type {
+  LeadData,
+  ServiceData,
+  SupportData,
+  SupportMatchState,
+  SupportNoteStatus,
+} from '../types/index.js';
 
 interface SmtpConfig {
   host: string;
@@ -77,7 +84,29 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
     await sendFn({ from, to, subject: `Service-Anfrage: ${data.customerName}`, html });
   }
 
-  return { isConfigured: () => configured, sendLeadNotification, sendServiceNotification };
+  async function sendSupportNotification(to: string, input: {
+    data: SupportData;
+    intendedInbox: string;
+    matchState: SupportMatchState;
+    noteStatus: SupportNoteStatus;
+    noteError?: string;
+  }): Promise<void> {
+    if (!configured && !sendOverride) return;
+
+    await sendFn({
+      from,
+      to,
+      subject: buildSupportEmailSubject(input.data),
+      html: buildSupportEmailHtml(input),
+    });
+  }
+
+  return {
+    isConfigured: () => configured,
+    sendLeadNotification,
+    sendServiceNotification,
+    sendSupportNotification,
+  };
 }
 
 export type EmailService = ReturnType<typeof createEmailService>;

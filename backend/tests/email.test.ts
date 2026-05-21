@@ -59,4 +59,58 @@ describe('createEmailService', () => {
     expect(call.html).toContain('Maria Schmidt');
     expect(call.html).toContain('Lift macht Geräusche');
   });
+
+  it('sendSupportNotification sends unresolved match wording to the configured recipient', async () => {
+    const sendMock = vi.fn().mockResolvedValue({ messageId: 'support-1' });
+    const service = createEmailService(
+      { host: 'smtp.test.com', port: 587, user: 'a', pass: 'b' },
+      sendMock,
+    );
+
+    await service.sendSupportNotification('caechma@gmail.com', {
+      data: {
+        customerName: 'Maria Schmidt',
+        phone: '05261 96660',
+        category: 'finance',
+        issueDescription: 'Frage zur Rechnung RE-123.',
+        invoiceNumber: 'RE-123',
+      },
+      intendedInbox: 'finance@lippelift.de',
+      matchState: 'unresolved',
+      noteStatus: 'skipped',
+    });
+
+    expect(sendMock).toHaveBeenCalledOnce();
+    const call = sendMock.mock.calls[0][0];
+    expect(call.to).toBe('caechma@gmail.com');
+    expect(call.subject).toBe('Sarah Support [finance]: Maria Schmidt');
+    expect(call.html).toContain('Kein eindeutiger CRM-Treffer');
+    expect(call.html).toContain('finance@lippelift.de');
+    expect(call.html).toContain('RE-123');
+  });
+
+  it('sendSupportNotification includes note failure for the team only', async () => {
+    const sendMock = vi.fn().mockResolvedValue({ messageId: 'support-2' });
+    const service = createEmailService(
+      { host: 'smtp.test.com', port: 587, user: 'a', pass: 'b' },
+      sendMock,
+    );
+
+    await service.sendSupportNotification('caechma@gmail.com', {
+      data: {
+        customerName: 'Maria Schmidt',
+        category: 'technik',
+        issueDescription: 'Lift bleibt stehen.',
+      },
+      intendedInbox: 'technik@lippelift.de',
+      matchState: 'unique',
+      noteStatus: 'failed',
+      noteError: 'Pipedrive API error: 500 Internal Server Error',
+    });
+
+    const call = sendMock.mock.calls[0][0];
+    expect(call.html).toContain('Eindeutiger CRM-Treffer');
+    expect(call.html).toContain('CRM-Notizfehler');
+    expect(call.html).toContain('Pipedrive API error');
+  });
 });
