@@ -108,4 +108,40 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('Beispiel 2');
     expect(prompt).toContain('Beispiel 3');
   });
+
+  it('defines support mode as existing-customer routing and keeps sales flow separate', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('bestehender Kunde');
+    expect(prompt).toContain('neue Anfrage');
+    expect(prompt).toContain('bestehendes Anliegen zu einem bereits gekauften Lift oder um eine neue Anfrage');
+    expect(prompt).toContain('Der Anfrage-Modus bleibt fuer neue Beratungs- und Angebotsanfragen unveraendert');
+  });
+
+  it('requires one-inbox support routing with precedence rules', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Waehle genau eine primaere Kategorie');
+    expect(prompt).toContain('Technik gewinnt bei Stoerungen');
+    expect(prompt).toContain('Lossau gewinnt bei Ersatzteilen');
+    expect(prompt).toContain('Finance gewinnt bei Rechnungen');
+    expect(prompt).toContain('Sales gewinnt bei Vertragsbestaetigungen');
+    expect(prompt).not.toContain('technik@lippelift.de');
+    expect(prompt).not.toContain('finance@lippelift.de');
+    expect(prompt).not.toContain('sales@lippelift.de');
+    expect(prompt).not.toContain('lossau@lippelift.de');
+  });
+
+  it('keeps CRM matching internal and limits support questions', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Erwaehne niemals Pipedrive');
+    expect(prompt).toContain('Erwaehne niemals CRM');
+    expect(prompt).toContain('Frage nach dem Kundennamen');
+    expect(prompt).toContain('Wenn der Name nicht eindeutig reicht, frage nach Telefon oder E-Mail');
+    expect(prompt).toContain('Stelle keine unnoetigen Zusatzfragen');
+  });
+
+  it('scopes free-consultation wording to advisor and inquiry modes', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Im Berater- und Anfrage-Modus passend erwähnen, dass die Erstberatung kostenlos und unverbindlich ist');
+    expect(prompt).not.toContain('Bei jeder Gelegenheit erwähnen, dass die Erstberatung kostenlos und unverbindlich ist');
+  });
 });
