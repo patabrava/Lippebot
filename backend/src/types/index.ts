@@ -12,6 +12,10 @@ export interface ChatRequest {
 
 export type Mode = 'berater' | 'anfrage' | 'service' | 'undetermined';
 
+export type SupportCategory = 'technik' | 'finance' | 'sales' | 'lossau';
+export type SupportMatchState = 'unique' | 'ambiguous' | 'unresolved';
+export type SupportNoteStatus = 'created' | 'failed' | 'skipped';
+
 export interface LeadData {
   customerSegment?: 'privatperson' | 'firma';
   stairLocation?: 'innen' | 'aussen';
@@ -30,25 +34,53 @@ export interface LeadData {
   newsletter?: 'Ja' | 'Nein';
 }
 
-export interface ServiceData {
+export interface SupportData {
   customerName?: string;
   phone?: string;
   email?: string;
+  category?: SupportCategory;
   issueDescription?: string;
   liftModel?: string;
+  symptomDetails?: string;
+  triggerConditions?: string;
+  invoiceNumber?: string;
+  customerNumber?: string;
+  paymentReference?: string;
+  orderNumber?: string;
+  contractReference?: string;
+  sparePartReference?: string;
+  installationContext?: string;
+  defectContext?: string;
 }
+
+export interface SupportMatchResult {
+  matchState: SupportMatchState;
+  personId?: number;
+  candidateCount: number;
+}
+
+export interface SupportHandoffResult {
+  matchState: SupportMatchState;
+  personId?: number;
+  intendedInbox: string;
+  emailRecipient: string;
+  noteStatus: SupportNoteStatus;
+  noteError?: string;
+}
+
+export type ServiceData = SupportData;
 
 export interface ConversationState {
   sessionId: string;
   mode: Mode;
-  collectedData: Partial<LeadData & ServiceData>;
+  collectedData: Partial<LeadData & SupportData>;
 }
 
 export interface SSEEvent {
   type: 'token' | 'done' | 'action' | 'error';
   content?: string;
   mode?: Mode;
-  collectedData?: Partial<LeadData & ServiceData>;
+  collectedData?: Partial<LeadData & SupportData>;
   action?: string;
   data?: Record<string, unknown>;
   error?: string;
