@@ -394,6 +394,57 @@ describe('POST /api/chat', () => {
     }));
   });
 
+  it('marks unresolved name-only support handoffs as needing contact details', async () => {
+    const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unresolved', candidateCount: 0 });
+    const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
+    const supportData = {
+      customerName: 'Camilo Echeverri',
+      category: 'technik' as const,
+      issueDescription: 'Treppenlift ist defekt.',
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          yield { type: 'service' as const, serviceData: supportData };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead: vi.fn(),
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson,
+        createSupportNote: vi.fn(),
+      },
+      email: {
+        isConfigured: () => true,
+        sendLeadNotification: vi.fn(),
+        sendServiceNotification: vi.fn(),
+        sendSupportNotification,
+      },
+      notificationEmailTo: '',
+      serviceEmailTo: 'caechma@gmail.com',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'support-needs-contact', message: 'Lift defekt', history: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(resolveSupportPerson).toHaveBeenCalledWith(supportData);
+    expect(sendSupportNotification).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
+      matchState: 'unresolved',
+      noteStatus: 'skipped',
+    }));
+    expect(text).toContain('"action":"create_service"');
+    expect(text).toContain('"status":"needs_contact"');
+    expect(text).not.toContain('"matchState"');
+  });
+
   it('still sends the support email when the unique-match note write fails', async () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
     const createSupportNote = vi.fn().mockRejectedValue(new Error('Pipedrive API error: 500 Internal Server Error'));

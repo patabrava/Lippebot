@@ -84,7 +84,7 @@ const submitLeadFn: FunctionDeclaration = {
 
 const submitServiceRequestFn: FunctionDeclaration = {
   name: 'submit_service_request',
-  description: 'Submit an existing-customer support request after Sarah has the customer name, one primary support category, and a usable short issue summary. After calling this, generate a warm generic confirmation without mentioning CRM, Pipedrive, inboxes, or backend status.',
+  description: 'Submit an existing-customer support request only after Sarah has the customer name, one primary support category, a usable short issue summary, and either a reliable disambiguator such as phone, email, customer number, invoice number, or order number, or a name that is clearly unique enough. After calling this, generate a warm generic confirmation without mentioning CRM, Pipedrive, inboxes, or backend status.',
   parameters: {
     type: FunctionDeclarationSchemaType.OBJECT,
     properties: {

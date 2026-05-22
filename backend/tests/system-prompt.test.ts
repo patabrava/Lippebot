@@ -139,6 +139,16 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('Stelle keine unnoetigen Zusatzfragen');
   });
 
+  it('requires a disambiguator before final support handoff when the name alone is not enough', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Rufe `submit_service_request` erst auf, wenn');
+    expect(prompt).toContain('Telefonnummer');
+    expect(prompt).toContain('E-Mail-Adresse');
+    expect(prompt).toContain('Kundennummer');
+    expect(prompt).toContain('Rechnungsnummer');
+    expect(prompt).toContain('Auftragsnummer');
+  });
+
   it('scopes free-consultation wording to advisor and inquiry modes', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('Im Berater- und Anfrage-Modus passend erwähnen, dass die Erstberatung kostenlos und unverbindlich ist');

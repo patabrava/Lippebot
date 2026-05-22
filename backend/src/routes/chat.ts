@@ -42,6 +42,21 @@ function hasRequiredServiceFields(data: unknown): data is SupportData {
   return !!(data.customerName && data.category && data.issueDescription);
 }
 
+function hasSupportDisambiguator(data: SupportData): boolean {
+  const candidateFields = [
+    data.phone,
+    data.email,
+    data.customerNumber,
+    data.invoiceNumber,
+    data.orderNumber,
+    data.contractReference,
+    data.paymentReference,
+    data.sparePartReference,
+  ];
+
+  return candidateFields.some((value) => typeof value === 'string' && value.trim().length > 0);
+}
+
 const chatRequestSchema = z.object({
   sessionId: z.string().min(1),
   message: z.string().min(1),
@@ -61,9 +76,18 @@ interface ChatDeps {
 }
 
 type LeadActionResult = { personId: number; dealId: number };
-type SupportClientActionResult = { status: 'accepted' };
+type SupportClientActionResult = { status: 'accepted' | 'needs_contact' };
 
-const supportClientActionResult: SupportClientActionResult = { status: 'accepted' };
+function buildSupportClientActionResult(
+  result: Pick<SupportHandoffResult, 'matchState'>,
+  supportData: SupportData,
+): SupportClientActionResult {
+  if ((result.matchState === 'unresolved' || result.matchState === 'ambiguous') && !hasSupportDisambiguator(supportData)) {
+    return { status: 'needs_contact' };
+  }
+
+  return { status: 'accepted' };
+}
 
 export function createChatRoute(deps: ChatDeps): Hono {
   const app = new Hono();
@@ -108,8 +132,9 @@ export function createChatRoute(deps: ChatDeps): Hono {
   ): Promise<void> {
     const existingResult = completedSupportActions.get(sessionId);
     if (existingResult) {
+      const existingActionResult = buildSupportClientActionResult(existingResult, supportData);
       await stream.writeSSE({
-        data: JSON.stringify({ type: 'action', action: 'create_service', data: supportClientActionResult, duplicate: true }),
+        data: JSON.stringify({ type: 'action', action: 'create_service', data: existingActionResult, duplicate: true }),
       });
       return;
     }
@@ -154,6 +179,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
       noteError,
     };
     completedSupportActions.set(sessionId, result);
+    const clientActionResult = buildSupportClientActionResult(result, normalizedSupportData);
 
     try {
       if (deps.email.isConfigured() && emailRecipient) {
@@ -170,7 +196,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
     }
 
     await stream.writeSSE({
-      data: JSON.stringify({ type: 'action', action: 'create_service', data: supportClientActionResult }),
+      data: JSON.stringify({ type: 'action', action: 'create_service', data: clientActionResult }),
     });
   }
 
