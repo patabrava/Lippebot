@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { GeminiService } from '../services/gemini.js';
 import type { PipedriveService } from '../services/pipedrive.js';
 import type { EmailService } from '../services/email.js';
+import type { ConversationTracker } from '../services/conversation-tracking.js';
 import type {
   ChatMessage,
   LeadData,
@@ -71,6 +72,7 @@ interface ChatDeps {
   gemini: GeminiService;
   pipedrive: PipedriveService;
   email: EmailService;
+  conversationTracker?: ConversationTracker;
   notificationEmailTo: string;
   serviceEmailTo: string;
 }
@@ -89,8 +91,17 @@ function buildSupportClientActionResult(
   return { status: 'accepted' };
 }
 
+async function track(write: () => Promise<void>): Promise<void> {
+  try {
+    await write();
+  } catch (err) {
+    console.error('Conversation tracking error:', err);
+  }
+}
+
 export function createChatRoute(deps: ChatDeps): Hono {
   const app = new Hono();
+  const tracker = deps.conversationTracker;
   const completedLeadActions = new Map<string, LeadActionResult>();
   const completedSupportActions = new Map<string, SupportHandoffResult>();
 
@@ -105,14 +116,32 @@ export function createChatRoute(deps: ChatDeps): Hono {
       await stream.writeSSE({
         data: JSON.stringify({ type: 'action', action: 'create_lead', data: existingResult, duplicate: true }),
       });
+      if (tracker?.isEnabled()) {
+        void track(() => tracker.recordEvent({
+          sessionId,
+          eventType: 'lead_duplicate',
+          payload: existingResult,
+        }));
+      }
       return;
     }
 
     try {
-      let result: LeadActionResult | undefined;
       if (deps.pipedrive.isConfigured()) {
-        result = await deps.pipedrive.createLead(leadData);
+        const result = await deps.pipedrive.createLead(leadData);
         completedLeadActions.set(sessionId, result);
+        if (tracker?.isEnabled()) {
+          void track(() => tracker.recordEvent({
+            sessionId,
+            eventType: 'lead_created',
+            payload: result,
+          }));
+          void track(() => tracker.updateSession({
+            sessionId,
+            leadPersonId: result.personId,
+            leadDealId: result.dealId,
+          }));
+        }
         await stream.writeSSE({
           data: JSON.stringify({ type: 'action', action: 'create_lead', data: result }),
         });
@@ -136,6 +165,13 @@ export function createChatRoute(deps: ChatDeps): Hono {
       await stream.writeSSE({
         data: JSON.stringify({ type: 'action', action: 'create_service', data: existingActionResult, duplicate: true }),
       });
+      if (tracker?.isEnabled()) {
+        void track(() => tracker.recordEvent({
+          sessionId,
+          eventType: 'support_handoff_duplicate',
+          payload: existingResult as unknown as Record<string, unknown>,
+        }));
+      }
       return;
     }
 
@@ -180,6 +216,10 @@ export function createChatRoute(deps: ChatDeps): Hono {
     };
     completedSupportActions.set(sessionId, result);
     const clientActionResult = buildSupportClientActionResult(result, normalizedSupportData);
+    let emailStatus: 'not_configured' | 'sent' | 'failed' = deps.email.isConfigured() && emailRecipient
+      ? 'sent'
+      : 'not_configured';
+    let emailError: string | undefined;
 
     try {
       if (deps.email.isConfigured() && emailRecipient) {
@@ -192,7 +232,27 @@ export function createChatRoute(deps: ChatDeps): Hono {
         });
       }
     } catch (err) {
+      emailStatus = 'failed';
+      emailError = err instanceof Error ? err.message : String(err);
       console.error('Support email notification error:', err);
+    }
+    if (tracker?.isEnabled()) {
+      void track(() => tracker.recordEvent({
+        sessionId,
+        eventType: 'support_handoff_created',
+        payload: {
+          ...result,
+          emailStatus,
+          emailError,
+        },
+      }));
+      void track(() => tracker.updateSession({
+        sessionId,
+        supportPersonId: result.personId,
+        supportNoteStatus: result.noteStatus,
+        supportMatchState: result.matchState,
+        supportIntendedInbox: result.intendedInbox,
+      }));
     }
 
     await stream.writeSSE({
@@ -212,21 +272,46 @@ export function createChatRoute(deps: ChatDeps): Hono {
 
     return streamSSE(c, async (stream) => {
       try {
+        if (tracker?.isEnabled()) {
+          void track(async () => {
+            await tracker.ensureSession(sessionId);
+            await tracker.recordMessage({
+              sessionId,
+              role: 'user',
+              content: message,
+              turnIndex: history.length + 1,
+            });
+          });
+        }
         const gen = deps.gemini.streamChat(sessionId, message, history);
 
         let lastMode = 'undetermined';
         let lastCollectedData = {};
         let leadActionAttempted = false;
         let serviceActionAttempted = false;
+        let assistantText = '';
 
         for await (const event of gen) {
           if (event.type === 'token' && event.content) {
+            assistantText += event.content;
             await stream.writeSSE({ data: JSON.stringify({ type: 'token', content: event.content }) });
           }
 
           if (event.type === 'state' && event.state) {
             lastMode = event.state.mode;
             lastCollectedData = event.state.collectedData;
+            if (tracker?.isEnabled()) {
+              void track(() => tracker.recordEvent({
+                sessionId,
+                eventType: 'state_reported',
+                payload: { mode: lastMode, collectedData: lastCollectedData },
+              }));
+              void track(() => tracker.updateSession({
+                sessionId,
+                finalMode: lastMode,
+                finalCollectedData: lastCollectedData as Record<string, unknown>,
+              }));
+            }
           }
 
           if (event.type === 'lead' && event.leadData) {
@@ -250,11 +335,38 @@ export function createChatRoute(deps: ChatDeps): Hono {
           await emitSupportAction(stream, sessionId, collectedObj as SupportData);
         }
 
+        if (tracker?.isEnabled() && assistantText.trim().length > 0) {
+          void track(() => tracker.recordMessage({
+            sessionId,
+            role: 'assistant',
+            content: assistantText,
+            turnIndex: history.length + 2,
+          }));
+        }
+        if (tracker?.isEnabled()) {
+          void track(() => tracker.recordEvent({
+            sessionId,
+            eventType: 'chat_done',
+            payload: { mode: lastMode, collectedData: lastCollectedData },
+          }));
+          void track(() => tracker.updateSession({
+            sessionId,
+            finalMode: lastMode,
+            finalCollectedData: lastCollectedData as Record<string, unknown>,
+          }));
+        }
         await stream.writeSSE({
           data: JSON.stringify({ type: 'done', mode: lastMode, collectedData: lastCollectedData }),
         });
       } catch (err) {
         console.error('Chat stream error:', err);
+        if (tracker?.isEnabled()) {
+          void track(() => tracker.recordEvent({
+            sessionId,
+            eventType: 'chat_error',
+            payload: { message: err instanceof Error ? err.message : String(err) },
+          }));
+        }
         await stream.writeSSE({
           data: JSON.stringify({ type: 'error', error: 'Ein Fehler ist aufgetreten. Bitte versuch es erneut.' }),
         });

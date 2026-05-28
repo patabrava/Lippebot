@@ -4,6 +4,7 @@ import { createChatRoute } from '../src/routes/chat.js';
 import type { GeminiService } from '../src/services/gemini.js';
 import type { PipedriveService } from '../src/services/pipedrive.js';
 import type { EmailService } from '../src/services/email.js';
+import type { ConversationTracker } from '../src/services/conversation-tracking.js';
 
 function createMockGemini(): GeminiService {
   return {
@@ -34,6 +35,17 @@ function createMockEmail(): EmailService {
     sendLeadNotification: vi.fn(),
     sendServiceNotification: vi.fn(),
     sendSupportNotification: vi.fn(),
+  };
+}
+
+function createMockTracker(overrides: Partial<ConversationTracker> = {}): ConversationTracker {
+  return {
+    isEnabled: vi.fn(() => true),
+    ensureSession: vi.fn().mockResolvedValue(undefined),
+    recordMessage: vi.fn().mockResolvedValue(undefined),
+    recordEvent: vi.fn().mockResolvedValue(undefined),
+    updateSession: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
   };
 }
 
@@ -621,5 +633,320 @@ describe('POST /api/chat', () => {
     expect(secondText).toContain('"status":"accepted"');
     expect(secondText).toContain('"duplicate":true');
     expect(secondText).not.toContain('technik@lippelift.de');
+  });
+
+  it('records the current user message and one final assistant message', async () => {
+    const tracker = createMockTracker();
+    const chatRoute = createChatRoute({
+      gemini: createMockGemini(),
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      conversationTracker: tracker,
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'tracked-1', message: 'Hallo Sarah', history: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    await res.text();
+    expect(tracker.ensureSession).toHaveBeenCalledWith('tracked-1');
+    expect(tracker.recordMessage).toHaveBeenCalledWith({
+      sessionId: 'tracked-1',
+      role: 'user',
+      content: 'Hallo Sarah',
+      turnIndex: 1,
+    });
+    expect(tracker.recordMessage).toHaveBeenCalledWith({
+      sessionId: 'tracked-1',
+      role: 'assistant',
+      content: 'Hallo! Ich bin Sarah.',
+      turnIndex: 2,
+    });
+    expect(tracker.recordMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('records state_reported and chat_done events', async () => {
+    const tracker = createMockTracker();
+    const chatRoute = createChatRoute({
+      gemini: createMockGemini(),
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      conversationTracker: tracker,
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'tracked-state', message: 'Hallo', history: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    await res.text();
+    expect(tracker.recordEvent).toHaveBeenCalledWith({
+      sessionId: 'tracked-state',
+      eventType: 'state_reported',
+      payload: { mode: 'berater', collectedData: {} },
+    });
+    expect(tracker.recordEvent).toHaveBeenCalledWith({
+      sessionId: 'tracked-state',
+      eventType: 'chat_done',
+      payload: { mode: 'berater', collectedData: {} },
+    });
+    expect(tracker.updateSession).toHaveBeenCalledWith({
+      sessionId: 'tracked-state',
+      finalMode: 'berater',
+      finalCollectedData: {},
+    });
+  });
+
+  it('records lead_created and lead_duplicate events', async () => {
+    const tracker = createMockTracker();
+    const createLead = vi.fn().mockResolvedValue({ personId: 123, dealId: 456 });
+    const leadData = {
+      customerSegment: 'Privatperson' as never,
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      phone: '05261 96660',
+      street: 'Musterstrasse 1',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'lead' as const, leadData };
+          yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: leadData } };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead,
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson: vi.fn(),
+        createSupportNote: vi.fn(),
+      },
+      email: createMockEmail(),
+      conversationTracker: tracker,
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const body = JSON.stringify({ sessionId: 'tracked-lead', message: 'Lead', history: [] });
+
+    await (await testApp.request('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })).text();
+    await (await testApp.request('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })).text();
+
+    expect(tracker.recordEvent).toHaveBeenCalledWith({
+      sessionId: 'tracked-lead',
+      eventType: 'lead_created',
+      payload: { personId: 123, dealId: 456 },
+    });
+    expect(tracker.recordEvent).toHaveBeenCalledWith({
+      sessionId: 'tracked-lead',
+      eventType: 'lead_duplicate',
+      payload: { personId: 123, dealId: 456 },
+    });
+    expect(tracker.updateSession).toHaveBeenCalledWith({
+      sessionId: 'tracked-lead',
+      leadPersonId: 123,
+      leadDealId: 456,
+    });
+  });
+
+  it('records support handoff events and metadata', async () => {
+    const tracker = createMockTracker();
+    const supportData = {
+      customerName: 'Maria Schmidt',
+      category: 'technik' as const,
+      issueDescription: 'Lift piept.',
+      phone: '05261 96660',
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          yield { type: 'service' as const, serviceData: supportData };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead: vi.fn(),
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson: vi.fn().mockResolvedValue({ matchState: 'unique', personId: 789, candidateCount: 1 }),
+        createSupportNote: vi.fn().mockResolvedValue(undefined),
+      },
+      email: createMockEmail(),
+      conversationTracker: tracker,
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'tracked-support', message: 'Service', history: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    await res.text();
+    expect(tracker.recordEvent).toHaveBeenCalledWith({
+      sessionId: 'tracked-support',
+      eventType: 'support_handoff_created',
+      payload: {
+        matchState: 'unique',
+        personId: 789,
+        intendedInbox: 'technik@lippelift.de',
+        emailRecipient: 'caechma@gmail.com',
+        noteStatus: 'created',
+        noteError: undefined,
+        emailStatus: 'not_configured',
+        emailError: undefined,
+      },
+    });
+    expect(tracker.updateSession).toHaveBeenCalledWith({
+      sessionId: 'tracked-support',
+      supportPersonId: 789,
+      supportNoteStatus: 'created',
+      supportMatchState: 'unique',
+      supportIntendedInbox: 'technik@lippelift.de',
+    });
+  });
+
+  it('records support email failures in the handoff event payload', async () => {
+    const tracker = createMockTracker();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const supportData = {
+      customerName: 'Maria Schmidt',
+      category: 'technik' as const,
+      issueDescription: 'Lift piept.',
+      phone: '05261 96660',
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          yield { type: 'service' as const, serviceData: supportData };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead: vi.fn(),
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson: vi.fn().mockResolvedValue({ matchState: 'unique', personId: 789, candidateCount: 1 }),
+        createSupportNote: vi.fn().mockResolvedValue(undefined),
+      },
+      email: {
+        isConfigured: () => true,
+        sendLeadNotification: vi.fn(),
+        sendServiceNotification: vi.fn(),
+        sendSupportNotification: vi.fn().mockRejectedValue(new Error('SMTP unavailable')),
+      },
+      conversationTracker: tracker,
+      notificationEmailTo: '',
+      serviceEmailTo: 'technik@example.test',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'tracked-support-email-fail', message: 'Service', history: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    await res.text();
+    expect(tracker.recordEvent).toHaveBeenCalledWith({
+      sessionId: 'tracked-support-email-fail',
+      eventType: 'support_handoff_created',
+      payload: {
+        matchState: 'unique',
+        personId: 789,
+        intendedInbox: 'technik@lippelift.de',
+        emailRecipient: 'technik@example.test',
+        noteStatus: 'created',
+        noteError: undefined,
+        emailStatus: 'failed',
+        emailError: 'SMTP unavailable',
+      },
+    });
+    expect(errorSpy).toHaveBeenCalledWith('Support email notification error:', expect.any(Error));
+  });
+
+  it('records chat_error when generation fails', async () => {
+    const tracker = createMockTracker();
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          throw new Error('upstream exhausted');
+        },
+      },
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      conversationTracker: tracker,
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'tracked-error', message: 'Hallo', history: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    await res.text();
+    expect(tracker.recordEvent).toHaveBeenCalledWith({
+      sessionId: 'tracked-error',
+      eventType: 'chat_error',
+      payload: { message: 'upstream exhausted' },
+    });
+  });
+
+  it('continues streaming when tracking writes fail', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const tracker = createMockTracker({
+      ensureSession: vi.fn().mockRejectedValue(new Error('tracking failed')),
+      recordMessage: vi.fn().mockRejectedValue(new Error('tracking failed')),
+      recordEvent: vi.fn().mockRejectedValue(new Error('tracking failed')),
+      updateSession: vi.fn().mockRejectedValue(new Error('tracking failed')),
+    });
+    const chatRoute = createChatRoute({
+      gemini: createMockGemini(),
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      conversationTracker: tracker,
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'tracked-failing', message: 'Hallo', history: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain('"type":"token"');
+    expect(text).toContain('"type":"done"');
+    expect(errorSpy).toHaveBeenCalledWith('Conversation tracking error:', expect.any(Error));
   });
 });

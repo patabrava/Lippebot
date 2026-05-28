@@ -31,4 +31,30 @@ describe('loadConfig', () => {
     expect(config.corsOrigin).toBe('http://localhost:5173');
     expect(config.pipedriveApiKey).toBe('');
   });
+
+  it('defaults conversation tracking to disabled', () => {
+    process.env.VERTEX_AI_PROJECT_ID = 'test-project';
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    delete process.env.CONVERSATION_TRACKING_ENABLED;
+
+    const config = loadConfig();
+
+    expect(config.supabaseUrl).toBe('');
+    expect(config.supabaseServiceRoleKey).toBe('');
+    expect(config.conversationTrackingEnabled).toBe(false);
+  });
+
+  it('loads Supabase conversation tracking settings', () => {
+    process.env.VERTEX_AI_PROJECT_ID = 'test-project';
+    process.env.SUPABASE_URL = 'https://qnvgiihzbihkedakggth.supabase.co';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key';
+    process.env.CONVERSATION_TRACKING_ENABLED = 'true';
+
+    const config = loadConfig();
+
+    expect(config.supabaseUrl).toBe('https://qnvgiihzbihkedakggth.supabase.co');
+    expect(config.supabaseServiceRoleKey).toBe('service-role-key');
+    expect(config.conversationTrackingEnabled).toBe(true);
+  });
 });

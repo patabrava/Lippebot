@@ -5,6 +5,7 @@ import { loadConfig } from './config/index.js';
 import { createGeminiService } from './services/gemini.js';
 import { createPipedriveService } from './services/pipedrive.js';
 import { createEmailService } from './services/email.js';
+import { createConversationTracker } from './services/conversation-tracking.js';
 import { createChatRoute } from './routes/chat.js';
 
 const config = loadConfig();
@@ -21,6 +22,11 @@ const email = createEmailService({
   user: config.smtpUser,
   pass: config.smtpPass,
 });
+const conversationTracker = createConversationTracker({
+  enabled: config.conversationTrackingEnabled,
+  supabaseUrl: config.supabaseUrl,
+  serviceRoleKey: config.supabaseServiceRoleKey,
+});
 
 const app = new Hono();
 
@@ -32,6 +38,7 @@ app.get('/api/health', (c) => {
     version: '1.0.0',
     pipedrive: pipedrive.isConfigured(),
     email: email.isConfigured(),
+    conversationTracking: conversationTracker.isEnabled(),
   });
 });
 
@@ -39,6 +46,7 @@ const chatRoute = createChatRoute({
   gemini,
   pipedrive,
   email,
+  conversationTracker,
   notificationEmailTo: config.notificationEmailTo,
   serviceEmailTo: config.serviceEmailTo,
 });
@@ -51,6 +59,7 @@ serve({ fetch: app.fetch, port }, (info) => {
   console.log(`Sarah backend running on http://localhost:${info.port}`);
   console.log(`Pipedrive: ${pipedrive.isConfigured() ? 'configured' : 'not configured (placeholder)'}`);
   console.log(`Email: ${email.isConfigured() ? 'configured' : 'not configured'}`);
+  console.log(`Conversation tracking: ${conversationTracker.isEnabled() ? 'enabled' : 'disabled'}`);
 });
 
 export default app;
