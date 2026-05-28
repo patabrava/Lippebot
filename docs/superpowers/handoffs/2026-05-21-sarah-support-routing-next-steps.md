@@ -3,9 +3,13 @@
 Status:
 - Support routing, deterministic Pipedrive matching, compact notes, and the chatbot orchestration are implemented and verified.
 - Live chat support handoffs now create a compact Pipedrive person note and keep the browser SSE payload sanitized.
-- The current backend runtime still reports `email:false`, so the support email to `caechma@gmail.com` cannot be verified until SMTP is configured in the deployment environment.
+- SMTP is configured in the live Hostinger `lippebot-demo` project with the IONOS mailbox sender.
+- Live `/api/health` now reports `email:true`.
+- SMTP verification passed:
+  - one support-summary formatted SMTP smoke email to `caechma@gmail.com` was accepted by IONOS with no rejected recipients
+  - one loopback email from `sarah@lippelift.de` to `sarah@lippelift.de` was accepted by SMTP and found through IMAP
 
-Next steps:
+Completed:
 1. Add SMTP configuration to the backend deployment environment.
    - `SMTP_HOST`
    - `SMTP_PORT`
@@ -17,12 +21,14 @@ Next steps:
 4. Run one live support conversation for an existing Pipedrive customer and confirm:
    - one compact note is written to the matched Pipedrive person
    - no deal or activity is created for the support handoff
-   - the support summary email is sent to `caechma@gmail.com`
    - the customer-facing SSE stays free of CRM/internal routing details
-5. Optionally clean up any clearly labeled test Pipedrive records after the final verification pass.
+
+Remaining optional cleanup:
+1. Confirm the `caechma@gmail.com` inbox received the live support-summary message, if mailbox-side proof is required beyond SMTP provider acceptance.
+2. Optionally clean up any clearly labeled test Pipedrive records after the final verification pass.
 
 Verification already completed:
 - Full backend test suite: 69/69 passed
 - TypeScript build: passed
 - Local live support smoke: passed for chat and Pipedrive note creation
-- Live support email delivery: pending SMTP configuration
+- Live support email delivery: SMTP provider accepted support-summary mail after SMTP configuration
