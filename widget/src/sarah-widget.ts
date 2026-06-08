@@ -1,11 +1,14 @@
 import { injectStyles } from './styles/theme.js';
 import { ChatHistory } from './storage/history.js';
-import { sendMessage } from './api/client.js';
+import { sendMessage, submitAbandonedChat } from './api/client.js';
 import { renderMarkdown } from './utils/markdown.js';
 
 const CHAT_ICON = `<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`;
 const CLOSE_ICON = '\u2715';
 const SEND_ICON = `<svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>`;
+const TEN_MINUTES_MS = 10 * 60 * 1000;
+
+export const INACTIVITY_FOLLOW_UP_MESSAGE = 'Gibt es noch was was ich tun kann?';
 
 export const GREETINGS = [
   'Hallo! Ich bin Sarah. Kann ich dir helfen?',
@@ -55,11 +58,24 @@ class SarahWidget {
   private inputEl: HTMLInputElement | null = null;
   private sendBtn: HTMLButtonElement | null = null;
   private greetingDelay: number;
+  private inactivityMs: number;
+  private unansweredInactivityMs: number;
+  private inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+  private unansweredTimer: ReturnType<typeof setTimeout> | null = null;
+  private followUpPending = false;
+  private abandonedSummarySubmitted = false;
 
-  constructor(apiUrl: string, options: { greeting?: string; delay?: number } = {}) {
+  constructor(apiUrl: string, options: {
+    greeting?: string;
+    delay?: number;
+    inactivityMs?: number;
+    unansweredInactivityMs?: number;
+  } = {}) {
     this.apiUrl = apiUrl;
     this.history = new ChatHistory();
     this.greetingDelay = options.delay || 3000;
+    this.inactivityMs = options.inactivityMs || TEN_MINUTES_MS;
+    this.unansweredInactivityMs = options.unansweredInactivityMs || TEN_MINUTES_MS;
 
     this.container = document.createElement('div');
     this.container.className = 'sarah-widget';
@@ -71,6 +87,8 @@ class SarahWidget {
 
     if (this.history.getMessages().length === 0) {
       setTimeout(() => this.showGreeting(), this.greetingDelay);
+    } else if (this.hasUserMessage()) {
+      this.scheduleInactivityFollowUp();
     }
   }
 
@@ -186,6 +204,8 @@ class SarahWidget {
   }
 
   private addUserMessage(text: string): void {
+    this.cancelInactivityTimers();
+    this.followUpPending = false;
     this.history.addMessage('user', text);
     this.appendMessageEl('user', text, false);
   }
@@ -329,11 +349,13 @@ class SarahWidget {
           if (fullResponse) {
             this.history.addMessage('assistant', fullResponse);
           }
+          this.scheduleInactivityFollowUp();
         },
         onAction: () => {},
         onError: (error) => {
           if (typingEl.parentNode) typingEl.remove();
           this.addBotMessage(error);
+          this.scheduleInactivityFollowUp();
         },
       },
       this.history.getSessionId(),
@@ -344,6 +366,61 @@ class SarahWidget {
     this.isStreaming = false;
     this.sendBtn!.disabled = false;
     this.inputEl!.focus();
+  }
+
+  private hasUserMessage(): boolean {
+    return this.history.getMessages().some((msg) => msg.role === 'user');
+  }
+
+  private cancelInactivityTimers(): void {
+    if (this.inactivityTimer) {
+      clearTimeout(this.inactivityTimer);
+      this.inactivityTimer = null;
+    }
+    if (this.unansweredTimer) {
+      clearTimeout(this.unansweredTimer);
+      this.unansweredTimer = null;
+    }
+  }
+
+  private scheduleInactivityFollowUp(): void {
+    if (!this.hasUserMessage() || this.abandonedSummarySubmitted) return;
+
+    if (this.inactivityTimer) {
+      clearTimeout(this.inactivityTimer);
+    }
+
+    this.inactivityTimer = setTimeout(() => {
+      this.inactivityTimer = null;
+      this.showInactivityFollowUp();
+    }, this.inactivityMs);
+  }
+
+  private showInactivityFollowUp(): void {
+    if (this.followUpPending || this.abandonedSummarySubmitted || !this.hasUserMessage()) return;
+
+    this.followUpPending = true;
+    this.addBotMessage(INACTIVITY_FOLLOW_UP_MESSAGE);
+
+    this.unansweredTimer = setTimeout(() => {
+      this.unansweredTimer = null;
+      void this.submitUnansweredChat();
+    }, this.unansweredInactivityMs);
+  }
+
+  private async submitUnansweredChat(): Promise<void> {
+    if (!this.followUpPending || this.abandonedSummarySubmitted) return;
+
+    const ok = await submitAbandonedChat({
+      apiUrl: this.apiUrl,
+      sessionId: this.history.getSessionId(),
+      history: this.history.getMessages(),
+      reason: 'no_answer_after_inactivity_prompt',
+    });
+
+    if (ok) {
+      this.abandonedSummarySubmitted = true;
+    }
   }
 
   private escapeHtml(text: string): string {
@@ -378,9 +455,14 @@ function init(): void {
   const apiUrl = script.getAttribute('data-api-url')?.trim() || window.location.origin;
 
   const delay = parseInt(script.getAttribute('data-delay') || '3000', 10);
+  const inactivityMs = parseInt(script.getAttribute('data-inactivity-ms') || `${TEN_MINUTES_MS}`, 10);
+  const unansweredInactivityMs = parseInt(
+    script.getAttribute('data-unanswered-inactivity-ms') || `${TEN_MINUTES_MS}`,
+    10,
+  );
   const greeting = script.getAttribute('data-greeting') || undefined;
 
-  new SarahWidget(apiUrl, { greeting, delay });
+  new SarahWidget(apiUrl, { greeting, delay, inactivityMs, unansweredInactivityMs });
 }
 
 if (document.readyState === 'loading') {

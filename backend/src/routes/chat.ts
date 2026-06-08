@@ -68,6 +68,16 @@ const chatRequestSchema = z.object({
   })).default([]),
 });
 
+const abandonedChatRequestSchema = z.object({
+  sessionId: z.string().min(1),
+  reason: z.string().min(1).default('no_answer_after_inactivity_prompt'),
+  history: z.array(z.object({
+    role: z.enum(['user', 'assistant']),
+    content: z.string(),
+    timestamp: z.number(),
+  })).min(1),
+});
+
 interface ChatDeps {
   gemini: GeminiService;
   pipedrive: PipedriveService;
@@ -79,6 +89,24 @@ interface ChatDeps {
 
 type LeadActionResult = { personId: number; dealId: number };
 type SupportClientActionResult = { status: 'accepted' | 'needs_contact' };
+
+type TranscriptMessage = z.infer<typeof abandonedChatRequestSchema>['history'][number];
+
+function formatTranscript(messages: TranscriptMessage[]): string {
+  return messages
+    .map((msg) => {
+      const speaker = msg.role === 'user' ? 'Nutzer' : 'Sarah';
+      const timestamp = Number.isFinite(msg.timestamp)
+        ? new Date(msg.timestamp).toISOString()
+        : 'Zeit unbekannt';
+      return `[${timestamp}] ${speaker}: ${msg.content}`;
+    })
+    .join('\n\n');
+}
+
+function getLastUserMessage(messages: TranscriptMessage[]): string | undefined {
+  return [...messages].reverse().find((msg) => msg.role === 'user' && msg.content.trim())?.content.trim();
+}
 
 function buildSupportClientActionResult(
   result: Pick<SupportHandoffResult, 'matchState'>,
@@ -104,6 +132,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
   const tracker = deps.conversationTracker;
   const completedLeadActions = new Map<string, LeadActionResult>();
   const completedSupportActions = new Map<string, SupportHandoffResult>();
+  const completedAbandonedSummaries = new Set<string>();
 
   async function emitLeadAction(
     stream: Parameters<Parameters<typeof streamSSE>[1]>[0],
@@ -372,6 +401,70 @@ export function createChatRoute(deps: ChatDeps): Hono {
         });
       }
     });
+  });
+
+  app.post('/api/chat/abandoned', async (c) => {
+    const body = await c.req.json();
+    const parsed = abandonedChatRequestSchema.safeParse(body);
+
+    if (!parsed.success) {
+      return c.json({ error: 'Invalid request', details: parsed.error.flatten() }, 400);
+    }
+
+    const { sessionId, reason, history } = parsed.data;
+    const emailRecipient = deps.serviceEmailTo || 'caechma@gmail.com';
+
+    if (completedAbandonedSummaries.has(sessionId)) {
+      return c.json({ status: 'duplicate' });
+    }
+
+    if (!deps.email.isConfigured() || !emailRecipient) {
+      if (tracker?.isEnabled()) {
+        void track(() => tracker.recordEvent({
+          sessionId,
+          eventType: 'abandoned_summary_failed',
+          payload: { emailStatus: 'not_configured', emailRecipient },
+        }));
+      }
+      return c.json({ status: 'not_configured' }, 503);
+    }
+
+    const summary = {
+      sessionId,
+      reason,
+      transcript: formatTranscript(history),
+      lastUserMessage: getLastUserMessage(history),
+      messageCount: history.length,
+      submittedAt: new Date().toISOString(),
+    };
+
+    try {
+      await deps.email.sendAbandonedChatSummary(emailRecipient, summary);
+      completedAbandonedSummaries.add(sessionId);
+      if (tracker?.isEnabled()) {
+        void track(() => tracker.recordEvent({
+          sessionId,
+          eventType: 'abandoned_summary_sent',
+          payload: {
+            emailRecipient,
+            reason,
+            messageCount: history.length,
+          },
+        }));
+      }
+      return c.json({ status: 'sent' });
+    } catch (err) {
+      const emailError = err instanceof Error ? err.message : String(err);
+      console.error('Abandoned chat summary email error:', err);
+      if (tracker?.isEnabled()) {
+        void track(() => tracker.recordEvent({
+          sessionId,
+          eventType: 'abandoned_summary_failed',
+          payload: { emailRecipient, reason, emailError },
+        }));
+      }
+      return c.json({ status: 'failed' }, 502);
+    }
   });
 
   return app;

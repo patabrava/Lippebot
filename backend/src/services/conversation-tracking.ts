@@ -4,6 +4,8 @@ export type ConversationEventType =
   | 'lead_duplicate'
   | 'support_handoff_created'
   | 'support_handoff_duplicate'
+  | 'abandoned_summary_sent'
+  | 'abandoned_summary_failed'
   | 'chat_done'
   | 'chat_error'
   | 'tracking_error';

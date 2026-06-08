@@ -24,6 +24,24 @@ interface MailOptions {
 
 type SendFn = (options: MailOptions) => Promise<unknown>;
 
+export interface AbandonedChatSummary {
+  sessionId: string;
+  reason: string;
+  transcript: string;
+  lastUserMessage?: string;
+  messageCount: number;
+  submittedAt: string;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
   const configured = smtp.host.length > 0;
 
@@ -101,11 +119,36 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
     });
   }
 
+  async function sendAbandonedChatSummary(to: string, input: AbandonedChatSummary): Promise<void> {
+    if (!configured && !sendOverride) return;
+
+    const html = `
+      <h2>Unbeantworteter Sarah-Chat</h2>
+      <p><strong>Kurzfassung:</strong> ${input.lastUserMessage ? escapeHtml(input.lastUserMessage) : 'Keine eindeutige letzte Nutzernachricht vorhanden.'}</p>
+      <table style="border-collapse:collapse;">
+        <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Session:</td><td>${escapeHtml(input.sessionId)}</td></tr>
+        <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Grund:</td><td>${escapeHtml(input.reason)}</td></tr>
+        <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Nachrichten:</td><td>${input.messageCount}</td></tr>
+        <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Eingereicht:</td><td>${escapeHtml(input.submittedAt)}</td></tr>
+      </table>
+      <h3>Transkript</h3>
+      <pre style="white-space:pre-wrap;font-family:Arial,sans-serif;border:1px solid #ddd;padding:12px;border-radius:8px;">${escapeHtml(input.transcript)}</pre>
+    `;
+
+    await sendFn({
+      from,
+      to,
+      subject: `Sarah Chat-Zusammenfassung: ${input.sessionId}`,
+      html,
+    });
+  }
+
   return {
     isConfigured: () => configured,
     sendLeadNotification,
     sendServiceNotification,
     sendSupportNotification,
+    sendAbandonedChatSummary,
   };
 }
 

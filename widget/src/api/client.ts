@@ -52,6 +52,13 @@ interface ChatMessage {
   timestamp: number;
 }
 
+export interface AbandonedChatOptions {
+  apiUrl: string;
+  sessionId: string;
+  history: ChatMessage[];
+  reason?: string;
+}
+
 export async function sendMessage(
   options: ChatClientOptions,
   sessionId: string,
@@ -98,4 +105,18 @@ export async function sendMessage(
       dispatchSSEEvent(event, options);
     }
   }
+}
+
+export async function submitAbandonedChat(options: AbandonedChatOptions): Promise<boolean> {
+  const response = await fetch(`${options.apiUrl}/api/chat/abandoned`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionId: options.sessionId,
+      reason: options.reason || 'no_answer_after_inactivity_prompt',
+      history: options.history,
+    }),
+  });
+
+  return response.ok;
 }

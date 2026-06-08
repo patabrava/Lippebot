@@ -34,6 +34,7 @@ function createMockEmail(): EmailService {
     isConfigured: () => false,
     sendLeadNotification: vi.fn(),
     sendServiceNotification: vi.fn(),
+    sendAbandonedChatSummary: vi.fn(),
     sendSupportNotification: vi.fn(),
   };
 }
@@ -948,5 +949,59 @@ describe('POST /api/chat', () => {
     expect(text).toContain('"type":"token"');
     expect(text).toContain('"type":"done"');
     expect(errorSpy).toHaveBeenCalledWith('Conversation tracking error:', expect.any(Error));
+  });
+});
+
+describe('POST /api/chat/abandoned', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('sends a support summary email for an unanswered inactive chat', async () => {
+    const sendAbandonedChatSummary = vi.fn().mockResolvedValue(undefined);
+    const tracker = createMockTracker();
+    const chatRoute = createChatRoute({
+      gemini: createMockGemini(),
+      pipedrive: createMockPipedrive(),
+      email: {
+        isConfigured: () => true,
+        sendLeadNotification: vi.fn(),
+        sendServiceNotification: vi.fn(),
+        sendSupportNotification: vi.fn(),
+        sendAbandonedChatSummary,
+      },
+      conversationTracker: tracker,
+      notificationEmailTo: '',
+      serviceEmailTo: 'support@lippelift.de',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat/abandoned', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'idle-session-1',
+        reason: 'no_answer_after_inactivity_prompt',
+        history: [
+          { role: 'assistant', content: 'Hallo! Ich bin Sarah.', timestamp: 1000 },
+          { role: 'user', content: 'Mein Lift macht komische Geraeusche.', timestamp: 2000 },
+          { role: 'assistant', content: 'Gibt es noch was was ich tun kann?', timestamp: 3000 },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'sent' });
+    expect(sendAbandonedChatSummary).toHaveBeenCalledWith('support@lippelift.de', expect.objectContaining({
+      sessionId: 'idle-session-1',
+      reason: 'no_answer_after_inactivity_prompt',
+      transcript: expect.stringContaining('Mein Lift macht komische Geraeusche.'),
+    }));
+    expect(tracker.recordEvent).toHaveBeenCalledWith({
+      sessionId: 'idle-session-1',
+      eventType: 'abandoned_summary_sent',
+      payload: expect.objectContaining({ emailRecipient: 'support@lippelift.de' }),
+    });
   });
 });
