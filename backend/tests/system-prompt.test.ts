@@ -147,6 +147,8 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('Kundennummer');
     expect(prompt).toContain('Rechnungsnummer');
     expect(prompt).toContain('Auftragsnummer');
+    expect(prompt).toContain('Angebotsnummer');
+    expect(prompt).toContain('Lead-ID');
   });
 
   it('scopes free-consultation wording to advisor and inquiry modes', () => {

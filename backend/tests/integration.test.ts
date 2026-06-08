@@ -338,7 +338,7 @@ describe('POST /api/chat', () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     expect(resolveSupportPerson).toHaveBeenCalledWith(supportData);
-    expect(createSupportNote).toHaveBeenCalledWith(501, supportData);
+    expect(createSupportNote).toHaveBeenCalledWith(501, supportData, undefined);
     expect(createServiceActivity).not.toHaveBeenCalled();
     expect(sendSupportNotification).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
       data: supportData,
@@ -353,6 +353,54 @@ describe('POST /api/chat', () => {
     expect(text).not.toContain('caechma@gmail.com');
     expect(text).not.toContain('Pipedrive');
     expect(text).not.toContain('CRM');
+  });
+
+  it('passes a matched opportunity id to the support note writer', async () => {
+    const resolveSupportPerson = vi.fn().mockResolvedValue({
+      matchState: 'unique',
+      personId: 501,
+      dealId: 7001,
+      candidateCount: 1,
+    });
+    const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
+    const sendSupportNotification = vi.fn().mockResolvedValue({ messageId: 'support-1' });
+    const supportData = {
+      customerName: 'Maria Schmidt',
+      category: 'sales' as const,
+      issueDescription: 'TEST NOTE',
+      offerNumber: '14.28',
+    };
+    const app = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId) {
+          yield { type: 'service' as const, serviceData: supportData };
+          yield { type: 'state' as const, state: { sessionId, mode: 'service' as const, collectedData: supportData } };
+          yield { type: 'token' as const, content: 'Danke, ich gebe das weiter.' };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead: vi.fn(),
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson,
+        createSupportNote,
+      },
+      email: {
+        isConfigured: () => true,
+        sendLeadNotification: vi.fn(),
+        sendSupportNotification,
+      },
+      notificationEmailTo: '',
+      serviceEmailTo: 'berg@lippelift.de',
+    });
+
+    await app.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'support-opportunity', message: 'Status Angebot 14.28', history: [] }),
+    });
+
+    expect(createSupportNote).toHaveBeenCalledWith(501, supportData, 7001);
   });
 
   it('does not create a Pipedrive note for unresolved support matches but still sends the email', async () => {

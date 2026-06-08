@@ -43,6 +43,8 @@ describe('createGeminiService', () => {
     expect(serviceDeclaration.parameters.properties.issueDescription).toBeDefined();
     expect(serviceDeclaration.parameters.properties.invoiceNumber).toBeDefined();
     expect(serviceDeclaration.parameters.properties.orderNumber).toBeDefined();
+    expect(serviceDeclaration.parameters.properties.offerNumber).toBeDefined();
+    expect(serviceDeclaration.parameters.properties.leadId).toBeDefined();
     expect(serviceDeclaration.parameters.properties.sparePartReference).toBeDefined();
     expect(serviceDeclaration.parameters.required).toEqual(['customerName', 'category', 'issueDescription']);
   });

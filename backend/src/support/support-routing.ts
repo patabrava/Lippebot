@@ -108,6 +108,8 @@ export function buildSupportNoteContent(
     line('Kundennummer', data.customerNumber),
     line('Zahlungsreferenz', data.paymentReference),
     line('Auftragsnummer', data.orderNumber),
+    line('Angebotsnummer', data.offerNumber),
+    line('Lead-ID', data.leadId),
     line('Vertragsreferenz', data.contractReference),
     line('Ersatzteilreferenz', data.sparePartReference),
     line('Installationskontext', data.installationContext),
@@ -172,6 +174,8 @@ export function buildSupportEmailHtml(input: {
       ${row('Kundennummer', input.data.customerNumber)}
       ${row('Zahlungsreferenz', input.data.paymentReference)}
       ${row('Auftragsnummer', input.data.orderNumber)}
+      ${row('Angebotsnummer', input.data.offerNumber)}
+      ${row('Lead-ID', input.data.leadId)}
       ${row('Vertragsreferenz', input.data.contractReference)}
       ${row('Ersatzteilreferenz', input.data.sparePartReference)}
       ${row('Installationskontext', input.data.installationContext)}

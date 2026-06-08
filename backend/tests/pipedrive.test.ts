@@ -483,13 +483,18 @@ describe('createPipedriveService', () => {
   });
 
   it('resolveSupportPerson returns unique when name search has one exact person', async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({
-        success: true,
-        data: { items: [{ item: { id: 501, name: 'Maria Schmidt' } }] },
-      }),
-    });
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          data: { items: [{ item: { id: 501, name: 'Maria Schmidt' } }] },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: [] }),
+      });
     vi.stubGlobal('fetch', mockFetch);
 
     const service = createPipedriveService('test-key', 1, 2);
@@ -500,6 +505,29 @@ describe('createPipedriveService', () => {
     expect(mockFetch.mock.calls[0][0]).toContain('term=maria+schmidt');
     expect(mockFetch.mock.calls[0][0]).toContain('fields=name');
     expect(mockFetch.mock.calls[0][0]).toContain('exact_match=true');
+  });
+
+  it('resolveSupportPerson includes a single open opportunity for a unique person', async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          data: { items: [{ item: { id: 501, name: 'Maria Schmidt' } }] },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: [{ id: 7001, status: 'open', person_id: { value: 501 } }] }),
+      });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const service = createPipedriveService('test-key', 1, 2);
+    const result = await service.resolveSupportPerson({ customerName: 'Maria Schmidt' });
+
+    expect(result).toEqual({ matchState: 'unique', personId: 501, dealId: 7001, candidateCount: 1 });
+    expect(mockFetch.mock.calls[1][0]).toContain('/persons/501/deals');
+    expect(mockFetch.mock.calls[1][0]).toContain('status=open');
   });
 
   it('resolveSupportPerson asks for disambiguation when name search has multiple people and no phone or email', async () => {
@@ -544,6 +572,10 @@ describe('createPipedriveService', () => {
           success: true,
           data: { items: [{ item: { id: 502, name: 'Maria Schmidt' } }] },
         }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: [] }),
       });
     vi.stubGlobal('fetch', mockFetch);
 
@@ -610,6 +642,10 @@ describe('createPipedriveService', () => {
           success: true,
           data: { items: [{ item: { id: 501, name: 'Maria Schmidt' } }] },
         }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: [] }),
       });
     vi.stubGlobal('fetch', mockFetch);
 
@@ -642,6 +678,10 @@ describe('createPipedriveService', () => {
           success: true,
           data: { items: [{ item: { id: 502, name: 'Maria Schmidt' } }] },
         }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: [] }),
       });
     vi.stubGlobal('fetch', mockFetch);
 
@@ -653,8 +693,98 @@ describe('createPipedriveService', () => {
     });
 
     expect(result).toEqual({ matchState: 'unique', personId: 502, candidateCount: 1 });
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
     expect(mockFetch.mock.calls[1][0]).toContain('fields=phone');
+  });
+
+  it('resolveSupportPerson can resolve a person and opportunity by Angebotsnummer custom-field search', async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { items: [] } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          data: {
+            items: [{
+              item: {
+                id: 7001,
+                status: 'open',
+                person: { id: 501, name: 'Maria Schmidt' },
+              },
+            }],
+          },
+        }),
+      });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const service = createPipedriveService('test-key', 1, 2);
+    const result = await service.resolveSupportPerson({
+      customerName: 'Maria Schmidt',
+      offerNumber: '14.28',
+    });
+
+    expect(result).toEqual({ matchState: 'unique', personId: 501, dealId: 7001, candidateCount: 1 });
+    expect(mockFetch.mock.calls[1][0]).toContain('/deals/search');
+    expect(mockFetch.mock.calls[1][0]).toContain('term=14.28');
+    expect(mockFetch.mock.calls[1][0]).toContain('fields=custom_fields');
+    expect(mockFetch.mock.calls[1][0]).toContain('exact_match=true');
+  });
+
+  it('resolveSupportPerson can resolve by Lead-ID even when the customer name is missing', async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        success: true,
+        data: {
+          items: [{
+            item: {
+              id: 7001,
+              status: 'open',
+              person: { id: 501, name: 'Maria Schmidt' },
+            },
+          }],
+        },
+      }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const service = createPipedriveService('test-key', 1, 2);
+    const result = await service.resolveSupportPerson({
+      customerName: ' ',
+      leadId: 'PT-313235',
+    });
+
+    expect(result).toEqual({ matchState: 'unique', personId: 501, dealId: 7001, candidateCount: 1 });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls[0][0]).toContain('/deals/search');
+    expect(mockFetch.mock.calls[0][0]).toContain('term=PT-313235');
+  });
+
+  it('resolveSupportPerson marks identifier matches ambiguous when multiple open opportunities match', async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        success: true,
+        data: {
+          items: [
+            { item: { id: 7001, status: 'open', person: { id: 501, name: 'Maria Schmidt' } } },
+            { item: { id: 7002, status: 'open', person: { id: 502, name: 'Mario Schmidt' } } },
+          ],
+        },
+      }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const service = createPipedriveService('test-key', 1, 2);
+    const result = await service.resolveSupportPerson({
+      customerName: '',
+      orderNumber: 'A-100',
+    });
+
+    expect(result).toEqual({ matchState: 'ambiguous', candidateCount: 2 });
   });
 
   it('resolveSupportPerson does not use a phone match outside the ambiguous name candidates', async () => {
@@ -743,5 +873,32 @@ describe('createPipedriveService', () => {
     expect(body.content).toContain('Kurzfassung: Lift bleibt stehen.');
     expect(body.content).not.toContain('activity_id');
     expect(body.content).not.toContain('deal_id');
+  });
+
+  it('createSupportNote pins the same support note to the matched opportunity when provided', async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ success: true, data: { id: 9002 } }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const service = createPipedriveService('test-key', 1, 2);
+    const result = await service.createSupportNote(501, {
+      customerName: 'Maria Schmidt',
+      category: 'sales',
+      issueDescription: 'TEST NOTE',
+      offerNumber: '14.28',
+      leadId: 'LEAD-123',
+    }, 7001);
+
+    expect(result).toEqual({ noteId: 9002 });
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.person_id).toBe(501);
+    expect(body.deal_id).toBe(7001);
+    expect(body.pinned_to_person_flag).toBe(1);
+    expect(body.pinned_to_deal_flag).toBe(1);
+    expect(body.content).toContain('Kurzfassung: TEST NOTE');
+    expect(body.content).toContain('Angebotsnummer: 14.28');
+    expect(body.content).toContain('Lead-ID: LEAD-123');
   });
 });

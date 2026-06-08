@@ -203,25 +203,29 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     return result.data;
   }
 
+  async function apiGet<T>(endpoint: string, params: Record<string, string | number | boolean> = {}): Promise<T> {
+    const searchParams = new URLSearchParams({ api_token: apiKey });
+    for (const [key, value] of Object.entries(params)) {
+      searchParams.set(key, String(value));
+    }
+    const response = await fetch(`${PIPEDRIVE_API_BASE}${endpoint}?${searchParams.toString()}`);
+    if (!response.ok) {
+      throw new Error(`Pipedrive API error: ${response.status} ${response.statusText}`);
+    }
+    const result = await response.json() as { success: boolean; data: T };
+    if (!result.success) {
+      throw new Error('Pipedrive API returned success: false');
+    }
+    return result.data;
+  }
+
   async function searchPerson(term: string, fields: 'email' | 'phone'): Promise<number | undefined> {
-    const params = new URLSearchParams({
-      api_token: apiKey,
+    const result = await apiGet<{ items?: Array<{ item?: { id: number } }> }>('/persons/search', {
       term,
       fields,
       exact_match: 'true',
     });
-    const response = await fetch(`${PIPEDRIVE_API_BASE}/persons/search?${params.toString()}`);
-    if (!response.ok) {
-      throw new Error(`Pipedrive API error: ${response.status} ${response.statusText}`);
-    }
-    const result = await response.json() as {
-      success: boolean;
-      data: { items?: Array<{ item?: { id: number } }> };
-    };
-    if (!result.success) {
-      throw new Error('Pipedrive API returned success: false');
-    }
-    return result.data.items?.[0]?.item?.id;
+    return result.items?.[0]?.item?.id;
   }
 
   function normalizeFullName(name?: string): string {
@@ -229,26 +233,118 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
   }
 
   async function searchPeople(term: string, fields: 'name' | 'email' | 'phone'): Promise<number[]> {
-    const params = new URLSearchParams({
-      api_token: apiKey,
+    const result = await apiGet<{ items?: Array<{ item?: { id: number; name?: string } }> }>('/persons/search', {
       term,
       fields,
       exact_match: 'true',
     });
-    const response = await fetch(`${PIPEDRIVE_API_BASE}/persons/search?${params.toString()}`);
-    if (!response.ok) {
-      throw new Error(`Pipedrive API error: ${response.status} ${response.statusText}`);
-    }
-    const result = await response.json() as {
-      success: boolean;
-      data: { items?: Array<{ item?: { id: number; name?: string } }> };
-    };
-    if (!result.success) {
-      throw new Error('Pipedrive API returned success: false');
-    }
-    return (result.data.items ?? [])
+    return (result.items ?? [])
       .map((entry) => entry.item?.id)
       .filter((id): id is number => typeof id === 'number');
+  }
+
+  type DealSearchItem = {
+    id: number;
+    status?: string;
+    person?: { id?: number; name?: string } | null;
+  };
+
+  type PersonDeal = {
+    id: number;
+    status?: string;
+    person_id?: { value?: number } | number;
+  };
+
+  function isDealSearchItem(deal: DealSearchItem | PersonDeal): deal is DealSearchItem {
+    return 'person' in deal;
+  }
+
+  function getDealPersonId(deal: DealSearchItem | PersonDeal): number | undefined {
+    if (isDealSearchItem(deal)) return deal.person?.id;
+    if (typeof deal.person_id === 'number') return deal.person_id;
+    return deal.person_id?.value;
+  }
+
+  function isOpenDeal(deal: DealSearchItem | PersonDeal): boolean {
+    return !deal.status || deal.status === 'open';
+  }
+
+  function uniqueCandidate<T>(items: T[]): T | undefined {
+    return items.length === 1 ? items[0] : undefined;
+  }
+
+  async function searchDeals(term: string, fields: 'custom_fields' | 'title'): Promise<DealSearchItem[]> {
+    if (term.trim().length < 2) return [];
+    const result = await apiGet<{ items?: Array<{ item?: DealSearchItem }> }>('/deals/search', {
+      term: term.trim(),
+      fields,
+      exact_match: fields === 'custom_fields' ? 'true' : 'false',
+    });
+    return (result.items ?? [])
+      .map((entry) => entry.item)
+      .filter((deal): deal is DealSearchItem => typeof deal?.id === 'number');
+  }
+
+  async function getOpenPersonDeals(personId: number): Promise<PersonDeal[]> {
+    const deals = await apiGet<PersonDeal[]>(`/persons/${personId}/deals`, { status: 'open' });
+    return (deals ?? []).filter(isOpenDeal);
+  }
+
+  function supportIdentifiers(data: SupportData): string[] {
+    const values = [
+      data.customerNumber,
+      data.invoiceNumber,
+      data.orderNumber,
+      data.offerNumber,
+      data.leadId,
+      data.contractReference,
+      data.paymentReference,
+      data.sparePartReference,
+    ];
+    return [...new Set(values
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.trim())
+      .filter((value) => value.length >= 2))];
+  }
+
+  function matchFromDeal(deal: DealSearchItem): SupportMatchResult {
+    const personId = getDealPersonId(deal);
+    return personId
+      ? { matchState: 'unique', personId, dealId: deal.id, candidateCount: 1 }
+      : { matchState: 'unresolved', dealId: deal.id, candidateCount: 1 };
+  }
+
+  async function resolveSupportDeal(data: SupportData, candidatePersonIds: number[] = []): Promise<SupportMatchResult | undefined> {
+    const candidateSet = new Set(candidatePersonIds);
+    const identifierDealMatches: DealSearchItem[] = [];
+    for (const identifier of supportIdentifiers(data)) {
+      identifierDealMatches.push(...await searchDeals(identifier, 'custom_fields'));
+    }
+
+    const dedupedIdentifierDeals = [...new Map(identifierDealMatches.map((deal) => [deal.id, deal])).values()];
+    const candidateIdentifierDeals = candidateSet.size > 0
+      ? dedupedIdentifierDeals.filter((deal) => {
+        const personId = getDealPersonId(deal);
+        return typeof personId === 'number' && candidateSet.has(personId);
+      })
+      : dedupedIdentifierDeals;
+    const uniqueIdentifierDeal = uniqueCandidate(candidateIdentifierDeals.filter(isOpenDeal));
+    if (uniqueIdentifierDeal) {
+      return matchFromDeal(uniqueIdentifierDeal);
+    }
+    if (candidateIdentifierDeals.length > 1) {
+      return { matchState: 'ambiguous', candidateCount: candidateIdentifierDeals.length };
+    }
+
+    const uniquePersonId = uniqueCandidate(candidatePersonIds);
+    if (uniquePersonId) {
+      const uniqueOpenDeal = uniqueCandidate(await getOpenPersonDeals(uniquePersonId));
+      if (uniqueOpenDeal) {
+        return { matchState: 'unique', personId: uniquePersonId, dealId: uniqueOpenDeal.id, candidateCount: 1 };
+      }
+    }
+
+    return undefined;
   }
 
   function resolveCandidateIntersection(nameMatches: number[], disambiguationMatches: number[]): SupportMatchResult {
@@ -268,12 +364,14 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
 
     const normalizedName = normalizeFullName(data.customerName);
     if (!normalizedName) {
-      return { matchState: 'unresolved', candidateCount: 0 };
+      const dealMatch = await resolveSupportDeal(data);
+      return dealMatch ?? { matchState: 'unresolved', candidateCount: 0 };
     }
 
     const nameMatches = await searchPeople(normalizedName, 'name');
     if (nameMatches.length === 1) {
-      return { matchState: 'unique', personId: nameMatches[0], candidateCount: 1 };
+      const dealMatch = await resolveSupportDeal(data, nameMatches);
+      return dealMatch ?? { matchState: 'unique', personId: nameMatches[0], candidateCount: 1 };
     }
 
     const email = normalizeEmail(data.email);
@@ -286,8 +384,15 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     if (email) {
       const emailMatches = await searchPeople(email, 'email');
       if (nameMatches.length > 1) {
-        return resolveCandidateIntersection(nameMatches, emailMatches);
+        const candidateMatch = resolveCandidateIntersection(nameMatches, emailMatches);
+        if (candidateMatch.matchState === 'unique' && candidateMatch.personId) {
+          const dealMatch = await resolveSupportDeal(data, [candidateMatch.personId]);
+          return dealMatch ?? candidateMatch;
+        }
+        return candidateMatch;
       }
+      const dealMatch = await resolveSupportDeal(data, emailMatches);
+      if (dealMatch) return dealMatch;
       return emailMatches.length === 1
         ? { matchState: 'unique', personId: emailMatches[0], candidateCount: 1 }
         : { matchState: 'unresolved', candidateCount: emailMatches.length };
@@ -296,12 +401,22 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     if (phone) {
       const phoneMatches = await searchPeople(phone, 'phone');
       if (nameMatches.length > 1) {
-        return resolveCandidateIntersection(nameMatches, phoneMatches);
+        const candidateMatch = resolveCandidateIntersection(nameMatches, phoneMatches);
+        if (candidateMatch.matchState === 'unique' && candidateMatch.personId) {
+          const dealMatch = await resolveSupportDeal(data, [candidateMatch.personId]);
+          return dealMatch ?? candidateMatch;
+        }
+        return candidateMatch;
       }
+      const dealMatch = await resolveSupportDeal(data, phoneMatches);
+      if (dealMatch) return dealMatch;
       return phoneMatches.length === 1
         ? { matchState: 'unique', personId: phoneMatches[0], candidateCount: 1 }
         : { matchState: 'unresolved', candidateCount: phoneMatches.length };
     }
+
+    const dealMatch = await resolveSupportDeal(data, nameMatches);
+    if (dealMatch) return dealMatch;
 
     return { matchState: 'unresolved', candidateCount: nameMatches.length };
   }
@@ -422,11 +537,12 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     return { personId: person.id, activityId: activity.id };
   }
 
-  async function createSupportNote(personId: number, data: SupportData): Promise<{ noteId: number }> {
+  async function createSupportNote(personId: number, data: SupportData, dealId?: number): Promise<{ noteId: number }> {
     if (!configured) throw new Error('Pipedrive not configured');
 
     const note = await apiCall('/notes', {
       person_id: personId,
+      ...(dealId ? { deal_id: dealId, pinned_to_deal_flag: 1 } : {}),
       content: buildSupportNoteContent(data, 'unique'),
       pinned_to_person_flag: 1,
     });

@@ -47,6 +47,8 @@ export interface SupportData {
   customerNumber?: string;
   paymentReference?: string;
   orderNumber?: string;
+  offerNumber?: string;
+  leadId?: string;
   contractReference?: string;
   sparePartReference?: string;
   installationContext?: string;
@@ -56,12 +58,14 @@ export interface SupportData {
 export interface SupportMatchResult {
   matchState: SupportMatchState;
   personId?: number;
+  dealId?: number;
   candidateCount: number;
 }
 
 export interface SupportHandoffResult {
   matchState: SupportMatchState;
   personId?: number;
+  dealId?: number;
   intendedInbox: string;
   emailRecipient: string;
   noteStatus: SupportNoteStatus;

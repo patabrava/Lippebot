@@ -53,6 +53,8 @@ function hasSupportDisambiguator(data: SupportData): boolean {
     data.contractReference,
     data.paymentReference,
     data.sparePartReference,
+    data.offerNumber,
+    data.leadId,
   ];
 
   return candidateFields.some((value) => typeof value === 'string' && value.trim().length > 0);
@@ -211,6 +213,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
 
     let matchState: SupportHandoffResult['matchState'] = 'unresolved';
     let personId: number | undefined;
+    let dealId: number | undefined;
     let noteStatus: SupportNoteStatus = 'skipped';
     let noteError: string | undefined;
 
@@ -219,13 +222,14 @@ export function createChatRoute(deps: ChatDeps): Hono {
         const match = await deps.pipedrive.resolveSupportPerson(normalizedSupportData);
         matchState = match.matchState;
         personId = match.personId;
+        dealId = match.dealId;
       } catch (err) {
         console.error('Support person resolution error:', err);
       }
 
       if (matchState === 'unique' && personId) {
         try {
-          await deps.pipedrive.createSupportNote(personId, normalizedSupportData);
+          await deps.pipedrive.createSupportNote(personId, normalizedSupportData, dealId);
           noteStatus = 'created';
         } catch (err) {
           noteStatus = 'failed';
@@ -238,6 +242,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
     const result: SupportHandoffResult = {
       matchState,
       personId,
+      dealId,
       intendedInbox,
       emailRecipient,
       noteStatus,
