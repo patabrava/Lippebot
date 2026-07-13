@@ -1,4 +1,5 @@
 import { buildSupportNoteContent } from '../support/support-routing.js';
+import { formatBerlinDate } from '../time/berlin.js';
 import type { LeadCrmResult, LeadData, ServiceData, SupportData, SupportMatchResult } from '../types/index.js';
 
 const PIPEDRIVE_API_BASE = 'https://api.pipedrive.com/v1';
@@ -166,7 +167,7 @@ function normalizePostalCode(postalCode?: string): string {
 }
 
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return formatBerlinDate();
 }
 
 function buildAddress(street: string, postalCode: string, city: string): string | undefined {

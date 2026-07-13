@@ -3,6 +3,7 @@ import { createPipedriveService } from '../src/services/pipedrive.js';
 
 describe('createPipedriveService', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -851,6 +852,43 @@ describe('createPipedriveService', () => {
     expect(dealBody['36241991692b59873ce73c478b98aab6ad4054c1']).toBe(120);
     expect(dealBody['9c08a82b8cad15eab222f89a6a961c59bc8c95e3']).toBe(122);
     expect(dealBody['684a7860061d276f4a76498fd1653d721e37cb6f']).toBe(128);
+  });
+
+  it('createLead uses the Berlin calendar date after local midnight', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-13T22:30:00.000Z'));
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { items: [] } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { id: 123 } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { id: 456 } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { id: 789 } }),
+      });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await createPipedriveService('test-key', 2, 3).createLead({
+      firstName: 'Zeit',
+      lastName: 'Test',
+      email: 'zeit@example.de',
+      availability: '08:00 - 12:00',
+    });
+
+    const dealCall = mockFetch.mock.calls.find((call) => (
+      String(call[0]).includes('/deals?') && call[1]?.method === 'POST'
+    ));
+    expect(dealCall).toBeDefined();
+    const dealBody = JSON.parse(dealCall![1].body);
+    expect(dealBody.eaf2557e218e842227f803c4abdc665291c99b91).toBe('2026-07-14');
   });
 
   it('createLead omits custom option fields when values are unknown', async () => {

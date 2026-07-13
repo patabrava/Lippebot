@@ -4,6 +4,7 @@ import type {
   SupportMatchState,
   SupportNoteStatus,
 } from '../types/index.js';
+import { formatBerlinDateTime } from '../time/berlin.js';
 
 const supportInboxes: Record<SupportCategory, string> = {
   technik: 'technik@lippelift.de',
@@ -95,7 +96,7 @@ export function buildSupportNoteContent(
 ): string {
   const category = resolveSupportCategory(data);
   return [
-    `Sarah Chatbot Support - ${now.toISOString()}`,
+    `Sarah Chatbot Support - ${formatBerlinDateTime(now)}`,
     `Kategorie: ${category}`,
     `CRM-Treffer: ${matchState}`,
     line('Kurzfassung', data.issueDescription),

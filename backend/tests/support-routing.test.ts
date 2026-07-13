@@ -41,7 +41,8 @@ describe('support routing helpers', () => {
 
     const note = buildSupportNoteContent(data, 'unique', new Date('2026-05-21T10:15:00.000Z'));
 
-    expect(note).toContain('Sarah Chatbot Support - 2026-05-21T10:15:00.000Z');
+    expect(note).toContain('Sarah Chatbot Support - 2026-05-21 12:15:00 CEST');
+    expect(note).not.toContain('2026-05-21T10:15:00.000Z');
     expect(note).toContain('Sarah Chatbot');
     expect(note).toContain('Kategorie: technik');
     expect(note).toContain('Kurzfassung: Lift bleibt im Erdgeschoss stehen und piept.');
