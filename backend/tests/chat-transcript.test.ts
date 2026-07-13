@@ -17,6 +17,7 @@ describe('buildPipedriveTranscriptNote', () => {
 
     expect(note).toContain('Vollständiges Sarah-Chatprotokoll');
     expect(note).toContain('chat-session-42');
+    expect(note).toContain('[Sarah-Chat-ID:chat-session-42]');
     expect(note).toContain('2026-07-13 10:00:00');
     expect(note).toContain('2026-07-13 10:02:30');
     expect(note.indexOf('Wie kann ich helfen?')).toBeLessThan(note.indexOf('Mein Lift ist defekt.'));

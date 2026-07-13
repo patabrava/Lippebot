@@ -29,6 +29,10 @@ function formatMessage(message: ChatMessage): string {
   return `<p><strong>${speaker} · ${escapeHtml(timestamp)}</strong><br>${formatContent(message.content)}</p>`;
 }
 
+export function buildPipedriveTranscriptMarker(sessionId: string): string {
+  return `[Sarah-Chat-ID:${encodeURIComponent(sessionId)}]`;
+}
+
 export function buildPipedriveTranscriptNote(input: PipedriveTranscriptInput): string {
   const messages: ChatMessage[] = [
     ...input.history,
@@ -45,7 +49,7 @@ export function buildPipedriveTranscriptNote(input: PipedriveTranscriptInput): s
 
   return [
     '<strong>Vollständiges Sarah-Chatprotokoll</strong>',
-    `<small>Sitzung: ${escapeHtml(input.sessionId)}</small>`,
+    `<small>Sitzung: ${escapeHtml(input.sessionId)} · ${buildPipedriveTranscriptMarker(input.sessionId)}</small>`,
     '<hr>',
     ...messages.map(formatMessage),
   ].join('\n');

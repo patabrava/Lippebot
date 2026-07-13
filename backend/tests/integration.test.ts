@@ -679,8 +679,8 @@ describe('POST /api/chat', () => {
       }),
     })).text();
 
-    expect(createChatTranscriptNote).toHaveBeenCalledWith(321, 654, expect.any(String));
-    const transcript = createChatTranscriptNote.mock.calls[0][2];
+    expect(createChatTranscriptNote).toHaveBeenCalledWith('opportunity-transcript', 321, 654, expect.any(String));
+    const transcript = createChatTranscriptNote.mock.calls[0][3];
     expect(transcript).toContain('Willkommen bei LIPPE Lift.');
     expect(transcript).toContain('Ich brauche einen Sitzlift.');
     expect(transcript).toContain('Bitte senden Sie die Anfrage ab.');
@@ -732,8 +732,13 @@ describe('POST /api/chat', () => {
     })).text();
 
     expect(createSupportNote).toHaveBeenCalledWith(501, supportData, 7001);
-    expect(createChatTranscriptNote).toHaveBeenCalledWith(501, 7001, expect.stringContaining('Vollständiges Sarah-Chatprotokoll'));
-    expect(createChatTranscriptNote.mock.calls[0][2]).toContain('Der Servicefall wurde aufgenommen.');
+    expect(createChatTranscriptNote).toHaveBeenCalledWith(
+      'support-transcript',
+      501,
+      7001,
+      expect.stringContaining('Vollständiges Sarah-Chatprotokoll'),
+    );
+    expect(createChatTranscriptNote.mock.calls[0][3]).toContain('Der Servicefall wurde aufgenommen.');
   });
 
   it('retries transcript persistence and does not duplicate a successful session note', async () => {
@@ -786,6 +791,66 @@ describe('POST /api/chat', () => {
       eventType: 'crm_transcript_note_created',
       payload: { personId: 321, dealId: 654, noteId: 9103 },
     });
+  });
+
+  it('shares one in-flight transcript write between concurrent retries for the same session target', async () => {
+    const leadData = {
+      customerSegment: 'privatperson' as const,
+      firstName: 'Concurrent',
+      lastName: 'Test',
+      phone: '05261 96660',
+      street: 'Musterstrasse 4',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+    };
+    let releaseTranscript!: (value: { noteId: number }) => void;
+    const pendingTranscript = new Promise<{ noteId: number }>((resolve) => {
+      releaseTranscript = resolve;
+    });
+    const createChatTranscriptNote = vi.fn().mockReturnValue(pendingTranscript);
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'lead' as const, leadData };
+          yield { type: 'token' as const, content: 'Erledigt.' };
+          yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: leadData } };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead: vi.fn().mockResolvedValue({ outcome: 'reused', personId: 321, dealId: 654 }),
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson: vi.fn(),
+        createSupportNote: vi.fn(),
+        createChatTranscriptNote,
+      },
+      email: createMockEmail(),
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const body = JSON.stringify({ sessionId: 'concurrent-transcript', message: 'Abschließen', history: [] });
+
+    const firstText = (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    })).text();
+    await vi.waitFor(() => expect(createChatTranscriptNote).toHaveBeenCalledTimes(1));
+
+    const secondText = (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    })).text();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(createChatTranscriptNote).toHaveBeenCalledTimes(1);
+    releaseTranscript({ noteId: 9104 });
+    await Promise.all([firstText, secondText]);
+    expect(createChatTranscriptNote).toHaveBeenCalledTimes(1);
   });
 
   it('does not report done when mandatory transcript persistence fails three times', async () => {

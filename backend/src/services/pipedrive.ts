@@ -1,4 +1,5 @@
 import { buildSupportNoteContent } from '../support/support-routing.js';
+import { buildPipedriveTranscriptMarker } from '../chat/transcript.js';
 import { formatBerlinDate } from '../time/berlin.js';
 import type { LeadCrmResult, LeadData, ServiceData, SupportData, SupportMatchResult } from '../types/index.js';
 
@@ -733,8 +734,21 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     return { noteId: note.id };
   }
 
-  async function createChatTranscriptNote(personId: number, dealId: number | undefined, content: string): Promise<{ noteId: number }> {
+  async function createChatTranscriptNote(
+    sessionId: string,
+    personId: number,
+    dealId: number | undefined,
+    content: string,
+  ): Promise<{ noteId: number }> {
     if (!configured) throw new Error('Pipedrive not configured');
+
+    const marker = buildPipedriveTranscriptMarker(sessionId);
+    const existingNotes = await apiGet<Array<{ id: number; content?: string }>>('/notes', {
+      ...(dealId ? { deal_id: dealId } : { person_id: personId }),
+      limit: 500,
+    });
+    const existingNote = existingNotes.find((note) => note.content?.includes(marker));
+    if (existingNote) return { noteId: existingNote.id };
 
     const note = await apiCall('/notes', {
       person_id: personId,

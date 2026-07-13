@@ -1475,18 +1475,25 @@ describe('createPipedriveService', () => {
   });
 
   it('createChatTranscriptNote pins a full chat transcript to its person and opportunity', async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ success: true, data: { id: 9101 } }),
-    });
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { id: 9101 } }),
+      });
     vi.stubGlobal('fetch', mockFetch);
 
     const service = createPipedriveService('test-key', 1, 2);
-    const content = '<strong>Vollständiges Sarah-Chatprotokoll</strong>';
-    const result = await service.createChatTranscriptNote(501, 7001, content);
+    const content = '<strong>Vollständiges Sarah-Chatprotokoll</strong><small>[Sarah-Chat-ID:session-deal]</small>';
+    const result = await service.createChatTranscriptNote('session-deal', 501, 7001, content);
 
     expect(result).toEqual({ noteId: 9101 });
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(mockFetch.mock.calls[0][0]).toContain('/notes?');
+    expect(mockFetch.mock.calls[0][0]).toContain('deal_id=7001');
+    const body = JSON.parse(mockFetch.mock.calls[1][1].body);
     expect(body).toEqual({
       person_id: 501,
       deal_id: 7001,
@@ -1497,22 +1504,64 @@ describe('createPipedriveService', () => {
   });
 
   it('createChatTranscriptNote pins a case transcript to its person when no opportunity exists', async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ success: true, data: { id: 9102 } }),
-    });
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { id: 9102 } }),
+      });
     vi.stubGlobal('fetch', mockFetch);
 
     const service = createPipedriveService('test-key', 1, 2);
-    const content = '<strong>Vollständiges Sarah-Chatprotokoll</strong>';
-    const result = await service.createChatTranscriptNote(501, undefined, content);
+    const content = '<strong>Vollständiges Sarah-Chatprotokoll</strong><small>[Sarah-Chat-ID:session-person]</small>';
+    const result = await service.createChatTranscriptNote('session-person', 501, undefined, content);
 
     expect(result).toEqual({ noteId: 9102 });
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(mockFetch.mock.calls[0][0]).toContain('person_id=501');
+    const body = JSON.parse(mockFetch.mock.calls[1][1].body);
     expect(body).toEqual({
       person_id: 501,
       content,
       pinned_to_person_flag: 1,
     });
+  });
+
+  it('createChatTranscriptNote reconciles a committed transcript after an uncertain response', async () => {
+    const marker = '[Sarah-Chat-ID:session-reconcile]';
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: [] }),
+      })
+      .mockRejectedValueOnce(new Error('socket closed after commit'))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          data: [{ id: 9199, content: `<strong>Transcript</strong><small>${marker}</small>` }],
+        }),
+      });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const service = createPipedriveService('test-key', 1, 2);
+    await expect(service.createChatTranscriptNote(
+      'session-reconcile',
+      501,
+      7001,
+      `<strong>Transcript</strong><small>${marker}</small>`,
+    )).rejects.toThrow('socket closed after commit');
+
+    await expect(service.createChatTranscriptNote(
+      'session-reconcile',
+      501,
+      7001,
+      `<strong>Transcript</strong><small>${marker}</small>`,
+    )).resolves.toEqual({ noteId: 9199 });
+
+    const postCalls = mockFetch.mock.calls.filter(([, init]) => init?.method === 'POST');
+    expect(postCalls).toHaveLength(1);
   });
 });

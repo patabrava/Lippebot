@@ -149,6 +149,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
   const completedLeadActions = new Map<string, LeadInternalResult>();
   const completedSupportActions = new Map<string, SupportHandoffResult>();
   const completedTranscriptNotes = new Set<string>();
+  const inFlightTranscriptNotes = new Map<string, Promise<void>>();
   const completedAbandonedSummaries = new Set<string>();
 
   async function emitLeadAction(
@@ -361,38 +362,54 @@ export function createChatRoute(deps: ChatDeps): Hono {
 
     const completionKey = `${sessionId}:${personId}:${dealId ?? 'person'}`;
     if (completedTranscriptNotes.has(completionKey)) return;
+    const existingWrite = inFlightTranscriptNotes.get(completionKey);
+    if (existingWrite) {
+      await existingWrite;
+      return;
+    }
 
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        const { noteId } = await deps.pipedrive.createChatTranscriptNote(personId, dealId, content);
-        completedTranscriptNotes.add(completionKey);
-        if (tracker?.isEnabled()) {
-          await track(() => tracker.recordEvent({
-            sessionId,
-            eventType: 'crm_transcript_note_created',
-            payload: { personId, ...(dealId ? { dealId } : {}), noteId },
-          }));
+    const write = (async () => {
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          const { noteId } = await deps.pipedrive.createChatTranscriptNote(sessionId, personId, dealId, content);
+          completedTranscriptNotes.add(completionKey);
+          if (tracker?.isEnabled()) {
+            await track(() => tracker.recordEvent({
+              sessionId,
+              eventType: 'crm_transcript_note_created',
+              payload: { personId, ...(dealId ? { dealId } : {}), noteId },
+            }));
+          }
+          return;
+        } catch (err) {
+          lastError = err;
         }
-        return;
-      } catch (err) {
-        lastError = err;
+      }
+
+      const error = lastError instanceof Error ? lastError : new Error(String(lastError));
+      if (tracker?.isEnabled()) {
+        await track(() => tracker.recordEvent({
+          sessionId,
+          eventType: 'crm_transcript_note_failed',
+          payload: {
+            personId,
+            ...(dealId ? { dealId } : {}),
+            error: error.message,
+          },
+        }));
+      }
+      throw error;
+    })();
+
+    inFlightTranscriptNotes.set(completionKey, write);
+    try {
+      await write;
+    } finally {
+      if (inFlightTranscriptNotes.get(completionKey) === write) {
+        inFlightTranscriptNotes.delete(completionKey);
       }
     }
-
-    const error = lastError instanceof Error ? lastError : new Error(String(lastError));
-    if (tracker?.isEnabled()) {
-      await track(() => tracker.recordEvent({
-        sessionId,
-        eventType: 'crm_transcript_note_failed',
-        payload: {
-          personId,
-          ...(dealId ? { dealId } : {}),
-          error: error.message,
-        },
-      }));
-    }
-    throw error;
   }
 
   app.post('/api/chat', async (c) => {
