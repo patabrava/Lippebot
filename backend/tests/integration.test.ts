@@ -149,6 +149,50 @@ describe('POST /api/chat', () => {
     expect(await res.text()).toContain('"action":"create_lead"');
   });
 
+  it('does not create a directly submitted lead without phone or email', async () => {
+    const createLead = vi.fn().mockResolvedValue({ personId: 123, dealId: 456 });
+    const leadData = {
+      customerSegment: 'Privatperson' as never,
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      street: 'Musterstrasse 1',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          yield { type: 'lead' as const, leadData };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead,
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson: vi.fn(),
+        createSupportNote: vi.fn(),
+      },
+      email: createMockEmail(),
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'lead-needs-contact', message: 'Das ist alles', history: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(createLead).not.toHaveBeenCalled();
+    expect(text).toContain('"action":"create_lead"');
+    expect(text).toContain('"status":"needs_contact"');
+  });
+
   it('streams du-form fallback copy when chat generation fails', async () => {
     const chatRoute = createChatRoute({
       gemini: {
@@ -230,6 +274,97 @@ describe('POST /api/chat', () => {
     expect(text).toContain('"action":"create_lead"');
     expect(text).toContain('"personId":321');
     expect(text).toContain('"dealId":654');
+  });
+
+  it('emits a lead action for complete email-only state fallback data', async () => {
+    const createLead = vi.fn().mockResolvedValue({ personId: 321, dealId: 654 });
+    const leadData = {
+      customerSegment: 'Privatperson' as never,
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      email: 'max@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield {
+            type: 'state' as const,
+            state: { sessionId, mode: 'anfrage' as const, collectedData: leadData },
+          };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead,
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson: vi.fn(),
+        createSupportNote: vi.fn(),
+      },
+      email: createMockEmail(),
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'email-state-fallback', message: 'Hier sind meine Daten', history: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(createLead).toHaveBeenCalledWith(leadData);
+    expect(await res.text()).toContain('"action":"create_lead"');
+  });
+
+  it('does not emit a lead action for state fallback data without phone or email', async () => {
+    const createLead = vi.fn().mockResolvedValue({ personId: 321, dealId: 654 });
+    const leadData = {
+      customerSegment: 'Privatperson' as never,
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      street: 'Musterstrasse 1',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield {
+            type: 'state' as const,
+            state: { sessionId, mode: 'anfrage' as const, collectedData: leadData },
+          };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead,
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson: vi.fn(),
+        createSupportNote: vi.fn(),
+      },
+      email: createMockEmail(),
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'missing-contact-state', message: 'Hier sind meine Daten', history: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(createLead).not.toHaveBeenCalled();
+    expect(await res.text()).not.toContain('"action":"create_lead"');
   });
 
   it('does not create a second lead when the same session reports completed data again', async () => {
@@ -355,6 +490,54 @@ describe('POST /api/chat', () => {
     expect(text).not.toContain('CRM');
   });
 
+  it('accepts an email-only support handoff without requesting a phone number', async () => {
+    const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
+    const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
+    const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
+    const supportData = {
+      customerName: 'Maria Schmidt',
+      email: 'maria@example.de',
+      category: 'technik' as const,
+      issueDescription: 'Lift bleibt im Erdgeschoss stehen.',
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          yield { type: 'service' as const, serviceData: supportData };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead: vi.fn(),
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson,
+        createSupportNote,
+      },
+      email: {
+        isConfigured: () => true,
+        sendLeadNotification: vi.fn(),
+        sendServiceNotification: vi.fn(),
+        sendSupportNotification,
+      },
+      notificationEmailTo: '',
+      serviceEmailTo: 'caechma@gmail.com',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'support-email-only', message: 'Mein Lift ist kaputt', history: [] }),
+    });
+
+    const text = await res.text();
+    expect(resolveSupportPerson).toHaveBeenCalledWith(supportData);
+    expect(createSupportNote).toHaveBeenCalledWith(501, supportData, undefined);
+    expect(sendSupportNotification).toHaveBeenCalled();
+    expect(text).toContain('"status":"accepted"');
+  });
+
   it('passes a matched opportunity id to the support note writer', async () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({
       matchState: 'unique',
@@ -366,6 +549,7 @@ describe('POST /api/chat', () => {
     const sendSupportNotification = vi.fn().mockResolvedValue({ messageId: 'support-1' });
     const supportData = {
       customerName: 'Maria Schmidt',
+      email: 'maria@example.de',
       category: 'sales' as const,
       issueDescription: 'TEST NOTE',
       offerNumber: '14.28',
@@ -410,6 +594,7 @@ describe('POST /api/chat', () => {
     const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
     const supportData = {
       customerName: 'Unbekannter Kunde',
+      phone: '05261 96660',
       category: 'finance' as const,
       issueDescription: 'Frage zu einer Rechnung.',
     };
@@ -455,7 +640,7 @@ describe('POST /api/chat', () => {
     }));
   });
 
-  it('marks unresolved name-only support handoffs as needing contact details', async () => {
+  it('rejects a directly submitted support handoff without phone or email', async () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unresolved', candidateCount: 0 });
     const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
     const supportData = {
@@ -496,11 +681,8 @@ describe('POST /api/chat', () => {
 
     expect(res.status).toBe(200);
     const text = await res.text();
-    expect(resolveSupportPerson).toHaveBeenCalledWith(supportData);
-    expect(sendSupportNotification).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
-      matchState: 'unresolved',
-      noteStatus: 'skipped',
-    }));
+    expect(resolveSupportPerson).not.toHaveBeenCalled();
+    expect(sendSupportNotification).not.toHaveBeenCalled();
     expect(text).toContain('"action":"create_service"');
     expect(text).toContain('"status":"needs_contact"');
     expect(text).not.toContain('"matchState"');
@@ -514,6 +696,7 @@ describe('POST /api/chat', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const supportData = {
       customerName: 'Maria Schmidt',
+      email: 'maria@example.de',
       category: 'lossau' as const,
       issueDescription: 'Ersatzteil fuer die Schiene benoetigt.',
     };
@@ -569,6 +752,7 @@ describe('POST /api/chat', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const supportData = {
       customerName: 'Maria Schmidt',
+      phone: '05261 96660',
       category: 'technik' as const,
       issueDescription: 'Lift bleibt stehen.',
     };
@@ -629,6 +813,7 @@ describe('POST /api/chat', () => {
     const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
     const supportData = {
       customerName: 'Maria Schmidt',
+      email: 'maria@example.de',
       category: 'technik' as const,
       issueDescription: 'Lift bleibt stehen.',
     };

@@ -45,6 +45,15 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('An welcher Adresse brauchst du den Lift?');
   });
 
+  it('requests one preferred contact method and stops after either value is known', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Telefon oder E-Mail (Pflicht; genau eine Kontaktmöglichkeit genügt)');
+    expect(prompt).toContain('Schick mir bitte entweder deine Telefonnummer oder deine E-Mail-Adresse.');
+    expect(prompt).toContain('Sobald Telefonnummer oder E-Mail-Adresse vorhanden ist, frage nicht nach der anderen Kontaktmöglichkeit');
+    expect(prompt).toContain('Wenn der Nutzer eine Kontaktmöglichkeit bereits freiwillig genannt hat, frage keine weitere ab');
+    expect(prompt).not.toContain('Vorname, Nachname, Telefonnummer (Pflicht)');
+  });
+
   it('includes boundary rules', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('Preise nennen');
@@ -135,7 +144,7 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('Erwaehne niemals Pipedrive');
     expect(prompt).toContain('Erwaehne niemals CRM');
     expect(prompt).toContain('Frage nach dem Kundennamen');
-    expect(prompt).toContain('Wenn der Name nicht eindeutig reicht, frage nach Telefon oder E-Mail');
+    expect(prompt).toContain('Auch im Service-Modus genügt genau eine Kontaktmöglichkeit');
     expect(prompt).toContain('Stelle keine unnoetigen Zusatzfragen');
   });
 
@@ -144,11 +153,7 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('Rufe `submit_service_request` erst auf, wenn');
     expect(prompt).toContain('Telefonnummer');
     expect(prompt).toContain('E-Mail-Adresse');
-    expect(prompt).toContain('Kundennummer');
-    expect(prompt).toContain('Rechnungsnummer');
-    expect(prompt).toContain('Auftragsnummer');
-    expect(prompt).toContain('Angebotsnummer');
-    expect(prompt).toContain('Lead-ID');
+    expect(prompt).toContain('mindestens eine der beiden Kontaktmöglichkeiten vorhanden ist');
   });
 
   it('scopes free-consultation wording to advisor and inquiry modes', () => {

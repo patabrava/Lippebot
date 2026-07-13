@@ -69,7 +69,7 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
       <h2>Neue Anfrage über Sarah (Chatbot)</h2>
       <table style="border-collapse:collapse;">
         <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Name:</td><td>${data.firstName} ${data.lastName}</td></tr>
-        <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Telefon:</td><td>${data.phone}</td></tr>
+        ${data.phone ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Telefon:</td><td>${data.phone}</td></tr>` : ''}
         ${data.email ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">E-Mail:</td><td>${data.email}</td></tr>` : ''}
         ${data.street ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Straße:</td><td>${data.street}</td></tr>` : ''}
         <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">PLZ / Stadt:</td><td>${data.postalCode} ${data.city}</td></tr>
@@ -92,7 +92,7 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
       <h2>Service-Anfrage über Sarah (Chatbot)</h2>
       <table style="border-collapse:collapse;">
         <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Kunde:</td><td>${data.customerName}</td></tr>
-        <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Telefon:</td><td>${data.phone}</td></tr>
+        ${data.phone ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Telefon:</td><td>${data.phone}</td></tr>` : ''}
         ${data.email ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">E-Mail:</td><td>${data.email}</td></tr>` : ''}
         ${data.liftModel ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Lift-Modell:</td><td>${data.liftModel}</td></tr>` : ''}
         <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Problem:</td><td>${data.issueDescription}</td></tr>

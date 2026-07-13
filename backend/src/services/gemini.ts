@@ -1,6 +1,7 @@
 import { VertexAI, type FunctionDeclaration, FunctionDeclarationSchemaType, type Content, type Part } from '@google-cloud/vertexai';
 import type { ChatMessage, Mode, LeadData, ServiceData, ConversationState } from '../types/index.js';
 import { buildSystemPrompt } from '../prompts/system-prompt.js';
+import { hasContactMethod } from '../contact/contact-method.js';
 
 const reportStateFn: FunctionDeclaration = {
   name: 'report_state',
@@ -60,7 +61,7 @@ const reportStateFn: FunctionDeclaration = {
 
 const submitLeadFn: FunctionDeclaration = {
   name: 'submit_lead',
-  description: 'Submit a qualified lead when all required contact information has been collected. After calling this, generate a warm confirmation message.',
+  description: 'Submit a qualified lead only when all required information and at least one contact method (phone or email) have been collected. After calling this, generate a warm confirmation message.',
   parameters: {
     type: FunctionDeclarationSchemaType.OBJECT,
     properties: {
@@ -80,13 +81,13 @@ const submitLeadFn: FunctionDeclaration = {
       message: { type: FunctionDeclarationSchemaType.STRING },
       newsletter: { type: FunctionDeclarationSchemaType.STRING },
     },
-    required: ['customerSegment', 'firstName', 'lastName', 'phone', 'street', 'postalCode', 'city', 'availability'],
+    required: ['customerSegment', 'firstName', 'lastName', 'street', 'postalCode', 'city', 'availability'],
   },
 };
 
 const submitServiceRequestFn: FunctionDeclaration = {
   name: 'submit_service_request',
-  description: 'Submit an existing-customer support request only after Sarah has the customer name, one primary support category, a usable short issue summary, and either a reliable disambiguator such as phone, email, customer number, invoice number, or order number, or a name that is clearly unique enough. After calling this, generate a warm generic confirmation without mentioning CRM, Pipedrive, inboxes, or backend status.',
+  description: 'Submit an existing-customer support request only after Sarah has the customer name, one primary support category, a usable short issue summary, and at least one contact method (phone or email). After calling this, generate a warm generic confirmation without mentioning CRM, Pipedrive, inboxes, or backend status.',
   parameters: {
     type: FunctionDeclarationSchemaType.OBJECT,
     properties: {
@@ -175,18 +176,29 @@ export function createGeminiService(config: VertexChatConfig) {
     contents.push({ role: 'user', parts: [{ text: message }] });
 
     const result = await model.generateContentStream({ contents });
+    const initialTextChunks: string[] = [];
 
     for await (const chunk of result.stream) {
       const parts = chunk.candidates?.[0]?.content?.parts ?? [];
       const text = extractText(parts);
       if (text) {
-        yield { type: 'token', content: text };
+        initialTextChunks.push(text);
       }
     }
 
     const response = await result.response;
     const responseParts = response.candidates?.[0]?.content?.parts || [];
     const functionCalls = extractFunctionCalls(responseParts);
+    const hasInvalidContactSubmission = functionCalls.some((call) => (
+      (call.name === 'submit_lead' || call.name === 'submit_service_request')
+      && !hasContactMethod(call.args)
+    ));
+
+    if (!hasInvalidContactSubmission) {
+      for (const content of initialTextChunks) {
+        yield { type: 'token', content };
+      }
+    }
 
     let hasActionCalls = false;
     const functionResponses: Part[] = [];
@@ -205,8 +217,21 @@ export function createGeminiService(config: VertexChatConfig) {
           functionResponse: { name: 'report_state', response: { success: true } },
         });
       } else if (call.name === 'submit_lead') {
-        yield { type: 'lead', leadData: call.args as LeadData };
         hasActionCalls = true;
+        if (!hasContactMethod(call.args)) {
+          functionResponses.push({
+            functionResponse: {
+              name: 'submit_lead',
+              response: {
+                success: false,
+                needsContact: true,
+                message: 'Es fehlt eine gültige Kontaktmöglichkeit. Frage natürlich nach entweder Telefonnummer oder E-Mail-Adresse und bestätige noch keine Übergabe.',
+              },
+            },
+          });
+          continue;
+        }
+        yield { type: 'lead', leadData: call.args as LeadData };
         functionResponses.push({
           functionResponse: {
             name: 'submit_lead',
@@ -214,8 +239,21 @@ export function createGeminiService(config: VertexChatConfig) {
           },
         });
       } else if (call.name === 'submit_service_request') {
-        yield { type: 'service', serviceData: call.args as ServiceData };
         hasActionCalls = true;
+        if (!hasContactMethod(call.args)) {
+          functionResponses.push({
+            functionResponse: {
+              name: 'submit_service_request',
+              response: {
+                success: false,
+                needsContact: true,
+                message: 'Es fehlt eine gültige Kontaktmöglichkeit. Frage natürlich nach entweder Telefonnummer oder E-Mail-Adresse und bestätige noch keine Übergabe.',
+              },
+            },
+          });
+          continue;
+        }
+        yield { type: 'service', serviceData: call.args as ServiceData };
         functionResponses.push({
           functionResponse: {
             name: 'submit_service_request',

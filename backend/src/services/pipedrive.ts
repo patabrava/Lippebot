@@ -103,8 +103,8 @@ function normalizeOptionValue(value: unknown): string | undefined {
   return value.trim().toLowerCase().replace(/\s+/g, '');
 }
 
-function normalizePhoneNumber(phone?: string): string {
-  if (!phone) return 'nicht ausgefüllt';
+function normalizePhoneNumber(phone?: string): string | undefined {
+  if (!phone || !phone.trim()) return undefined;
   const compact = phone.replace(/\s+/g, '');
   if (compact.startsWith('0')) {
     return compact.replace(/^0/, '0049');
@@ -421,20 +421,24 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     return { matchState: 'unresolved', candidateCount: nameMatches.length };
   }
 
-  function cachePersonId(personId: number, email: string | undefined, phone: string): void {
+  function cachePersonId(personId: number, email: string | undefined, phone: string | undefined): void {
     if (email) {
       recentlyResolvedPersonIds.set(`email:${email}`, personId);
     }
-    recentlyResolvedPersonIds.set(`phone:${phone}`, personId);
+    if (phone) {
+      recentlyResolvedPersonIds.set(`phone:${phone}`, personId);
+    }
   }
 
-  async function findExistingPerson(email: string | undefined, phone: string): Promise<number | undefined> {
+  async function findExistingPerson(email: string | undefined, phone: string | undefined): Promise<number | undefined> {
     if (email) {
       const cachedPersonId = recentlyResolvedPersonIds.get(`email:${email}`);
       if (cachedPersonId) return cachedPersonId;
     }
-    const cachedPhonePersonId = recentlyResolvedPersonIds.get(`phone:${phone}`);
-    if (cachedPhonePersonId) return cachedPhonePersonId;
+    if (phone) {
+      const cachedPhonePersonId = recentlyResolvedPersonIds.get(`phone:${phone}`);
+      if (cachedPhonePersonId) return cachedPhonePersonId;
+    }
 
     if (email) {
       const personId = await searchPerson(email, 'email');
@@ -443,28 +447,31 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
         return personId;
       }
     }
-    const personId = await searchPerson(phone, 'phone');
-    if (personId) {
-      cachePersonId(personId, email, phone);
+    if (phone) {
+      const personId = await searchPerson(phone, 'phone');
+      if (personId) {
+        cachePersonId(personId, email, phone);
+      }
+      return personId;
     }
-    return personId;
+    return undefined;
   }
 
-  function buildPersonPayload(data: LeadData, firstName: string, lastName: string, phone: string, email: string | undefined, street: string, postalCode: string, city: string): Record<string, unknown> {
+  function buildPersonPayload(data: LeadData, firstName: string, lastName: string, phone: string | undefined, email: string | undefined, street: string, postalCode: string, city: string): Record<string, unknown> {
     return {
       name: `${firstName} ${lastName}`,
       owner_id: STEPHANIE_KREUZBUSCH_USER_ID,
-      phone: [{ value: phone, primary: true }],
+      ...(phone ? { phone: [{ value: phone, primary: true }] } : {}),
       ...(email ? { email: [{ value: email, primary: true }] } : {}),
       ...buildPersonCustomFields(data, street, postalCode, city),
     };
   }
 
-  async function createPerson(data: LeadData, firstName: string, lastName: string, phone: string, email: string | undefined, street: string, postalCode: string, city: string): Promise<{ id: number }> {
+  async function createPerson(data: LeadData, firstName: string, lastName: string, phone: string | undefined, email: string | undefined, street: string, postalCode: string, city: string): Promise<{ id: number }> {
     return apiCall('/persons', buildPersonPayload(data, firstName, lastName, phone, email, street, postalCode, city));
   }
 
-  async function updatePerson(personId: number, data: LeadData, firstName: string, lastName: string, phone: string, email: string | undefined, street: string, postalCode: string, city: string): Promise<void> {
+  async function updatePerson(personId: number, data: LeadData, firstName: string, lastName: string, phone: string | undefined, email: string | undefined, street: string, postalCode: string, city: string): Promise<void> {
     await apiCall(`/persons/${personId}`, buildPersonPayload(data, firstName, lastName, phone, email, street, postalCode, city), 'PUT');
   }
 
@@ -519,7 +526,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
 
     const person = await apiCall('/persons', {
       name: data.customerName,
-      phone: [{ value: data.phone, primary: true }],
+      ...(data.phone ? { phone: [{ value: data.phone, primary: true }] } : {}),
       ...(data.email ? { email: [{ value: data.email, primary: true }] } : {}),
     });
 

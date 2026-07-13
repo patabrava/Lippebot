@@ -151,6 +151,62 @@ describe('createPipedriveService', () => {
     expect(dealBody.person_id).toBe(654);
   });
 
+  it('createLead creates an email-only person without searching or writing a placeholder phone', async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const pathname = new URL(url).pathname;
+      if (url.includes('/persons/search') && url.includes('fields=email')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { items: [] } }),
+        };
+      }
+      if (url.includes('/persons/search') && url.includes('fields=phone')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { items: [] } }),
+        };
+      }
+      if (pathname.endsWith('/persons') && init?.method === 'POST') {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { id: 123 } }),
+        };
+      }
+      if (pathname.endsWith('/deals')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { id: 456 } }),
+        };
+      }
+      return {
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { id: 789 } }),
+      };
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const service = createPipedriveService('test-key', 2, 3);
+    const result = await service.createLead({
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      email: ' MAX@EXAMPLE.DE ',
+      postalCode: '12345',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00',
+    });
+
+    expect(result).toEqual({ personId: 123, dealId: 456 });
+    expect(mockFetch.mock.calls[0][0]).toContain('fields=email');
+    expect(mockFetch.mock.calls.some(([url]) => String(url).includes('fields=phone'))).toBe(false);
+    const personCall = mockFetch.mock.calls.find(([url]) => new URL(String(url)).pathname.endsWith('/persons'));
+    expect(personCall).toBeDefined();
+    const personBody = JSON.parse(personCall![1]!.body as string);
+    expect(personBody).not.toHaveProperty('phone');
+    expect(personBody.email).toEqual([{ value: 'max@example.de', primary: true }]);
+    expect(JSON.stringify(personBody)).not.toContain('nicht ausgefüllt');
+  });
+
   it('createLead creates a new person when searches find no existing person', async () => {
     const mockFetch = vi.fn()
       .mockResolvedValueOnce({

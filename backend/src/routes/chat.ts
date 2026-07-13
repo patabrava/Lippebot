@@ -13,6 +13,7 @@ import type {
   SupportNoteStatus,
 } from '../types/index.js';
 import { getSupportInbox, resolveSupportCategory } from '../support/support-routing.js';
+import { hasContactMethod } from '../contact/contact-method.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -27,7 +28,7 @@ function hasRequiredLeadFields(data: unknown): data is LeadData {
     data.customerSegment
     && data.firstName
     && data.lastName
-    && data.phone
+    && hasContactMethod(data)
     && data.street
     && data.postalCode
     && data.city
@@ -40,7 +41,12 @@ function hasRequiredServiceFields(data: unknown): data is SupportData {
     return false;
   }
 
-  return !!(data.customerName && data.category && data.issueDescription);
+  return !!(
+    data.customerName
+    && data.category
+    && data.issueDescription
+    && hasContactMethod(data)
+  );
 }
 
 function hasSupportDisambiguator(data: SupportData): boolean {
@@ -142,6 +148,13 @@ export function createChatRoute(deps: ChatDeps): Hono {
     leadData: LeadData,
     errorLabel: string,
   ): Promise<void> {
+    if (!hasRequiredLeadFields(leadData)) {
+      await stream.writeSSE({
+        data: JSON.stringify({ type: 'action', action: 'create_lead', data: { status: 'needs_contact' } }),
+      });
+      return;
+    }
+
     const existingResult = completedLeadActions.get(sessionId);
     if (existingResult) {
       await stream.writeSSE({
@@ -190,6 +203,13 @@ export function createChatRoute(deps: ChatDeps): Hono {
     sessionId: string,
     supportData: SupportData,
   ): Promise<void> {
+    if (!hasRequiredServiceFields(supportData)) {
+      await stream.writeSSE({
+        data: JSON.stringify({ type: 'action', action: 'create_service', data: { status: 'needs_contact' } }),
+      });
+      return;
+    }
+
     const existingResult = completedSupportActions.get(sessionId);
     if (existingResult) {
       const existingActionResult = buildSupportClientActionResult(existingResult, supportData);
