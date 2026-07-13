@@ -7,6 +7,8 @@ export type ConversationEventType =
   | 'lead_duplicate'
   | 'support_handoff_created'
   | 'support_handoff_duplicate'
+  | 'crm_transcript_note_created'
+  | 'crm_transcript_note_failed'
   | 'abandoned_summary_sent'
   | 'abandoned_summary_failed'
   | 'chat_done'

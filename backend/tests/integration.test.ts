@@ -26,6 +26,7 @@ function createMockPipedrive(): PipedriveService {
     createServiceActivity: vi.fn(),
     resolveSupportPerson: vi.fn(),
     createSupportNote: vi.fn(),
+    createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
   };
 }
 
@@ -126,6 +127,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson: vi.fn(),
         createSupportNote: vi.fn(),
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: createMockEmail(),
       notificationEmailTo: '',
@@ -172,6 +174,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson: vi.fn(),
         createSupportNote: vi.fn(),
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: createMockEmail(),
       notificationEmailTo: '',
@@ -250,6 +253,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson: vi.fn(),
         createSupportNote: vi.fn(),
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: createMockEmail(),
       notificationEmailTo: '',
@@ -304,6 +308,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson: vi.fn(),
         createSupportNote: vi.fn(),
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: createMockEmail(),
       notificationEmailTo: '',
@@ -349,6 +354,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson: vi.fn(),
         createSupportNote: vi.fn(),
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: createMockEmail(),
       notificationEmailTo: '',
@@ -395,6 +401,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson: vi.fn(),
         createSupportNote: vi.fn(),
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: createMockEmail(),
       notificationEmailTo: '',
@@ -455,6 +462,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson: vi.fn(),
         createSupportNote: vi.fn(),
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
         ...createMockEmail(),
@@ -520,6 +528,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson: vi.fn(),
         createSupportNote: vi.fn(),
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
         ...createMockEmail(),
@@ -577,6 +586,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson: vi.fn(),
         createSupportNote: vi.fn(),
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
         ...createMockEmail(),
@@ -611,6 +621,228 @@ describe('POST /api/chat', () => {
     expect(errorSpy).toHaveBeenCalledWith('Lead creation error:', expect.any(Error));
   });
 
+  it('writes the complete opportunity transcript before reporting chat completion', async () => {
+    const tracker = createMockTracker();
+    const sequence: string[] = [];
+    const leadData = {
+      customerSegment: 'privatperson' as const,
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      email: 'max.transcript@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+    };
+    const createChatTranscriptNote = vi.fn().mockImplementation(async () => {
+      await Promise.resolve();
+      sequence.push('transcript');
+      return { noteId: 9101 };
+    });
+    vi.mocked(tracker.recordEvent).mockImplementation(async (input) => {
+      if (input.eventType === 'chat_done') sequence.push('done');
+    });
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'lead' as const, leadData };
+          yield { type: 'token' as const, content: 'Die Anfrage wurde vollständig aufgenommen.' };
+          yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: leadData } };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead: vi.fn().mockResolvedValue({ outcome: 'created', personId: 321, dealId: 654 }),
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson: vi.fn(),
+        createSupportNote: vi.fn(),
+        createChatTranscriptNote,
+      },
+      email: createMockEmail(),
+      conversationTracker: tracker,
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'opportunity-transcript',
+        message: 'Bitte senden Sie die Anfrage ab.',
+        history: [
+          { role: 'assistant', content: 'Willkommen bei LIPPE Lift.', timestamp: Date.parse('2026-07-13T08:00:00Z') },
+          { role: 'user', content: 'Ich brauche einen Sitzlift.', timestamp: Date.parse('2026-07-13T08:01:00Z') },
+        ],
+      }),
+    })).text();
+
+    expect(createChatTranscriptNote).toHaveBeenCalledWith(321, 654, expect.any(String));
+    const transcript = createChatTranscriptNote.mock.calls[0][2];
+    expect(transcript).toContain('Willkommen bei LIPPE Lift.');
+    expect(transcript).toContain('Ich brauche einen Sitzlift.');
+    expect(transcript).toContain('Bitte senden Sie die Anfrage ab.');
+    expect(transcript).toContain('Die Anfrage wurde vollständig aufgenommen.');
+    expect(sequence).toEqual(['transcript', 'done']);
+    expect(text).toContain('"type":"done"');
+  });
+
+  it('writes a separate complete transcript note for a resolved support case', async () => {
+    const supportData = {
+      customerName: 'Maria Schmidt',
+      phone: '05261 96660',
+      category: 'technik' as const,
+      issueDescription: 'Der Lift bleibt stehen.',
+    };
+    const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
+    const createChatTranscriptNote = vi.fn().mockResolvedValue({ noteId: 9102 });
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'service' as const, serviceData: supportData };
+          yield { type: 'token' as const, content: 'Der Servicefall wurde aufgenommen.' };
+          yield { type: 'state' as const, state: { sessionId, mode: 'service' as const, collectedData: supportData } };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead: vi.fn(),
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson: vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, dealId: 7001, candidateCount: 1 }),
+        createSupportNote,
+        createChatTranscriptNote,
+      },
+      email: createMockEmail(),
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'support-transcript',
+        message: 'Bitte eröffnen Sie den Fall.',
+        history: [{ role: 'user', content: 'Mein Lift ist defekt.', timestamp: Date.parse('2026-07-13T08:00:00Z') }],
+      }),
+    })).text();
+
+    expect(createSupportNote).toHaveBeenCalledWith(501, supportData, 7001);
+    expect(createChatTranscriptNote).toHaveBeenCalledWith(501, 7001, expect.stringContaining('Vollständiges Sarah-Chatprotokoll'));
+    expect(createChatTranscriptNote.mock.calls[0][2]).toContain('Der Servicefall wurde aufgenommen.');
+  });
+
+  it('retries transcript persistence and does not duplicate a successful session note', async () => {
+    const tracker = createMockTracker();
+    const leadData = {
+      customerSegment: 'privatperson' as const,
+      firstName: 'Retry',
+      lastName: 'Test',
+      phone: '05261 96660',
+      street: 'Musterstrasse 2',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+    };
+    const createChatTranscriptNote = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary 1'))
+      .mockRejectedValueOnce(new Error('temporary 2'))
+      .mockResolvedValueOnce({ noteId: 9103 });
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'lead' as const, leadData };
+          yield { type: 'token' as const, content: 'Erledigt.' };
+          yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: leadData } };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead: vi.fn().mockResolvedValue({ outcome: 'reused', personId: 321, dealId: 654 }),
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson: vi.fn(),
+        createSupportNote: vi.fn(),
+        createChatTranscriptNote,
+      },
+      email: createMockEmail(),
+      conversationTracker: tracker,
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const body = JSON.stringify({ sessionId: 'retry-transcript', message: 'Abschließen', history: [] });
+
+    await (await testApp.request('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })).text();
+    await (await testApp.request('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })).text();
+
+    expect(createChatTranscriptNote).toHaveBeenCalledTimes(3);
+    expect(tracker.recordEvent).toHaveBeenCalledWith({
+      sessionId: 'retry-transcript',
+      eventType: 'crm_transcript_note_created',
+      payload: { personId: 321, dealId: 654, noteId: 9103 },
+    });
+  });
+
+  it('does not report done when mandatory transcript persistence fails three times', async () => {
+    const tracker = createMockTracker();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const leadData = {
+      customerSegment: 'privatperson' as const,
+      firstName: 'Failure',
+      lastName: 'Test',
+      phone: '05261 96660',
+      street: 'Musterstrasse 3',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+    };
+    const createChatTranscriptNote = vi.fn().mockRejectedValue(new Error('Pipedrive notes unavailable'));
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'lead' as const, leadData };
+          yield { type: 'token' as const, content: 'Die Anfrage ist aufgenommen.' };
+          yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: leadData } };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead: vi.fn().mockResolvedValue({ outcome: 'created', personId: 321, dealId: 654 }),
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson: vi.fn(),
+        createSupportNote: vi.fn(),
+        createChatTranscriptNote,
+      },
+      email: createMockEmail(),
+      conversationTracker: tracker,
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'failed-transcript', message: 'Abschließen', history: [] }),
+    })).text();
+
+    expect(createChatTranscriptNote).toHaveBeenCalledTimes(3);
+    expect(tracker.recordEvent).toHaveBeenCalledWith({
+      sessionId: 'failed-transcript',
+      eventType: 'crm_transcript_note_failed',
+      payload: { personId: 321, dealId: 654, error: 'Pipedrive notes unavailable' },
+    });
+    expect(text).toContain('"type":"error"');
+    expect(text).not.toContain('"type":"done"');
+    expect(errorSpy).toHaveBeenCalledWith('Chat stream error:', expect.any(Error));
+  });
+
   it('creates a compact support note and sends one routed support email for a unique match', async () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
@@ -635,6 +867,7 @@ describe('POST /api/chat', () => {
         createServiceActivity,
         resolveSupportPerson,
         createSupportNote,
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
         isConfigured: () => true,
@@ -696,6 +929,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson,
         createSupportNote,
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
         isConfigured: () => true,
@@ -752,6 +986,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson,
         createSupportNote,
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
         isConfigured: () => true,
@@ -794,6 +1029,7 @@ describe('POST /api/chat', () => {
         createServiceActivity,
         resolveSupportPerson,
         createSupportNote,
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
         isConfigured: () => true,
@@ -844,6 +1080,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson,
         createSupportNote: vi.fn(),
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
         isConfigured: () => true,
@@ -896,6 +1133,7 @@ describe('POST /api/chat', () => {
         createServiceActivity,
         resolveSupportPerson,
         createSupportNote,
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
         isConfigured: () => true,
@@ -952,6 +1190,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson,
         createSupportNote,
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
         isConfigured: () => true,
@@ -1013,6 +1252,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson,
         createSupportNote,
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
         isConfigured: () => true,
@@ -1154,6 +1394,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson: vi.fn(),
         createSupportNote: vi.fn(),
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: createMockEmail(),
       conversationTracker: tracker,
@@ -1204,6 +1445,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson: vi.fn().mockResolvedValue({ matchState: 'unique', personId: 789, candidateCount: 1 }),
         createSupportNote: vi.fn().mockResolvedValue(undefined),
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: createMockEmail(),
       conversationTracker: tracker,
@@ -1265,6 +1507,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson: vi.fn().mockResolvedValue({ matchState: 'unique', personId: 789, candidateCount: 1 }),
         createSupportNote: vi.fn().mockResolvedValue(undefined),
+        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
         isConfigured: () => true,

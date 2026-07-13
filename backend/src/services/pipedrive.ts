@@ -733,12 +733,26 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     return { noteId: note.id };
   }
 
+  async function createChatTranscriptNote(personId: number, dealId: number | undefined, content: string): Promise<{ noteId: number }> {
+    if (!configured) throw new Error('Pipedrive not configured');
+
+    const note = await apiCall('/notes', {
+      person_id: personId,
+      ...(dealId ? { deal_id: dealId, pinned_to_deal_flag: 1 } : {}),
+      content,
+      pinned_to_person_flag: 1,
+    });
+
+    return { noteId: note.id };
+  }
+
   return {
     isConfigured: () => configured,
     createLead,
     createServiceActivity,
     resolveSupportPerson,
     createSupportNote,
+    createChatTranscriptNote,
   };
 }
 

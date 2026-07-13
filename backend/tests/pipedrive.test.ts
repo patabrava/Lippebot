@@ -1473,4 +1473,46 @@ describe('createPipedriveService', () => {
     expect(body.content).toContain('Angebotsnummer: 14.28');
     expect(body.content).toContain('Lead-ID: LEAD-123');
   });
+
+  it('createChatTranscriptNote pins a full chat transcript to its person and opportunity', async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ success: true, data: { id: 9101 } }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const service = createPipedriveService('test-key', 1, 2);
+    const content = '<strong>Vollständiges Sarah-Chatprotokoll</strong>';
+    const result = await service.createChatTranscriptNote(501, 7001, content);
+
+    expect(result).toEqual({ noteId: 9101 });
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body).toEqual({
+      person_id: 501,
+      deal_id: 7001,
+      content,
+      pinned_to_person_flag: 1,
+      pinned_to_deal_flag: 1,
+    });
+  });
+
+  it('createChatTranscriptNote pins a case transcript to its person when no opportunity exists', async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ success: true, data: { id: 9102 } }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const service = createPipedriveService('test-key', 1, 2);
+    const content = '<strong>Vollständiges Sarah-Chatprotokoll</strong>';
+    const result = await service.createChatTranscriptNote(501, undefined, content);
+
+    expect(result).toEqual({ noteId: 9102 });
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body).toEqual({
+      person_id: 501,
+      content,
+      pinned_to_person_flag: 1,
+    });
+  });
 });

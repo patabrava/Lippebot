@@ -15,6 +15,7 @@ import type {
 } from '../types/index.js';
 import { getSupportInbox, resolveSupportCategory } from '../support/support-routing.js';
 import { hasContactMethod } from '../contact/contact-method.js';
+import { buildPipedriveTranscriptNote } from '../chat/transcript.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -147,6 +148,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
   const tracker = deps.conversationTracker;
   const completedLeadActions = new Map<string, LeadInternalResult>();
   const completedSupportActions = new Map<string, SupportHandoffResult>();
+  const completedTranscriptNotes = new Set<string>();
   const completedAbandonedSummaries = new Set<string>();
 
   async function emitLeadAction(
@@ -154,12 +156,12 @@ export function createChatRoute(deps: ChatDeps): Hono {
     sessionId: string,
     leadData: LeadData,
     errorLabel: string,
-  ): Promise<void> {
+  ): Promise<LeadInternalResult | undefined> {
     if (!hasRequiredLeadFields(leadData)) {
       await stream.writeSSE({
         data: JSON.stringify({ type: 'action', action: 'create_lead', data: { status: 'needs_contact' } }),
       });
-      return;
+      return undefined;
     }
 
     const existingResult = completedLeadActions.get(sessionId);
@@ -175,7 +177,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
           payload: { ...existingResult },
         }));
       }
-      return;
+      return existingResult;
     }
 
     let result: LeadInternalResult;
@@ -229,18 +231,19 @@ export function createChatRoute(deps: ChatDeps): Hono {
     await stream.writeSSE({
       data: JSON.stringify({ type: 'action', action: 'create_lead', data: clientResult }),
     });
+    return result;
   }
 
   async function emitSupportAction(
     stream: Parameters<Parameters<typeof streamSSE>[1]>[0],
     sessionId: string,
     supportData: SupportData,
-  ): Promise<void> {
+  ): Promise<SupportHandoffResult | undefined> {
     if (!hasRequiredServiceFields(supportData)) {
       await stream.writeSSE({
         data: JSON.stringify({ type: 'action', action: 'create_service', data: { status: 'needs_contact' } }),
       });
-      return;
+      return undefined;
     }
 
     const existingResult = completedSupportActions.get(sessionId);
@@ -256,7 +259,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
           payload: existingResult as unknown as Record<string, unknown>,
         }));
       }
-      return;
+      return existingResult;
     }
 
     const category = resolveSupportCategory(supportData);
@@ -345,6 +348,51 @@ export function createChatRoute(deps: ChatDeps): Hono {
     await stream.writeSSE({
       data: JSON.stringify({ type: 'action', action: 'create_service', data: clientActionResult }),
     });
+    return result;
+  }
+
+  async function persistTranscriptNote(
+    sessionId: string,
+    personId: number | undefined,
+    dealId: number | undefined,
+    content: string,
+  ): Promise<void> {
+    if (!personId) return;
+
+    const completionKey = `${sessionId}:${personId}:${dealId ?? 'person'}`;
+    if (completedTranscriptNotes.has(completionKey)) return;
+
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const { noteId } = await deps.pipedrive.createChatTranscriptNote(personId, dealId, content);
+        completedTranscriptNotes.add(completionKey);
+        if (tracker?.isEnabled()) {
+          await track(() => tracker.recordEvent({
+            sessionId,
+            eventType: 'crm_transcript_note_created',
+            payload: { personId, ...(dealId ? { dealId } : {}), noteId },
+          }));
+        }
+        return;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+
+    const error = lastError instanceof Error ? lastError : new Error(String(lastError));
+    if (tracker?.isEnabled()) {
+      await track(() => tracker.recordEvent({
+        sessionId,
+        eventType: 'crm_transcript_note_failed',
+        payload: {
+          personId,
+          ...(dealId ? { dealId } : {}),
+          error: error.message,
+        },
+      }));
+    }
+    throw error;
   }
 
   app.post('/api/chat', async (c) => {
@@ -359,6 +407,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
 
     return streamSSE(c, async (stream) => {
       try {
+        const currentUserTimestamp = Date.now();
         if (tracker?.isEnabled()) {
           void track(async () => {
             await tracker.ensureSession(sessionId);
@@ -376,6 +425,8 @@ export function createChatRoute(deps: ChatDeps): Hono {
         let lastCollectedData = {};
         let leadActionAttempted = false;
         let serviceActionAttempted = false;
+        let leadResult: LeadInternalResult | undefined;
+        let supportResult: SupportHandoffResult | undefined;
         let assistantText = '';
 
         for await (const event of gen) {
@@ -403,12 +454,12 @@ export function createChatRoute(deps: ChatDeps): Hono {
 
           if (event.type === 'lead' && event.leadData) {
             leadActionAttempted = true;
-            await emitLeadAction(stream, sessionId, event.leadData, 'Lead creation error:');
+            leadResult = await emitLeadAction(stream, sessionId, event.leadData, 'Lead creation error:');
           }
 
           if (event.type === 'service' && event.serviceData) {
             serviceActionAttempted = true;
-            await emitSupportAction(stream, sessionId, event.serviceData);
+            supportResult = await emitSupportAction(stream, sessionId, event.serviceData);
           }
         }
 
@@ -416,11 +467,22 @@ export function createChatRoute(deps: ChatDeps): Hono {
         // trigger Pipedrive/email based on mode + collected data completeness
         const collectedObj = lastCollectedData as Record<string, unknown>;
         if (!leadActionAttempted && lastMode === 'anfrage' && hasRequiredLeadFields(collectedObj)) {
-          await emitLeadAction(stream, sessionId, collectedObj as LeadData, 'Lead creation from state error:');
+          leadResult = await emitLeadAction(stream, sessionId, collectedObj as LeadData, 'Lead creation from state error:');
         }
         if (!serviceActionAttempted && lastMode === 'service' && hasRequiredServiceFields(collectedObj)) {
-          await emitSupportAction(stream, sessionId, collectedObj as SupportData);
+          supportResult = await emitSupportAction(stream, sessionId, collectedObj as SupportData);
         }
+
+        const transcript = buildPipedriveTranscriptNote({
+          sessionId,
+          history,
+          currentMessage: message,
+          assistantText,
+          currentUserTimestamp,
+          assistantTimestamp: Date.now(),
+        });
+        await persistTranscriptNote(sessionId, leadResult?.personId, leadResult?.dealId, transcript);
+        await persistTranscriptNote(sessionId, supportResult?.personId, supportResult?.dealId, transcript);
 
         if (tracker?.isEnabled() && assistantText.trim().length > 0) {
           void track(() => tracker.recordMessage({
