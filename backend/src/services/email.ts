@@ -2,11 +2,19 @@ import nodemailer from 'nodemailer';
 import { buildSupportEmailHtml, buildSupportEmailSubject } from '../support/support-routing.js';
 import type {
   LeadData,
+  LeadCrmOutcome,
   ServiceData,
   SupportData,
   SupportMatchState,
   SupportNoteStatus,
 } from '../types/index.js';
+
+export interface LeadNotificationContext {
+  outcome: LeadCrmOutcome | 'failed';
+  personId?: number;
+  dealId?: number;
+  reason?: string;
+}
 
 interface SmtpConfig {
   host: string;
@@ -62,12 +70,30 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
 
   const from = smtp.user || 'sarah@lippelift.de';
 
-  async function sendLeadNotification(to: string, data: LeadData): Promise<void> {
+  async function sendLeadNotification(
+    to: string,
+    data: LeadData,
+    crmContext?: LeadNotificationContext,
+  ): Promise<void> {
     if (!configured && !sendOverride) return;
+
+    const crmLabel = crmContext
+      ? {
+        created: 'Neuer CRM-Fall erstellt',
+        reused: 'Bestehender CRM-Fall wiederverwendet',
+        person_review: 'Manuelle Fallauswahl erforderlich',
+        identity_review: 'Manuelle Identitätsprüfung erforderlich',
+        failed: 'CRM-Übertragung fehlgeschlagen',
+      }[crmContext.outcome]
+      : undefined;
 
     const html = `
       <h2>Neue Anfrage über Sarah (Chatbot)</h2>
       <table style="border-collapse:collapse;">
+        ${crmLabel ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">CRM-Zuordnung:</td><td>${crmLabel}</td></tr>` : ''}
+        ${crmContext?.personId ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Person-ID:</td><td>${crmContext.personId}</td></tr>` : ''}
+        ${crmContext?.dealId ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Fall-ID:</td><td>${crmContext.dealId}</td></tr>` : ''}
+        ${crmContext?.reason ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">CRM-Hinweis:</td><td>${escapeHtml(crmContext.reason)}</td></tr>` : ''}
         <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Name:</td><td>${data.firstName} ${data.lastName}</td></tr>
         ${data.phone ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Telefon:</td><td>${data.phone}</td></tr>` : ''}
         ${data.email ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">E-Mail:</td><td>${data.email}</td></tr>` : ''}

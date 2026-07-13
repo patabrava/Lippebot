@@ -34,6 +34,16 @@ export interface LeadData {
   newsletter?: 'Ja' | 'Nein';
 }
 
+export type LeadCrmOutcome = 'created' | 'reused' | 'person_review' | 'identity_review';
+
+export interface LeadCrmResult {
+  outcome: LeadCrmOutcome;
+  personId?: number;
+  dealId?: number;
+  candidateCount?: number;
+  reason?: string;
+}
+
 export interface SupportData {
   customerName?: string;
   phone?: string;

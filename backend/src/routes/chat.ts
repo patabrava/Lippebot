@@ -7,6 +7,7 @@ import type { EmailService } from '../services/email.js';
 import type { ConversationTracker } from '../services/conversation-tracking.js';
 import type {
   ChatMessage,
+  LeadCrmResult,
   LeadData,
   SupportData,
   SupportHandoffResult,
@@ -95,7 +96,13 @@ interface ChatDeps {
   serviceEmailTo: string;
 }
 
-type LeadActionResult = { personId: number; dealId: number };
+type LeadInternalResult = LeadCrmResult | {
+  outcome: 'failed';
+  reason: string;
+  personId?: never;
+  dealId?: never;
+};
+type LeadClientActionResult = { status: 'accepted' | 'needs_contact' };
 type SupportClientActionResult = { status: 'accepted' | 'needs_contact' };
 
 type TranscriptMessage = z.infer<typeof abandonedChatRequestSchema>['history'][number];
@@ -138,7 +145,7 @@ async function track(write: () => Promise<void>): Promise<void> {
 export function createChatRoute(deps: ChatDeps): Hono {
   const app = new Hono();
   const tracker = deps.conversationTracker;
-  const completedLeadActions = new Map<string, LeadActionResult>();
+  const completedLeadActions = new Map<string, LeadInternalResult>();
   const completedSupportActions = new Map<string, SupportHandoffResult>();
   const completedAbandonedSummaries = new Set<string>();
 
@@ -157,45 +164,71 @@ export function createChatRoute(deps: ChatDeps): Hono {
 
     const existingResult = completedLeadActions.get(sessionId);
     if (existingResult) {
+      const clientResult: LeadClientActionResult = { status: 'accepted' };
       await stream.writeSSE({
-        data: JSON.stringify({ type: 'action', action: 'create_lead', data: existingResult, duplicate: true }),
+        data: JSON.stringify({ type: 'action', action: 'create_lead', data: clientResult, duplicate: true }),
       });
       if (tracker?.isEnabled()) {
         void track(() => tracker.recordEvent({
           sessionId,
           eventType: 'lead_duplicate',
-          payload: existingResult,
+          payload: { ...existingResult },
         }));
       }
       return;
     }
 
-    try {
-      if (deps.pipedrive.isConfigured()) {
-        const result = await deps.pipedrive.createLead(leadData);
-        completedLeadActions.set(sessionId, result);
-        if (tracker?.isEnabled()) {
-          void track(() => tracker.recordEvent({
-            sessionId,
-            eventType: 'lead_created',
-            payload: result,
-          }));
-          void track(() => tracker.updateSession({
-            sessionId,
-            leadPersonId: result.personId,
-            leadDealId: result.dealId,
-          }));
-        }
-        await stream.writeSSE({
-          data: JSON.stringify({ type: 'action', action: 'create_lead', data: result }),
-        });
+    let result: LeadInternalResult;
+    if (!deps.pipedrive.isConfigured()) {
+      result = { outcome: 'failed', reason: 'pipedrive_not_configured' };
+    } else {
+      try {
+        result = await deps.pipedrive.createLead(leadData);
+      } catch (err) {
+        console.error(errorLabel, err);
+        result = {
+          outcome: 'failed',
+          reason: err instanceof Error ? err.message : 'unknown_pipedrive_error',
+        };
       }
-      if (deps.email.isConfigured() && deps.notificationEmailTo) {
-        await deps.email.sendLeadNotification(deps.notificationEmailTo, leadData);
-      }
-    } catch (err) {
-      console.error(errorLabel, err);
     }
+
+    completedLeadActions.set(sessionId, result);
+
+    if (tracker?.isEnabled()) {
+      const eventType = result.outcome === 'created'
+        ? 'lead_created'
+        : result.outcome === 'reused'
+          ? 'lead_reused'
+          : result.outcome === 'failed'
+            ? 'lead_failed'
+            : 'lead_review';
+      void track(() => tracker.recordEvent({
+        sessionId,
+        eventType,
+        payload: { ...result },
+      }));
+      if (result.personId || result.dealId) {
+        void track(() => tracker.updateSession({
+          sessionId,
+          leadPersonId: result.personId,
+          leadDealId: result.dealId,
+        }));
+      }
+    }
+
+    if (deps.email.isConfigured() && deps.notificationEmailTo) {
+      try {
+        await deps.email.sendLeadNotification(deps.notificationEmailTo, leadData, result);
+      } catch (err) {
+        console.error('Lead notification error:', err);
+      }
+    }
+
+    const clientResult: LeadClientActionResult = { status: 'accepted' };
+    await stream.writeSSE({
+      data: JSON.stringify({ type: 'action', action: 'create_lead', data: clientResult }),
+    });
   }
 
   async function emitSupportAction(

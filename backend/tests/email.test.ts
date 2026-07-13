@@ -61,6 +61,61 @@ describe('createEmailService', () => {
     expect(call.html).not.toContain('Telefon:</td>');
   });
 
+  it('sendLeadNotification identifies a reused CRM case for the internal team', async () => {
+    const sendMock = vi.fn().mockResolvedValue({ messageId: 'reused-lead' });
+    const service = createEmailService(
+      { host: 'smtp.test.com', port: 587, user: 'a', pass: 'b' },
+      sendMock,
+    );
+
+    await service.sendLeadNotification('test@example.com', {
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      email: 'max@example.de',
+      city: 'Lemgo',
+      postalCode: '32657',
+      availability: '08:00 - 12:00',
+    }, {
+      outcome: 'reused',
+      personId: 123,
+      dealId: 456,
+    });
+
+    const call = sendMock.mock.calls[0][0];
+    expect(call.html).toContain('Bestehender CRM-Fall wiederverwendet');
+    expect(call.html).toContain('123');
+    expect(call.html).toContain('456');
+  });
+
+  it.each([
+    ['identity_review', 'Manuelle Identitätsprüfung erforderlich'],
+    ['person_review', 'Manuelle Fallauswahl erforderlich'],
+    ['failed', 'CRM-Übertragung fehlgeschlagen'],
+  ] as const)('sendLeadNotification renders the %s CRM outcome safely', async (outcome, expectedLabel) => {
+    const sendMock = vi.fn().mockResolvedValue({ messageId: `lead-${outcome}` });
+    const service = createEmailService(
+      { host: 'smtp.test.com', port: 587, user: 'a', pass: 'b' },
+      sendMock,
+    );
+
+    await service.sendLeadNotification('test@example.com', {
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      email: 'max@example.de',
+      city: 'Lemgo',
+      postalCode: '32657',
+      availability: '08:00 - 12:00',
+    }, {
+      outcome,
+      reason: '<unsafe reason>',
+    });
+
+    const call = sendMock.mock.calls[0][0];
+    expect(call.html).toContain(expectedLabel);
+    expect(call.html).toContain('&lt;unsafe reason&gt;');
+    expect(call.html).not.toContain('<unsafe reason>');
+  });
+
   it('sendServiceNotification formats email correctly', async () => {
     const sendMock = vi.fn().mockResolvedValue({ messageId: '456' });
     const service = createEmailService(

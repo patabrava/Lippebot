@@ -1,6 +1,9 @@
 export type ConversationEventType =
   | 'state_reported'
   | 'lead_created'
+  | 'lead_reused'
+  | 'lead_review'
+  | 'lead_failed'
   | 'lead_duplicate'
   | 'support_handoff_created'
   | 'support_handoff_duplicate'

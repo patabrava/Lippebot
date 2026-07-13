@@ -224,7 +224,7 @@ describe('POST /api/chat', () => {
   });
 
   it('emits a lead action when completed lead data is submitted through state fallback', async () => {
-    const createLead = vi.fn().mockResolvedValue({ personId: 321, dealId: 654 });
+    const createLead = vi.fn().mockResolvedValue({ outcome: 'created', personId: 321, dealId: 654 });
     const leadData = {
       customerSegment: 'Privatperson' as never,
       firstName: 'Max',
@@ -272,8 +272,9 @@ describe('POST /api/chat', () => {
     expect(createLead).toHaveBeenCalledWith(leadData);
     const text = await res.text();
     expect(text).toContain('"action":"create_lead"');
-    expect(text).toContain('"personId":321');
-    expect(text).toContain('"dealId":654');
+    expect(text).toContain('"status":"accepted"');
+    expect(text).not.toContain('"personId"');
+    expect(text).not.toContain('"dealId"');
   });
 
   it('emits a lead action for complete email-only state fallback data', async () => {
@@ -368,7 +369,7 @@ describe('POST /api/chat', () => {
   });
 
   it('does not create a second lead when the same session reports completed data again', async () => {
-    const createLead = vi.fn().mockResolvedValue({ personId: 321, dealId: 654 });
+    const createLead = vi.fn().mockResolvedValue({ outcome: 'created', personId: 321, dealId: 654 });
     const leadData = {
       customerSegment: 'Privatperson' as never,
       firstName: 'Max',
@@ -423,8 +424,191 @@ describe('POST /api/chat', () => {
     expect(createLead).toHaveBeenCalledTimes(1);
     const secondText = await second.text();
     expect(secondText).toContain('"action":"create_lead"');
-    expect(secondText).toContain('"dealId":654');
+    expect(secondText).toContain('"status":"accepted"');
+    expect(secondText).not.toContain('"dealId"');
     expect(secondText).toContain('"duplicate":true');
+  });
+
+  it('keeps a reused CRM case internal while notifying and tracking the reuse', async () => {
+    const tracker = createMockTracker();
+    const createLead = vi.fn().mockResolvedValue({ outcome: 'reused', personId: 321, dealId: 654 });
+    const sendLeadNotification = vi.fn().mockResolvedValue(undefined);
+    const leadData = {
+      customerSegment: 'Privatperson' as never,
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      email: 'max@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          yield { type: 'lead' as const, leadData };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead,
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson: vi.fn(),
+        createSupportNote: vi.fn(),
+      },
+      email: {
+        ...createMockEmail(),
+        isConfigured: () => true,
+        sendLeadNotification,
+      },
+      conversationTracker: tracker,
+      notificationEmailTo: 'team@example.com',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'reused-case', message: 'Noch eine Anfrage', history: [] }),
+    });
+
+    const text = await res.text();
+    expect(text).toContain('"action":"create_lead"');
+    expect(text).toContain('"status":"accepted"');
+    expect(text).not.toContain('"personId"');
+    expect(text).not.toContain('"dealId"');
+    expect(text).not.toContain('reused');
+    expect(sendLeadNotification).toHaveBeenCalledWith('team@example.com', leadData, {
+      outcome: 'reused',
+      personId: 321,
+      dealId: 654,
+    });
+    expect(tracker.recordEvent).toHaveBeenCalledWith({
+      sessionId: 'reused-case',
+      eventType: 'lead_reused',
+      payload: { outcome: 'reused', personId: 321, dealId: 654 },
+    });
+  });
+
+  it.each([
+    [{ outcome: 'person_review', personId: 321, candidateCount: 2, reason: 'multiple_open_deals' }, 'review-person'],
+    [{ outcome: 'identity_review', candidateCount: 2, reason: 'conflicting_contact_identifiers' }, 'review-identity'],
+  ] as const)('keeps the %s lead review internal while notifying and tracking it', async (crmResult, sessionId) => {
+    const tracker = createMockTracker();
+    const sendLeadNotification = vi.fn().mockResolvedValue(undefined);
+    const leadData = {
+      customerSegment: 'Privatperson' as never,
+      firstName: 'Review',
+      lastName: 'Test',
+      email: 'review@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          yield { type: 'lead' as const, leadData };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead: vi.fn().mockResolvedValue(crmResult),
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson: vi.fn(),
+        createSupportNote: vi.fn(),
+      },
+      email: {
+        ...createMockEmail(),
+        isConfigured: () => true,
+        sendLeadNotification,
+      },
+      conversationTracker: tracker,
+      notificationEmailTo: 'team@example.com',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, message: 'Bitte prüfen', history: [] }),
+    })).text();
+
+    expect(text).toContain('"status":"accepted"');
+    expect(text).not.toContain(crmResult.outcome);
+    expect(text).not.toContain('"personId"');
+    expect(sendLeadNotification).toHaveBeenCalledWith('team@example.com', leadData, crmResult);
+    expect(tracker.recordEvent).toHaveBeenCalledWith({
+      sessionId,
+      eventType: 'lead_review',
+      payload: crmResult,
+    });
+  });
+
+  it('still accepts and emails a complete lead when Pipedrive fails', async () => {
+    const tracker = createMockTracker();
+    const createLead = vi.fn().mockRejectedValue(new Error('Pipedrive unavailable'));
+    const sendLeadNotification = vi.fn().mockResolvedValue(undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const leadData = {
+      customerSegment: 'Privatperson' as never,
+      firstName: 'Erika',
+      lastName: 'Test',
+      phone: '05261 96660',
+      street: 'Musterstrasse 2',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          yield { type: 'lead' as const, leadData };
+        },
+      },
+      pipedrive: {
+        isConfigured: () => true,
+        createLead,
+        createServiceActivity: vi.fn(),
+        resolveSupportPerson: vi.fn(),
+        createSupportNote: vi.fn(),
+      },
+      email: {
+        ...createMockEmail(),
+        isConfigured: () => true,
+        sendLeadNotification,
+      },
+      conversationTracker: tracker,
+      notificationEmailTo: 'team@example.com',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'crm-failed', message: 'Bitte zurückrufen', history: [] }),
+    });
+
+    const text = await res.text();
+    expect(text).toContain('"status":"accepted"');
+    expect(text).not.toContain('Pipedrive unavailable');
+    expect(sendLeadNotification).toHaveBeenCalledWith('team@example.com', leadData, {
+      outcome: 'failed',
+      reason: 'Pipedrive unavailable',
+    });
+    expect(tracker.recordEvent).toHaveBeenCalledWith({
+      sessionId: 'crm-failed',
+      eventType: 'lead_failed',
+      payload: { outcome: 'failed', reason: 'Pipedrive unavailable' },
+    });
+    expect(errorSpy).toHaveBeenCalledWith('Lead creation error:', expect.any(Error));
   });
 
   it('creates a compact support note and sends one routed support email for a unique match', async () => {
@@ -946,7 +1130,7 @@ describe('POST /api/chat', () => {
 
   it('records lead_created and lead_duplicate events', async () => {
     const tracker = createMockTracker();
-    const createLead = vi.fn().mockResolvedValue({ personId: 123, dealId: 456 });
+    const createLead = vi.fn().mockResolvedValue({ outcome: 'created', personId: 123, dealId: 456 });
     const leadData = {
       customerSegment: 'Privatperson' as never,
       firstName: 'Max',
@@ -986,12 +1170,12 @@ describe('POST /api/chat', () => {
     expect(tracker.recordEvent).toHaveBeenCalledWith({
       sessionId: 'tracked-lead',
       eventType: 'lead_created',
-      payload: { personId: 123, dealId: 456 },
+      payload: { outcome: 'created', personId: 123, dealId: 456 },
     });
     expect(tracker.recordEvent).toHaveBeenCalledWith({
       sessionId: 'tracked-lead',
       eventType: 'lead_duplicate',
-      payload: { personId: 123, dealId: 456 },
+      payload: { outcome: 'created', personId: 123, dealId: 456 },
     });
     expect(tracker.updateSession).toHaveBeenCalledWith({
       sessionId: 'tracked-lead',

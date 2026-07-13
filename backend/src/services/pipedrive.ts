@@ -1,5 +1,5 @@
 import { buildSupportNoteContent } from '../support/support-routing.js';
-import type { LeadData, ServiceData, SupportData, SupportMatchResult } from '../types/index.js';
+import type { LeadCrmResult, LeadData, ServiceData, SupportData, SupportMatchResult } from '../types/index.js';
 
 const PIPEDRIVE_API_BASE = 'https://api.pipedrive.com/v1';
 const STEPHANIE_KREUZBUSCH_USER_ID = 24093350;
@@ -104,19 +104,54 @@ function normalizeOptionValue(value: unknown): string | undefined {
 }
 
 function normalizePhoneNumber(phone?: string): string | undefined {
+  const key = normalizeGermanPhoneKey(phone);
+  return key ? `00${key}` : undefined;
+}
+
+function normalizeGermanPhoneKey(phone?: string): string | undefined {
   if (!phone || !phone.trim()) return undefined;
-  const compact = phone.replace(/\s+/g, '');
-  if (compact.startsWith('0')) {
-    return compact.replace(/^0/, '0049');
+  let digits = phone.replace(/\D/g, '');
+  let hadCountryCode = false;
+  if (digits.startsWith('0049')) {
+    digits = digits.slice(4);
+    hadCountryCode = true;
+  } else if (digits.startsWith('49')) {
+    digits = digits.slice(2);
+    hadCountryCode = true;
   }
-  if (compact.startsWith('+49')) {
-    return compact.replace(/^\+49/, '0049');
+  if (digits.startsWith('0') && (hadCountryCode || phone.trim().startsWith('0'))) {
+    digits = digits.slice(1);
   }
-  return compact;
+  return digits ? `49${digits}` : undefined;
 }
 
 function normalizeEmail(email?: string): string | undefined {
   return email && email.trim() ? email.toLowerCase().trim() : undefined;
+}
+
+function normalizeComparableText(value?: string): string {
+  return (value ?? '')
+    .toLowerCase()
+    .replace(/ä/g, 'ae')
+    .replace(/ö/g, 'oe')
+    .replace(/ü/g, 'ue')
+    .replace(/ß/g, 'ss')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function normalizeNameTokens(value?: string): string[] {
+  const withoutTitles = normalizeComparableText(value)
+    .replace(/\b(?:dr|prof|herr|frau)\b/g, ' ')
+    .trim();
+  return withoutTitles ? [...new Set(withoutTitles.split(/\s+/))].sort() : [];
+}
+
+function nameTokensMatch(candidateName: string | undefined, submittedName: string): boolean {
+  const candidateTokens = new Set(normalizeNameTokens(candidateName));
+  const submittedTokens = normalizeNameTokens(submittedName);
+  return submittedTokens.length >= 2 && submittedTokens.every((token) => candidateTokens.has(token));
 }
 
 function capitalize(value?: string): string {
@@ -183,6 +218,27 @@ function buildDealCustomFields(data: LeadData): Record<string, number> {
   return customFields;
 }
 
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildLeadFollowUpNote(data: LeadData, heading = 'Sarah Folgeanfrage'): string {
+  const address = [data.street, data.postalCode, data.city].filter(Boolean).join(', ');
+  return [
+    `<strong>${escapeHtml(heading)}</strong>`,
+    data.availability ? `Erreichbarkeit: ${escapeHtml(data.availability)}` : '',
+    data.email ? `E-Mail: ${escapeHtml(data.email)}` : '',
+    data.phone ? `Telefon: ${escapeHtml(data.phone)}` : '',
+    address ? `Adresse: ${escapeHtml(address)}` : '',
+    data.message ? `Nachricht: ${escapeHtml(data.message)}` : '',
+  ].filter(Boolean).join('<br>');
+}
+
 export function createPipedriveService(apiKey: string, pipelineId: number, stageId: number) {
   const configured = apiKey.length > 0;
   const recentlyResolvedPersonIds = new Map<string, number>();
@@ -219,28 +275,29 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     return result.data;
   }
 
-  async function searchPerson(term: string, fields: 'email' | 'phone'): Promise<number | undefined> {
-    const result = await apiGet<{ items?: Array<{ item?: { id: number } }> }>('/persons/search', {
-      term,
-      fields,
-      exact_match: 'true',
-    });
-    return result.items?.[0]?.item?.id;
-  }
-
   function normalizeFullName(name?: string): string {
     return name ? name.trim().replace(/\s+/g, ' ').toLowerCase() : '';
   }
 
-  async function searchPeople(term: string, fields: 'name' | 'email' | 'phone'): Promise<number[]> {
-    const result = await apiGet<{ items?: Array<{ item?: { id: number; name?: string } }> }>('/persons/search', {
+  type PersonSearchItem = { id: number; name?: string };
+
+  async function searchPersonItems(
+    term: string,
+    fields: 'name' | 'email' | 'phone',
+    exactMatch = true,
+  ): Promise<PersonSearchItem[]> {
+    const result = await apiGet<{ items?: Array<{ item?: PersonSearchItem }> }>('/persons/search', {
       term,
       fields,
-      exact_match: 'true',
+      exact_match: exactMatch,
     });
     return (result.items ?? [])
-      .map((entry) => entry.item?.id)
-      .filter((id): id is number => typeof id === 'number');
+      .map((entry) => entry.item)
+      .filter((item): item is PersonSearchItem => typeof item?.id === 'number');
+  }
+
+  async function searchPeople(term: string, fields: 'name' | 'email' | 'phone'): Promise<number[]> {
+    return (await searchPersonItems(term, fields)).map((item) => item.id);
   }
 
   type DealSearchItem = {
@@ -359,6 +416,115 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     return { matchState: 'unresolved', candidateCount: 0 };
   }
 
+  type LeadIdentityResolution =
+    | { status: 'none' }
+    | { status: 'unique'; personId: number }
+    | { status: 'ambiguous'; candidateCount: number; reason: string };
+
+  function cachedPersonId(field: 'email' | 'phone', value: string): number | undefined {
+    return recentlyResolvedPersonIds.get(`${field}:${value}`);
+  }
+
+  function addressCorroborates(person: Record<string, unknown>, data: LeadData): boolean {
+    const storedAddress = person[personFieldKeys.address];
+    if (typeof storedAddress !== 'string' || !storedAddress.trim()) return false;
+
+    const stored = normalizeComparableText(storedAddress);
+    const postalCode = data.postalCode?.trim();
+    if (postalCode && new RegExp(`\\b${postalCode.replace(/[^0-9]/g, '')}\\b`).test(stored)) {
+      return true;
+    }
+
+    const addressTokens = normalizeComparableText([data.street, data.city].filter(Boolean).join(' '))
+      .split(/\s+/)
+      .filter((token) => token.length >= 2);
+    return addressTokens.length >= 2 && addressTokens.every((token) => stored.includes(token));
+  }
+
+  async function resolveLeadNameFallback(data: LeadData): Promise<LeadIdentityResolution> {
+    const submittedName = [data.firstName, data.lastName].filter(Boolean).join(' ').trim();
+    if (normalizeNameTokens(submittedName).length < 2) return { status: 'none' };
+
+    const searchItems = await searchPersonItems(submittedName, 'name', false);
+    const nameCandidates = searchItems.filter((item) => nameTokensMatch(item.name, submittedName));
+    if (nameCandidates.length === 0) return { status: 'none' };
+
+    const corroboratedIds: number[] = [];
+    for (const candidate of nameCandidates) {
+      const person = await apiGet<Record<string, unknown>>(`/persons/${candidate.id}`);
+      if (addressCorroborates(person, data)) corroboratedIds.push(candidate.id);
+    }
+
+    const uniqueIds = [...new Set(corroboratedIds)];
+    if (uniqueIds.length === 1) return { status: 'unique', personId: uniqueIds[0] };
+    if (uniqueIds.length > 1) {
+      return {
+        status: 'ambiguous',
+        candidateCount: uniqueIds.length,
+        reason: 'ambiguous_name_and_address',
+      };
+    }
+    return {
+      status: 'ambiguous',
+      candidateCount: nameCandidates.length,
+      reason: 'name_match_requires_corroboration',
+    };
+  }
+
+  async function resolveLeadIdentity(data: LeadData): Promise<LeadIdentityResolution> {
+    const email = normalizeEmail(data.email);
+    const phoneKey = normalizeGermanPhoneKey(data.phone);
+    const phoneSearchValue = normalizePhoneNumber(data.phone);
+    const matchSets: number[][] = [];
+
+    if (email) {
+      const matches = await searchPeople(email, 'email');
+      const cached = cachedPersonId('email', email);
+      matchSets.push([...new Set(matches.length > 0 ? matches : cached ? [cached] : [])]);
+    }
+
+    if (phoneKey && phoneSearchValue) {
+      const matches = await searchPeople(phoneSearchValue, 'phone');
+      const cached = cachedPersonId('phone', phoneKey);
+      matchSets.push([...new Set(matches.length > 0 ? matches : cached ? [cached] : [])]);
+    }
+
+    const nonEmptySets = matchSets.filter((matches) => matches.length > 0);
+    if (nonEmptySets.length === 0) {
+      return resolveLeadNameFallback(data);
+    }
+
+    const intersection = nonEmptySets.slice(1).reduce(
+      (candidateIds, matches) => new Set([...candidateIds].filter((id) => matches.includes(id))),
+      new Set(nonEmptySets[0]),
+    );
+    if (intersection.size === 1) {
+      return { status: 'unique', personId: [...intersection][0] };
+    }
+    if (intersection.size > 1) {
+      return {
+        status: 'ambiguous',
+        candidateCount: intersection.size,
+        reason: 'ambiguous_contact_identifier',
+      };
+    }
+
+    const candidates = new Set(nonEmptySets.flat());
+    if (nonEmptySets.length > 1) {
+      return {
+        status: 'ambiguous',
+        candidateCount: candidates.size,
+        reason: 'conflicting_contact_identifiers',
+      };
+    }
+
+    return {
+      status: 'ambiguous',
+      candidateCount: candidates.size,
+      reason: 'ambiguous_contact_identifier',
+    };
+  }
+
   async function resolveSupportPerson(data: SupportData): Promise<SupportMatchResult> {
     if (!configured) throw new Error('Pipedrive not configured');
 
@@ -425,36 +591,10 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     if (email) {
       recentlyResolvedPersonIds.set(`email:${email}`, personId);
     }
-    if (phone) {
-      recentlyResolvedPersonIds.set(`phone:${phone}`, personId);
+    const phoneKey = normalizeGermanPhoneKey(phone);
+    if (phoneKey) {
+      recentlyResolvedPersonIds.set(`phone:${phoneKey}`, personId);
     }
-  }
-
-  async function findExistingPerson(email: string | undefined, phone: string | undefined): Promise<number | undefined> {
-    if (email) {
-      const cachedPersonId = recentlyResolvedPersonIds.get(`email:${email}`);
-      if (cachedPersonId) return cachedPersonId;
-    }
-    if (phone) {
-      const cachedPhonePersonId = recentlyResolvedPersonIds.get(`phone:${phone}`);
-      if (cachedPhonePersonId) return cachedPhonePersonId;
-    }
-
-    if (email) {
-      const personId = await searchPerson(email, 'email');
-      if (personId) {
-        cachePersonId(personId, email, phone);
-        return personId;
-      }
-    }
-    if (phone) {
-      const personId = await searchPerson(phone, 'phone');
-      if (personId) {
-        cachePersonId(personId, email, phone);
-      }
-      return personId;
-    }
-    return undefined;
   }
 
   function buildPersonPayload(data: LeadData, firstName: string, lastName: string, phone: string | undefined, email: string | undefined, street: string, postalCode: string, city: string): Record<string, unknown> {
@@ -475,7 +615,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     await apiCall(`/persons/${personId}`, buildPersonPayload(data, firstName, lastName, phone, email, street, postalCode, city), 'PUT');
   }
 
-  async function createLead(data: LeadData): Promise<{ personId: number; dealId: number }> {
+  async function createLead(data: LeadData): Promise<LeadCrmResult> {
     if (!configured) throw new Error('Pipedrive not configured');
 
     const firstName = capitalize(data.firstName);
@@ -486,11 +626,46 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     const postalCode = normalizePostalCode(data.postalCode);
     const city = capitalize(data.city);
 
-    const existingPersonId = await findExistingPerson(email, phone);
+    const identity = await resolveLeadIdentity(data);
+    if (identity.status === 'ambiguous') {
+      return {
+        outcome: 'identity_review',
+        candidateCount: identity.candidateCount,
+        reason: identity.reason,
+      };
+    }
+
+    const existingPersonId = identity.status === 'unique' ? identity.personId : undefined;
     const personId = existingPersonId ?? (await createPerson(data, firstName, lastName, phone, email, street, postalCode, city)).id;
     cachePersonId(personId, email, phone);
+
     if (existingPersonId) {
+      const openDeals = await getOpenPersonDeals(existingPersonId);
+      if (openDeals.length > 1) {
+        await apiCall('/notes', {
+          person_id: existingPersonId,
+          content: buildLeadFollowUpNote(data, `Sarah Folgeanfrage – manuelle Fallzuordnung (${openDeals.length} offene Fälle)`),
+          pinned_to_person_flag: 1,
+        });
+        return {
+          outcome: 'person_review',
+          personId: existingPersonId,
+          candidateCount: openDeals.length,
+          reason: 'multiple_open_deals',
+        };
+      }
+
       await updatePerson(existingPersonId, data, firstName, lastName, phone, email, street, postalCode, city);
+      if (openDeals.length === 1) {
+        await apiCall('/notes', {
+          person_id: existingPersonId,
+          deal_id: openDeals[0].id,
+          content: buildLeadFollowUpNote(data),
+          pinned_to_person_flag: 1,
+          pinned_to_deal_flag: 1,
+        });
+        return { outcome: 'reused', personId: existingPersonId, dealId: openDeals[0].id };
+      }
     }
 
     const dealNotes = [
@@ -518,7 +693,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
       }).catch(() => {}); // non-critical
     }
 
-    return { personId, dealId: deal.id };
+    return { outcome: 'created', personId, dealId: deal.id };
   }
 
   async function createServiceActivity(data: ServiceData): Promise<{ personId: number; activityId: number }> {
