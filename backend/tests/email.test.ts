@@ -242,6 +242,32 @@ describe('createEmailService', () => {
     expect(call.html).toContain('Kein eindeutiger CRM-Treffer');
     expect(call.html).toContain('finance@lippelift.de');
     expect(call.html).toContain('RE-123');
+    expect(call.html).toContain('Manuelle Prüfung erforderlich');
+    expect(call.html).not.toContain('href="');
+  });
+
+  it('sendSupportNotification links to the exact resolved Pipedrive case', async () => {
+    const sendMock = vi.fn().mockResolvedValue({ messageId: 'support-deal' });
+    const service = createEmailService(
+      { host: 'smtp.test.com', port: 587, user: 'a', pass: 'b' },
+      sendMock,
+    );
+
+    await service.sendSupportNotification('caechma@gmail.com', {
+      data: {
+        customerName: 'Maria Schmidt',
+        category: 'technik',
+        issueDescription: 'Lift bleibt stehen.',
+      },
+      intendedInbox: 'technik@lippelift.de',
+      matchState: 'unique',
+      noteStatus: 'created',
+      dealId: 1618,
+    });
+
+    const call = sendMock.mock.calls[0][0];
+    expect(call.html).toContain('href="https://lippelift.pipedrive.com/deal/1618"');
+    expect(call.html).not.toContain('Manuelle Prüfung erforderlich');
   });
 
   it('sendSupportNotification includes note failure for the team only', async () => {
@@ -267,5 +293,7 @@ describe('createEmailService', () => {
     expect(call.html).toContain('Eindeutiger CRM-Treffer');
     expect(call.html).toContain('CRM-Notizfehler');
     expect(call.html).toContain('Pipedrive API error');
+    expect(call.html).toContain('Manuelle Prüfung erforderlich');
+    expect(call.html).not.toContain('href="');
   });
 });

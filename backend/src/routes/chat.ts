@@ -320,6 +320,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
           matchState,
           noteStatus,
           noteError,
+          dealId,
         });
       }
     } catch (err) {

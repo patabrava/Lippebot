@@ -144,6 +144,7 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
     matchState: SupportMatchState;
     noteStatus: SupportNoteStatus;
     noteError?: string;
+    dealId?: number;
   }): Promise<void> {
     if (!configured && !sendOverride) return;
 
@@ -151,7 +152,10 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
       from,
       to,
       subject: buildSupportEmailSubject(input.data),
-      html: buildSupportEmailHtml(input),
+      html: buildSupportEmailHtml({
+        ...input,
+        dealUrl: buildPipedriveDealUrl(pipedriveWebBaseUrl, input.dealId),
+      }),
     });
   }
 

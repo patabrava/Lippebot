@@ -909,7 +909,12 @@ describe('POST /api/chat', () => {
   });
 
   it('creates a compact support note and sends one routed support email for a unique match', async () => {
-    const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
+    const resolveSupportPerson = vi.fn().mockResolvedValue({
+      matchState: 'unique',
+      personId: 501,
+      dealId: 654,
+      candidateCount: 1,
+    });
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
     const createServiceActivity = vi.fn();
     const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
@@ -955,13 +960,14 @@ describe('POST /api/chat', () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     expect(resolveSupportPerson).toHaveBeenCalledWith(supportData);
-    expect(createSupportNote).toHaveBeenCalledWith(501, supportData, undefined);
+    expect(createSupportNote).toHaveBeenCalledWith(501, supportData, 654);
     expect(createServiceActivity).not.toHaveBeenCalled();
     expect(sendSupportNotification).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
       data: supportData,
       intendedInbox: 'technik@lippelift.de',
       matchState: 'unique',
       noteStatus: 'created',
+      dealId: 654,
     }));
     expect(text).toContain('"action":"create_service"');
     expect(text).toContain('"status":"accepted"');
@@ -970,6 +976,9 @@ describe('POST /api/chat', () => {
     expect(text).not.toContain('caechma@gmail.com');
     expect(text).not.toContain('Pipedrive');
     expect(text).not.toContain('CRM');
+    expect(text).not.toContain('lippelift.pipedrive.com');
+    expect(text).not.toContain('/deal/654');
+    expect(text).not.toContain('"dealId"');
   });
 
   it('accepts an email-only support handoff without requesting a phone number', async () => {

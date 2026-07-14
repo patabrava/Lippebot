@@ -72,6 +72,40 @@ describe('support routing helpers', () => {
     expect(html).toContain('finance@lippelift.de');
     expect(html).toContain('RE-2026-17');
     expect(html).toContain('Frage zu einer offenen Rechnung.');
+    expect(html).toContain('Manuelle Prüfung erforderlich');
+    expect(html).not.toContain('Fall in Pipedrive öffnen');
+    expect(html).not.toContain('href="');
+  });
+
+  it('links a unique support match to the exact Pipedrive deal', () => {
+    const html = buildSupportEmailHtml({
+      data: {
+        customerName: 'Maria Schmidt',
+        category: 'technik',
+        issueDescription: 'Lift bleibt stehen.',
+      },
+      intendedInbox: 'technik@lippelift.de',
+      matchState: 'unique',
+      noteStatus: 'created',
+      dealUrl: 'https://lippelift.pipedrive.com/deal/1618',
+    });
+
+    expect(html).toContain('Fall in Pipedrive öffnen');
+    expect(html).toContain('href="https://lippelift.pipedrive.com/deal/1618"');
+    expect(html).not.toContain('Manuelle Prüfung erforderlich');
+  });
+
+  it('escapes a supplied deal URL before rendering the email action', () => {
+    const html = buildSupportEmailHtml({
+      data: { customerName: 'Maria Schmidt', category: 'technik' },
+      intendedInbox: 'technik@lippelift.de',
+      matchState: 'unique',
+      noteStatus: 'created',
+      dealUrl: 'https://lippelift.pipedrive.com/deal/1618?x=" onmouseover="alert(1)',
+    });
+
+    expect(html).toContain('&quot; onmouseover=&quot;');
+    expect(html).not.toContain('" onmouseover="');
   });
 
   it('puts the routed category and customer name in the email subject', () => {

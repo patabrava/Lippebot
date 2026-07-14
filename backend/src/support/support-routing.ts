@@ -148,6 +148,7 @@ export function buildSupportEmailHtml(input: {
   matchState: SupportMatchState;
   noteStatus: SupportNoteStatus;
   noteError?: string;
+  dealUrl?: string;
 }): string {
   const category = resolveSupportCategory(input.data);
   const matchLabel = input.matchState === 'unique'
@@ -158,6 +159,9 @@ export function buildSupportEmailHtml(input: {
 
   return `
     <h2>Support-Anfrage ueber Sarah</h2>
+    ${input.dealUrl
+      ? `<p><a href="${escapeHtml(input.dealUrl)}" style="display:inline-block;padding:10px 16px;background:#0b63ce;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold;">Fall in Pipedrive öffnen</a></p>`
+      : '<p><strong>Manuelle Prüfung erforderlich</strong></p>'}
     <table style="border-collapse:collapse;">
       ${row('Kunde', input.data.customerName)}
       <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Kategorie:</td><td>${category}</td></tr>
