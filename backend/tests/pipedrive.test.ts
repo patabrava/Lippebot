@@ -80,6 +80,281 @@ describe('createPipedriveService', () => {
     }));
   });
 
+  it('createLead reuses one exact open reference deal and deduplicates repeated search hits', async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/deals/search')) {
+        expect(url.searchParams.get('term')).toBe('ANG-TEST-42');
+        expect(url.searchParams.get('fields')).toBe('custom_fields');
+        expect(url.searchParams.get('exact_match')).toBe('true');
+        return {
+          ok: true,
+          json: () => Promise.resolve({
+            success: true,
+            data: {
+              items: [
+                { item: { id: 456, status: 'open', person: { id: 321 } } },
+                { item: { id: 456, status: 'open', person: { id: 321 } } },
+              ],
+            },
+          }),
+        };
+      }
+      if (url.pathname.endsWith('/persons/search')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { items: [{ item: { id: 321 } }] } }),
+        };
+      }
+      if (url.pathname.endsWith('/persons/321') && init?.method === 'PUT') {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 321 } }) };
+      }
+      if (url.pathname.endsWith('/notes') && init?.method === 'POST') {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 9010 } }) };
+      }
+      throw new Error(`Unexpected request: ${init?.method ?? 'GET'} ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await createPipedriveService('test-key', 2, 3).createLead({
+      priorContact: 'yes',
+      priorContactReference: 'ANG-TEST-42',
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      email: 'returning@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '12345',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00',
+      message: 'Bitte dem vorhandenen Angebot zuordnen.',
+    });
+
+    expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456 });
+    expect(mockFetch.mock.calls.some(([url]) => new URL(String(url)).pathname.endsWith('/persons/321/deals'))).toBe(false);
+    const noteCall = mockFetch.mock.calls.find(([url]) => new URL(String(url)).pathname.endsWith('/notes'));
+    const noteBody = JSON.parse(noteCall![1]!.body as string);
+    expect(noteBody).toEqual(expect.objectContaining({
+      person_id: 321,
+      deal_id: 456,
+      pinned_to_person_flag: 1,
+      pinned_to_deal_flag: 1,
+    }));
+    expect(noteBody.content).toContain('Vorheriger Kontakt: yes');
+    expect(noteBody.content).toContain('Referenz: ANG-TEST-42');
+  });
+
+  it('createLead lets an exact open reference override an uncorroborated name-only match', async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/deals/search')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({
+            success: true,
+            data: { items: [{ item: { id: 456, status: 'open', person: { id: 321 } } }] },
+          }),
+        };
+      }
+      if (url.pathname.endsWith('/persons/search') && url.searchParams.get('fields') === 'email') {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { items: [] } }) };
+      }
+      if (url.pathname.endsWith('/persons/search') && url.searchParams.get('fields') === 'name') {
+        return {
+          ok: true,
+          json: () => Promise.resolve({
+            success: true,
+            data: { items: [{ item: { id: 999, name: 'Max Mustermann' } }] },
+          }),
+        };
+      }
+      if (url.pathname.endsWith('/persons/999') && !init?.method) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: {} }) };
+      }
+      if (url.pathname.endsWith('/persons/321') && init?.method === 'PUT') {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 321 } }) };
+      }
+      if (url.pathname.endsWith('/notes') && init?.method === 'POST') {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 9012 } }) };
+      }
+      throw new Error(`Unexpected request: ${init?.method ?? 'GET'} ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await createPipedriveService('test-key', 2, 3).createLead({
+      priorContact: 'yes',
+      priorContactReference: 'ANG-NAME-OVERRIDE-42',
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      email: 'new-address@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '12345',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00',
+    });
+
+    expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456 });
+  });
+
+  it('createLead sends an exact reference and contact conflict to identity review without mutation', async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/deals/search')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({
+            success: true,
+            data: { items: [{ item: { id: 456, status: 'open', person: { id: 321 } } }] },
+          }),
+        };
+      }
+      if (url.pathname.endsWith('/persons/search')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { items: [{ item: { id: 654 } }] } }),
+        };
+      }
+      throw new Error(`Unexpected mutation: ${init?.method ?? 'GET'} ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await createPipedriveService('test-key', 2, 3).createLead({
+      priorContact: 'yes',
+      priorContactReference: 'ANG-CONFLICT-42',
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      email: 'different-person@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '12345',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00',
+    });
+
+    expect(result).toEqual({
+      outcome: 'identity_review',
+      candidateCount: 2,
+      reason: 'reference_contact_conflict',
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('createLead sends multiple exact open reference deals to review without mutation', async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/deals/search')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({
+            success: true,
+            data: {
+              items: [
+                { item: { id: 456, status: 'open', person: { id: 321 } } },
+                { item: { id: 457, status: 'open', person: { id: 321 } } },
+              ],
+            },
+          }),
+        };
+      }
+      throw new Error(`Unexpected mutation: ${init?.method ?? 'GET'} ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await createPipedriveService('test-key', 2, 3).createLead({
+      priorContact: 'yes',
+      priorContactReference: 'ANG-MULTIPLE-42',
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      email: 'returning@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '12345',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00',
+    });
+
+    expect(result).toEqual({
+      outcome: 'identity_review',
+      candidateCount: 2,
+      reason: 'ambiguous_case_reference',
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('createLead ignores a closed reference deal and never reopens it', async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/deals/search')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({
+            success: true,
+            data: { items: [{ item: { id: 456, status: 'won', person: { id: 321 } } }] },
+          }),
+        };
+      }
+      if (url.pathname.endsWith('/persons/search')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { items: [{ item: { id: 321 } }] } }),
+        };
+      }
+      if (url.pathname.endsWith('/persons/321/deals')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: [] }) };
+      }
+      if (url.pathname.endsWith('/persons/321') && init?.method === 'PUT') {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 321 } }) };
+      }
+      if (url.pathname.endsWith('/deals') && init?.method === 'POST') {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 789 } }) };
+      }
+      if (url.pathname.endsWith('/notes') && init?.method === 'POST') {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 9011 } }) };
+      }
+      throw new Error(`Unexpected request: ${init?.method ?? 'GET'} ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await createPipedriveService('test-key', 2, 3).createLead({
+      priorContact: 'yes',
+      priorContactReference: 'ANG-CLOSED-42',
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      email: 'returning@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '12345',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00',
+    });
+
+    expect(result).toEqual({ outcome: 'created', personId: 321, dealId: 789 });
+    expect(mockFetch.mock.calls.some(([url, init]) => (
+      new URL(String(url)).pathname.endsWith('/deals/456') && init?.method === 'PUT'
+    ))).toBe(false);
+  });
+
+  it('createLead makes no CRM mutation when exact reference search fails', async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/deals/search')) {
+        return { ok: false, status: 503, statusText: 'Reference Search Unavailable' };
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await expect(createPipedriveService('test-key', 2, 3).createLead({
+      priorContact: 'yes',
+      priorContactReference: 'ANG-FAIL-42',
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      email: 'returning@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '12345',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00',
+    })).rejects.toThrow('Pipedrive API error: 503 Reference Search Unavailable');
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
   it('createLead sends conflicting exact email and phone matches to identity review without CRM mutation', async () => {
     const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(String(input));
@@ -1357,6 +1632,65 @@ describe('createPipedriveService', () => {
     });
 
     expect(result).toEqual({ matchState: 'ambiguous', candidateCount: 2 });
+  });
+
+  it('resolveSupportPerson resolves a generic prior-contact reference to its exact open opportunity', async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        success: true,
+        data: {
+          items: [{
+            item: {
+              id: 7010,
+              status: 'open',
+              person: { id: 510, name: 'Test Kunde' },
+            },
+          }],
+        },
+      }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await createPipedriveService('test-key', 1, 2).resolveSupportPerson({
+      customerName: '',
+      priorContact: 'yes',
+      priorContactReference: 'VORGANG-TEST-7010',
+    });
+
+    expect(result).toEqual({ matchState: 'unique', personId: 510, dealId: 7010, candidateCount: 1 });
+    expect(mockFetch.mock.calls[0][0]).toContain('term=VORGANG-TEST-7010');
+    expect(mockFetch.mock.calls[0][0]).toContain('fields=custom_fields');
+  });
+
+  it('resolveSupportPerson refuses a reference that conflicts with the identified contact', async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          data: { items: [{ item: { id: 501, name: 'Maria Schmidt' } }] },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          data: {
+            items: [{ item: { id: 7011, status: 'open', person: { id: 777, name: 'Andere Person' } } }],
+          },
+        }),
+      });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await createPipedriveService('test-key', 1, 2).resolveSupportPerson({
+      customerName: 'Maria Schmidt',
+      priorContact: 'yes',
+      priorContactReference: 'VORGANG-CONFLICT-7011',
+    });
+
+    expect(result).toEqual({ matchState: 'ambiguous', candidateCount: 2 });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
   it('resolveSupportPerson does not use a phone match outside the ambiguous name candidates', async () => {

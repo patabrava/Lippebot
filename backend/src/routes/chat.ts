@@ -15,6 +15,7 @@ import type {
 } from '../types/index.js';
 import { getSupportInbox, resolveSupportCategory } from '../support/support-routing.js';
 import { hasContactMethod } from '../contact/contact-method.js';
+import { hasPriorContactStatus } from '../contact/prior-contact.js';
 import { buildPipedriveTranscriptNote } from '../chat/transcript.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -55,6 +56,7 @@ function hasSupportDisambiguator(data: SupportData): boolean {
   const candidateFields = [
     data.phone,
     data.email,
+    data.priorContactReference,
     data.customerNumber,
     data.invoiceNumber,
     data.orderNumber,
@@ -103,8 +105,8 @@ type LeadInternalResult = LeadCrmResult | {
   personId?: never;
   dealId?: never;
 };
-type LeadClientActionResult = { status: 'accepted' | 'needs_contact' };
-type SupportClientActionResult = { status: 'accepted' | 'needs_contact' };
+type LeadClientActionResult = { status: 'accepted' | 'needs_contact' | 'needs_prior_contact' };
+type SupportClientActionResult = { status: 'accepted' | 'needs_contact' | 'needs_prior_contact' };
 
 type TranscriptMessage = z.infer<typeof abandonedChatRequestSchema>['history'][number];
 
@@ -158,6 +160,12 @@ export function createChatRoute(deps: ChatDeps): Hono {
     leadData: LeadData,
     errorLabel: string,
   ): Promise<LeadInternalResult | undefined> {
+    if (!hasPriorContactStatus(leadData)) {
+      await stream.writeSSE({
+        data: JSON.stringify({ type: 'action', action: 'create_lead', data: { status: 'needs_prior_contact' } }),
+      });
+      return undefined;
+    }
     if (!hasRequiredLeadFields(leadData)) {
       await stream.writeSSE({
         data: JSON.stringify({ type: 'action', action: 'create_lead', data: { status: 'needs_contact' } }),
@@ -240,6 +248,12 @@ export function createChatRoute(deps: ChatDeps): Hono {
     sessionId: string,
     supportData: SupportData,
   ): Promise<SupportHandoffResult | undefined> {
+    if (!hasPriorContactStatus(supportData)) {
+      await stream.writeSSE({
+        data: JSON.stringify({ type: 'action', action: 'create_service', data: { status: 'needs_prior_contact' } }),
+      });
+      return undefined;
+    }
     if (!hasRequiredServiceFields(supportData)) {
       await stream.writeSSE({
         data: JSON.stringify({ type: 'action', action: 'create_service', data: { status: 'needs_contact' } }),

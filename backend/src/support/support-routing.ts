@@ -102,6 +102,8 @@ export function buildSupportNoteContent(
     line('Kurzfassung', data.issueDescription),
     line('Telefon', data.phone),
     line('E-Mail', data.email),
+    line('Vorheriger Kontakt', data.priorContact),
+    line('Referenz', data.priorContactReference),
     line('Lift-Modell', data.liftModel),
     line('Symptomdetails', data.symptomDetails),
     line('Ausloeser/Bedingungen', data.triggerConditions),
@@ -171,6 +173,8 @@ export function buildSupportEmailHtml(input: {
       ${input.noteError ? row('CRM-Notizfehler', input.noteError) : ''}
       ${row('Telefon', input.data.phone)}
       ${row('E-Mail', input.data.email)}
+      ${row('Vorheriger Kontakt', input.data.priorContact)}
+      ${row('Referenz', input.data.priorContactReference)}
       ${row('Kurzfassung', input.data.issueDescription)}
       ${row('Lift-Modell', input.data.liftModel)}
       ${row('Symptomdetails', input.data.symptomDetails)}

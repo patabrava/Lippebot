@@ -105,6 +105,7 @@ describe('POST /api/chat', () => {
       gemini: {
         async *streamChat(sessionId: string) {
           const leadData = {
+            priorContact: 'unknown' as const,
             customerSegment: 'Privatperson' as never,
             firstName: 'Max',
             lastName: 'Mustermann',
@@ -154,6 +155,7 @@ describe('POST /api/chat', () => {
   it('does not create a directly submitted lead without phone or email', async () => {
     const createLead = vi.fn().mockResolvedValue({ personId: 123, dealId: 456 });
     const leadData = {
+      priorContact: 'unknown' as const,
       customerSegment: 'Privatperson' as never,
       firstName: 'Max',
       lastName: 'Mustermann',
@@ -196,6 +198,46 @@ describe('POST /api/chat', () => {
     expect(text).toContain('"status":"needs_contact"');
   });
 
+  it('does not create a complete lead before prior-contact status is known', async () => {
+    const createLead = vi.fn();
+    const leadData = {
+      customerSegment: 'Privatperson' as never,
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      email: 'max@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          yield { type: 'lead' as const, leadData };
+        },
+      },
+      pipedrive: {
+        ...createMockPipedrive(),
+        isConfigured: () => true,
+        createLead,
+      },
+      email: createMockEmail(),
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'lead-needs-prior-contact', message: 'Das ist alles', history: [] }),
+    });
+
+    expect(createLead).not.toHaveBeenCalled();
+    expect(await res.text()).toContain('"status":"needs_prior_contact"');
+  });
+
   it('streams du-form fallback copy when chat generation fails', async () => {
     const chatRoute = createChatRoute({
       gemini: {
@@ -229,6 +271,7 @@ describe('POST /api/chat', () => {
   it('emits a lead action when completed lead data is submitted through state fallback', async () => {
     const createLead = vi.fn().mockResolvedValue({ outcome: 'created', personId: 321, dealId: 654 });
     const leadData = {
+      priorContact: 'unknown' as const,
       customerSegment: 'Privatperson' as never,
       firstName: 'Max',
       lastName: 'Mustermann',
@@ -284,6 +327,7 @@ describe('POST /api/chat', () => {
   it('emits a lead action for complete email-only state fallback data', async () => {
     const createLead = vi.fn().mockResolvedValue({ personId: 321, dealId: 654 });
     const leadData = {
+      priorContact: 'unknown' as const,
       customerSegment: 'Privatperson' as never,
       firstName: 'Max',
       lastName: 'Mustermann',
@@ -331,6 +375,7 @@ describe('POST /api/chat', () => {
   it('does not emit a lead action for state fallback data without phone or email', async () => {
     const createLead = vi.fn().mockResolvedValue({ personId: 321, dealId: 654 });
     const leadData = {
+      priorContact: 'unknown' as const,
       customerSegment: 'Privatperson' as never,
       firstName: 'Max',
       lastName: 'Mustermann',
@@ -377,6 +422,7 @@ describe('POST /api/chat', () => {
   it('does not create a second lead when the same session reports completed data again', async () => {
     const createLead = vi.fn().mockResolvedValue({ outcome: 'created', personId: 321, dealId: 654 });
     const leadData = {
+      priorContact: 'unknown' as const,
       customerSegment: 'Privatperson' as never,
       firstName: 'Max',
       lastName: 'Mustermann',
@@ -441,6 +487,7 @@ describe('POST /api/chat', () => {
     const createLead = vi.fn().mockResolvedValue({ outcome: 'reused', personId: 321, dealId: 654 });
     const sendLeadNotification = vi.fn().mockResolvedValue(undefined);
     const leadData = {
+      priorContact: 'unknown' as const,
       customerSegment: 'Privatperson' as never,
       firstName: 'Max',
       lastName: 'Mustermann',
@@ -507,6 +554,7 @@ describe('POST /api/chat', () => {
     const tracker = createMockTracker();
     const sendLeadNotification = vi.fn().mockResolvedValue(undefined);
     const leadData = {
+      priorContact: 'unknown' as const,
       customerSegment: 'Privatperson' as never,
       firstName: 'Review',
       lastName: 'Test',
@@ -565,6 +613,7 @@ describe('POST /api/chat', () => {
     const sendLeadNotification = vi.fn().mockResolvedValue(undefined);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const leadData = {
+      priorContact: 'unknown' as const,
       customerSegment: 'Privatperson' as never,
       firstName: 'Erika',
       lastName: 'Test',
@@ -625,6 +674,7 @@ describe('POST /api/chat', () => {
     const tracker = createMockTracker();
     const sequence: string[] = [];
     const leadData = {
+      priorContact: 'unknown' as const,
       customerSegment: 'privatperson' as const,
       firstName: 'Max',
       lastName: 'Mustermann',
@@ -691,6 +741,7 @@ describe('POST /api/chat', () => {
 
   it('writes a separate complete transcript note for a resolved support case', async () => {
     const supportData = {
+      priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
       phone: '05261 96660',
       category: 'technik' as const,
@@ -744,6 +795,7 @@ describe('POST /api/chat', () => {
   it('retries transcript persistence and does not duplicate a successful session note', async () => {
     const tracker = createMockTracker();
     const leadData = {
+      priorContact: 'unknown' as const,
       customerSegment: 'privatperson' as const,
       firstName: 'Retry',
       lastName: 'Test',
@@ -795,6 +847,7 @@ describe('POST /api/chat', () => {
 
   it('shares one in-flight transcript write between concurrent retries for the same session target', async () => {
     const leadData = {
+      priorContact: 'unknown' as const,
       customerSegment: 'privatperson' as const,
       firstName: 'Concurrent',
       lastName: 'Test',
@@ -857,6 +910,7 @@ describe('POST /api/chat', () => {
     const tracker = createMockTracker();
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const leadData = {
+      priorContact: 'unknown' as const,
       customerSegment: 'privatperson' as const,
       firstName: 'Failure',
       lastName: 'Test',
@@ -919,6 +973,7 @@ describe('POST /api/chat', () => {
     const createServiceActivity = vi.fn();
     const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
     const supportData = {
+      priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
       phone: '05261 96660',
       category: 'technik' as const,
@@ -986,6 +1041,7 @@ describe('POST /api/chat', () => {
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
     const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
     const supportData = {
+      priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
       email: 'maria@example.de',
       category: 'technik' as const,
@@ -1040,6 +1096,7 @@ describe('POST /api/chat', () => {
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
     const sendSupportNotification = vi.fn().mockResolvedValue({ messageId: 'support-1' });
     const supportData = {
+      priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
       email: 'maria@example.de',
       category: 'sales' as const,
@@ -1086,6 +1143,7 @@ describe('POST /api/chat', () => {
     const createServiceActivity = vi.fn();
     const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
     const supportData = {
+      priorContact: 'unknown' as const,
       customerName: 'Unbekannter Kunde',
       phone: '05261 96660',
       category: 'finance' as const,
@@ -1138,6 +1196,7 @@ describe('POST /api/chat', () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unresolved', candidateCount: 0 });
     const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
     const supportData = {
+      priorContact: 'unknown' as const,
       customerName: 'Camilo Echeverri',
       category: 'technik' as const,
       issueDescription: 'Treppenlift ist defekt.',
@@ -1183,6 +1242,42 @@ describe('POST /api/chat', () => {
     expect(text).not.toContain('"matchState"');
   });
 
+  it('does not hand off complete support data before prior-contact status is known', async () => {
+    const resolveSupportPerson = vi.fn();
+    const supportData = {
+      customerName: 'Maria Schmidt',
+      category: 'technik' as const,
+      issueDescription: 'Lift bleibt stehen.',
+      email: 'maria@example.de',
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          yield { type: 'service' as const, serviceData: supportData };
+        },
+      },
+      pipedrive: {
+        ...createMockPipedrive(),
+        isConfigured: () => true,
+        resolveSupportPerson,
+      },
+      email: createMockEmail(),
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'support-needs-prior-contact', message: 'Das ist alles', history: [] }),
+    });
+
+    expect(resolveSupportPerson).not.toHaveBeenCalled();
+    expect(await res.text()).toContain('"status":"needs_prior_contact"');
+  });
+
   it('still sends the support email when the unique-match note write fails', async () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
     const createSupportNote = vi.fn().mockRejectedValue(new Error('Pipedrive API error: 500 Internal Server Error'));
@@ -1190,6 +1285,7 @@ describe('POST /api/chat', () => {
     const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const supportData = {
+      priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
       email: 'maria@example.de',
       category: 'lossau' as const,
@@ -1247,6 +1343,7 @@ describe('POST /api/chat', () => {
     const sendSupportNotification = vi.fn().mockRejectedValue(new Error('SMTP unavailable'));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const supportData = {
+      priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
       phone: '05261 96660',
       category: 'technik' as const,
@@ -1309,6 +1406,7 @@ describe('POST /api/chat', () => {
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
     const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
     const supportData = {
+      priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
       email: 'maria@example.de',
       category: 'technik' as const,
@@ -1446,6 +1544,7 @@ describe('POST /api/chat', () => {
     const tracker = createMockTracker();
     const createLead = vi.fn().mockResolvedValue({ outcome: 'created', personId: 123, dealId: 456 });
     const leadData = {
+      priorContact: 'unknown' as const,
       customerSegment: 'Privatperson' as never,
       firstName: 'Max',
       lastName: 'Mustermann',
@@ -1502,6 +1601,7 @@ describe('POST /api/chat', () => {
   it('records support handoff events and metadata', async () => {
     const tracker = createMockTracker();
     const supportData = {
+      priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
       category: 'technik' as const,
       issueDescription: 'Lift piept.',
@@ -1564,6 +1664,7 @@ describe('POST /api/chat', () => {
     const tracker = createMockTracker();
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const supportData = {
+      priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
       category: 'technik' as const,
       issueDescription: 'Lift piept.',

@@ -95,6 +95,32 @@ describe('createEmailService', () => {
     expect(call.html).toContain('href="https://lippelift.pipedrive.com/deal/456"');
   });
 
+  it('sendLeadNotification includes escaped prior-contact routing context', async () => {
+    const sendMock = vi.fn().mockResolvedValue({ messageId: 'prior-contact-lead' });
+    const service = createEmailService(
+      { host: 'smtp.test.com', port: 587, user: 'a', pass: 'b' },
+      sendMock,
+    );
+
+    await service.sendLeadNotification('test@example.com', {
+      firstName: 'Max<script>',
+      lastName: 'Mustermann',
+      email: 'max@example.de',
+      priorContact: 'yes',
+      priorContactReference: 'ANG-42<script>',
+      city: 'Lemgo',
+      postalCode: '32657',
+      availability: '08:00 - 12:00',
+    });
+
+    const call = sendMock.mock.calls[0][0];
+    expect(call.html).toContain('Vorheriger Kontakt');
+    expect(call.html).toContain('Referenz');
+    expect(call.html).toContain('ANG-42&lt;script&gt;');
+    expect(call.html).not.toContain('ANG-42<script>');
+    expect(call.html).not.toContain('Max<script>');
+  });
+
   it('sendLeadNotification links a newly created opportunity to its exact Pipedrive deal', async () => {
     const sendMock = vi.fn().mockResolvedValue({ messageId: 'created-lead' });
     const service = createEmailService(

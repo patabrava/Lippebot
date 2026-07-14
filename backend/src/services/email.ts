@@ -52,6 +52,11 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
+function row(label: string, value: unknown): string {
+  if (value === undefined || value === null || String(value).trim().length === 0) return '';
+  return `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">${escapeHtml(label)}:</td><td>${escapeHtml(String(value).trim())}</td></tr>`;
+}
+
 export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
   const configured = smtp.host.length > 0;
   const pipedriveWebBaseUrl = smtp.pipedriveWebBaseUrl ?? 'https://lippelift.pipedrive.com';
@@ -100,21 +105,23 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
       <h2>Neue Anfrage über Sarah (Chatbot)</h2>
       ${crmAction}
       <table style="border-collapse:collapse;">
-        ${crmLabel ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">CRM-Zuordnung:</td><td>${crmLabel}</td></tr>` : ''}
-        ${crmContext?.personId ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Person-ID:</td><td>${crmContext.personId}</td></tr>` : ''}
-        ${crmContext?.dealId ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Fall-ID:</td><td>${crmContext.dealId}</td></tr>` : ''}
-        ${crmContext?.reason ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">CRM-Hinweis:</td><td>${escapeHtml(crmContext.reason)}</td></tr>` : ''}
-        <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Name:</td><td>${data.firstName} ${data.lastName}</td></tr>
-        ${data.phone ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Telefon:</td><td>${data.phone}</td></tr>` : ''}
-        ${data.email ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">E-Mail:</td><td>${data.email}</td></tr>` : ''}
-        ${data.street ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Straße:</td><td>${data.street}</td></tr>` : ''}
-        <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">PLZ / Stadt:</td><td>${data.postalCode} ${data.city}</td></tr>
-        <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Erreichbarkeit:</td><td>${data.availability}</td></tr>
-        <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Treppe:</td><td>${data.stairLocation || 'k.A.'} / ${data.stairType || 'k.A.'}</td></tr>
-        <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Gebäude:</td><td>${data.buildingType || 'k.A.'}</td></tr>
-        <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Lifttyp:</td><td>${data.liftType === 'sitzlift' ? 'Sitzlift' : data.liftType === 'rollstuhlgeeignet' ? 'Rollstuhlgeeignet' : 'k.A.'}</td></tr>
-        ${data.message ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Nachricht:</td><td>${data.message}</td></tr>` : ''}
-        <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Newsletter:</td><td>${data.newsletter || 'k.A.'}</td></tr>
+        ${crmLabel ? row('CRM-Zuordnung', crmLabel) : ''}
+        ${crmContext?.personId ? row('Person-ID', crmContext.personId) : ''}
+        ${crmContext?.dealId ? row('Fall-ID', crmContext.dealId) : ''}
+        ${crmContext?.reason ? row('CRM-Hinweis', crmContext.reason) : ''}
+        ${row('Name', `${data.firstName} ${data.lastName}`)}
+        ${row('Telefon', data.phone)}
+        ${row('E-Mail', data.email)}
+        ${row('Vorheriger Kontakt', data.priorContact)}
+        ${row('Referenz', data.priorContactReference)}
+        ${row('Straße', data.street)}
+        ${row('PLZ / Stadt', [data.postalCode, data.city].filter(Boolean).join(' '))}
+        ${row('Erreichbarkeit', data.availability)}
+        ${row('Treppe', `${data.stairLocation || 'k.A.'} / ${data.stairType || 'k.A.'}`)}
+        ${row('Gebäude', data.buildingType || 'k.A.')}
+        ${row('Lifttyp', data.liftType === 'sitzlift' ? 'Sitzlift' : data.liftType === 'rollstuhlgeeignet' ? 'Rollstuhlgeeignet' : 'k.A.')}
+        ${row('Nachricht', data.message)}
+        ${row('Newsletter', data.newsletter || 'k.A.')}
       </table>
     `;
 

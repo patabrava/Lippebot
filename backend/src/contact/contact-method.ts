@@ -31,6 +31,8 @@ function isUsablePhone(value: unknown): boolean {
   return new Set(digits).size >= 2;
 }
 
-export function hasContactMethod(data: ContactData): boolean {
+export function hasContactMethod(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const data = value as ContactData;
   return isUsablePhone(data.phone) || isUsableEmail(data.email);
 }

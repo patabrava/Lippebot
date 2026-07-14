@@ -236,6 +236,8 @@ function buildLeadFollowUpNote(data: LeadData, heading = 'Sarah Folgeanfrage'): 
     data.availability ? `Erreichbarkeit: ${escapeHtml(data.availability)}` : '',
     data.email ? `E-Mail: ${escapeHtml(data.email)}` : '',
     data.phone ? `Telefon: ${escapeHtml(data.phone)}` : '',
+    data.priorContact ? `Vorheriger Kontakt: ${escapeHtml(data.priorContact)}` : '',
+    data.priorContactReference ? `Referenz: ${escapeHtml(data.priorContactReference)}` : '',
     address ? `Adresse: ${escapeHtml(address)}` : '',
     data.message ? `Nachricht: ${escapeHtml(data.message)}` : '',
   ].filter(Boolean).join('<br>');
@@ -351,6 +353,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
 
   function supportIdentifiers(data: SupportData): string[] {
     const values = [
+      data.priorContactReference,
       data.customerNumber,
       data.invoiceNumber,
       data.orderNumber,
@@ -364,6 +367,46 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
       .filter((value): value is string => typeof value === 'string')
       .map((value) => value.trim())
       .filter((value) => value.length >= 2))];
+  }
+
+  function leadReferences(data: LeadData): string[] {
+    return [...new Set([data.priorContactReference]
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.trim())
+      .filter((value) => value.length >= 2))];
+  }
+
+  type LeadReferenceResolution =
+    | { status: 'none' }
+    | { status: 'unique'; personId: number; dealId: number }
+    | { status: 'ambiguous'; candidateCount: number; reason: string };
+
+  async function resolveLeadReference(data: LeadData): Promise<LeadReferenceResolution> {
+    const matches: DealSearchItem[] = [];
+    for (const reference of leadReferences(data)) {
+      matches.push(...await searchDeals(reference, 'custom_fields'));
+    }
+
+    const openDeals = [...new Map(matches.map((deal) => [deal.id, deal])).values()]
+      .filter(isOpenDeal);
+    if (openDeals.length === 0) return { status: 'none' };
+    if (openDeals.length > 1) {
+      return {
+        status: 'ambiguous',
+        candidateCount: openDeals.length,
+        reason: 'ambiguous_case_reference',
+      };
+    }
+
+    const personId = getDealPersonId(openDeals[0]);
+    if (!personId) {
+      return {
+        status: 'ambiguous',
+        candidateCount: 1,
+        reason: 'reference_deal_without_person',
+      };
+    }
+    return { status: 'unique', personId, dealId: openDeals[0].id };
   }
 
   function matchFromDeal(deal: DealSearchItem): SupportMatchResult {
@@ -380,19 +423,19 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
       identifierDealMatches.push(...await searchDeals(identifier, 'custom_fields'));
     }
 
-    const dedupedIdentifierDeals = [...new Map(identifierDealMatches.map((deal) => [deal.id, deal])).values()];
-    const candidateIdentifierDeals = candidateSet.size > 0
-      ? dedupedIdentifierDeals.filter((deal) => {
-        const personId = getDealPersonId(deal);
-        return typeof personId === 'number' && candidateSet.has(personId);
-      })
-      : dedupedIdentifierDeals;
-    const uniqueIdentifierDeal = uniqueCandidate(candidateIdentifierDeals.filter(isOpenDeal));
-    if (uniqueIdentifierDeal) {
-      return matchFromDeal(uniqueIdentifierDeal);
+    const openIdentifierDeals = [...new Map(identifierDealMatches.map((deal) => [deal.id, deal])).values()]
+      .filter(isOpenDeal);
+    if (openIdentifierDeals.length > 1) {
+      return { matchState: 'ambiguous', candidateCount: openIdentifierDeals.length };
     }
-    if (candidateIdentifierDeals.length > 1) {
-      return { matchState: 'ambiguous', candidateCount: candidateIdentifierDeals.length };
+    if (openIdentifierDeals.length === 1) {
+      const deal = openIdentifierDeals[0];
+      const personId = getDealPersonId(deal);
+      if (!personId) return { matchState: 'ambiguous', candidateCount: 1 };
+      if (candidateSet.size > 0 && !candidateSet.has(personId)) {
+        return { matchState: 'ambiguous', candidateCount: candidateSet.size + 1 };
+      }
+      return matchFromDeal(deal);
     }
 
     const uniquePersonId = uniqueCandidate(candidatePersonIds);
@@ -628,13 +671,46 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     const postalCode = normalizePostalCode(data.postalCode);
     const city = capitalize(data.city);
 
+    const reference = await resolveLeadReference(data);
+    if (reference.status === 'ambiguous') {
+      return {
+        outcome: 'identity_review',
+        candidateCount: reference.candidateCount,
+        reason: reference.reason,
+      };
+    }
+
     const identity = await resolveLeadIdentity(data);
-    if (identity.status === 'ambiguous') {
+    const isNameOnlyAmbiguity = identity.status === 'ambiguous'
+      && (identity.reason === 'name_match_requires_corroboration'
+        || identity.reason === 'ambiguous_name_and_address');
+    if (identity.status === 'ambiguous' && !(reference.status === 'unique' && isNameOnlyAmbiguity)) {
       return {
         outcome: 'identity_review',
         candidateCount: identity.candidateCount,
         reason: identity.reason,
       };
+    }
+
+    if (reference.status === 'unique') {
+      if (identity.status === 'unique' && identity.personId !== reference.personId) {
+        return {
+          outcome: 'identity_review',
+          candidateCount: 2,
+          reason: 'reference_contact_conflict',
+        };
+      }
+
+      await updatePerson(reference.personId, data, firstName, lastName, phone, email, street, postalCode, city);
+      cachePersonId(reference.personId, email, phone);
+      await apiCall('/notes', {
+        person_id: reference.personId,
+        deal_id: reference.dealId,
+        content: buildLeadFollowUpNote(data),
+        pinned_to_person_flag: 1,
+        pinned_to_deal_flag: 1,
+      });
+      return { outcome: 'reused', personId: reference.personId, dealId: reference.dealId };
     }
 
     const existingPersonId = identity.status === 'unique' ? identity.personId : undefined;
@@ -672,6 +748,8 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
 
     const dealNotes = [
       `Erreichbarkeit: ${data.availability}`,
+      data.priorContact ? `Vorheriger Kontakt: ${escapeHtml(data.priorContact)}` : '',
+      data.priorContactReference ? `Referenz: ${escapeHtml(data.priorContactReference)}` : '',
       data.message ? `Nachricht: ${data.message}` : '',
     ].filter(Boolean).join('\n');
 

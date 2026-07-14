@@ -37,6 +37,8 @@ describe('support routing helpers', () => {
       category: 'technik',
       issueDescription: 'Lift bleibt im Erdgeschoss stehen und piept.',
       liftModel: 'VARIO PLUS',
+      priorContact: 'yes',
+      priorContactReference: 'VORGANG-TEST-42',
     };
 
     const note = buildSupportNoteContent(data, 'unique', new Date('2026-05-21T10:15:00.000Z'));
@@ -49,6 +51,8 @@ describe('support routing helpers', () => {
     expect(note).toContain('Telefon: 05261 96660');
     expect(note).toContain('E-Mail: maria@example.de');
     expect(note).toContain('Lift-Modell: VARIO PLUS');
+    expect(note).toContain('Vorheriger Kontakt: yes');
+    expect(note).toContain('Referenz: VORGANG-TEST-42');
     expect(note).not.toContain('Nutzer:');
     expect(note).not.toContain('Sarah:');
   });
@@ -75,6 +79,27 @@ describe('support routing helpers', () => {
     expect(html).toContain('Manuelle Prüfung erforderlich');
     expect(html).not.toContain('Fall in Pipedrive öffnen');
     expect(html).not.toContain('href="');
+  });
+
+  it('shows and escapes prior-contact routing context in support emails', () => {
+    const html = buildSupportEmailHtml({
+      data: {
+        customerName: 'Test Kunde',
+        category: 'sales',
+        priorContact: 'yes',
+        priorContactReference: 'ANG-42<script>',
+      },
+      intendedInbox: 'sales@lippelift.de',
+      matchState: 'unique',
+      noteStatus: 'created',
+      dealUrl: 'https://lippelift.pipedrive.com/deal/42',
+    });
+
+    expect(html).toContain('Vorheriger Kontakt');
+    expect(html).toContain('yes');
+    expect(html).toContain('Referenz');
+    expect(html).toContain('ANG-42&lt;script&gt;');
+    expect(html).not.toContain('ANG-42<script>');
   });
 
   it('links a unique support match to the exact Pipedrive deal', () => {
