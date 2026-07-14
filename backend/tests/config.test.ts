@@ -23,6 +23,7 @@ describe('loadConfig', () => {
     process.env.VERTEX_AI_PROJECT_ID = 'test-project';
     process.env.VERTEX_AI_LOCATION = 'us-central1';
     process.env.VERTEX_AI_ENABLED = 'True';
+    delete process.env.PIPEDRIVE_WEB_BASE_URL;
     const config = loadConfig();
     expect(config.vertexAiProjectId).toBe('test-project');
     expect(config.vertexAiLocation).toBe('us-central1');
@@ -30,6 +31,14 @@ describe('loadConfig', () => {
     expect(config.port).toBe(3000);
     expect(config.corsOrigin).toBe('http://localhost:5173');
     expect(config.pipedriveApiKey).toBe('');
+    expect(config.pipedriveWebBaseUrl).toBe('https://lippelift.pipedrive.com');
+  });
+
+  it('loads a configured Pipedrive web base URL', () => {
+    process.env.VERTEX_AI_PROJECT_ID = 'test-project';
+    process.env.PIPEDRIVE_WEB_BASE_URL = 'https://example.pipedrive.com';
+
+    expect(loadConfig().pipedriveWebBaseUrl).toBe('https://example.pipedrive.com');
   });
 
   it('defaults conversation tracking to disabled', () => {
