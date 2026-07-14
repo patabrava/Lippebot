@@ -2,6 +2,12 @@ import { VertexAI, type FunctionDeclaration, FunctionDeclarationSchemaType, type
 import type { ChatMessage, Mode, LeadData, ServiceData, ConversationState } from '../types/index.js';
 import { buildSystemPrompt } from '../prompts/system-prompt.js';
 import { hasContactMethod } from '../contact/contact-method.js';
+import { hasPriorContactStatus } from '../contact/prior-contact.js';
+
+const priorContactProperty = {
+  type: FunctionDeclarationSchemaType.STRING,
+  enum: ['yes', 'no', 'unknown'],
+};
 
 const reportStateFn: FunctionDeclaration = {
   name: 'report_state',
@@ -18,6 +24,8 @@ const reportStateFn: FunctionDeclaration = {
         type: FunctionDeclarationSchemaType.OBJECT,
         description: 'Any lead or service data collected so far',
         properties: {
+          priorContact: priorContactProperty,
+          priorContactReference: { type: FunctionDeclarationSchemaType.STRING },
           customerSegment: { type: FunctionDeclarationSchemaType.STRING },
           stairLocation: { type: FunctionDeclarationSchemaType.STRING },
           stairType: { type: FunctionDeclarationSchemaType.STRING },
@@ -65,6 +73,8 @@ const submitLeadFn: FunctionDeclaration = {
   parameters: {
     type: FunctionDeclarationSchemaType.OBJECT,
     properties: {
+      priorContact: priorContactProperty,
+      priorContactReference: { type: FunctionDeclarationSchemaType.STRING },
       customerSegment: { type: FunctionDeclarationSchemaType.STRING },
       stairLocation: { type: FunctionDeclarationSchemaType.STRING },
       stairType: { type: FunctionDeclarationSchemaType.STRING },
@@ -81,7 +91,7 @@ const submitLeadFn: FunctionDeclaration = {
       message: { type: FunctionDeclarationSchemaType.STRING },
       newsletter: { type: FunctionDeclarationSchemaType.STRING },
     },
-    required: ['customerSegment', 'firstName', 'lastName', 'street', 'postalCode', 'city', 'availability'],
+    required: ['customerSegment', 'firstName', 'lastName', 'street', 'postalCode', 'city', 'availability', 'priorContact'],
   },
 };
 
@@ -91,6 +101,8 @@ const submitServiceRequestFn: FunctionDeclaration = {
   parameters: {
     type: FunctionDeclarationSchemaType.OBJECT,
     properties: {
+      priorContact: priorContactProperty,
+      priorContactReference: { type: FunctionDeclarationSchemaType.STRING },
       customerName: { type: FunctionDeclarationSchemaType.STRING },
       phone: { type: FunctionDeclarationSchemaType.STRING },
       email: { type: FunctionDeclarationSchemaType.STRING },
@@ -113,7 +125,7 @@ const submitServiceRequestFn: FunctionDeclaration = {
       installationContext: { type: FunctionDeclarationSchemaType.STRING },
       defectContext: { type: FunctionDeclarationSchemaType.STRING },
     },
-    required: ['customerName', 'category', 'issueDescription'],
+    required: ['customerName', 'category', 'issueDescription', 'priorContact'],
   },
 };
 
@@ -189,12 +201,12 @@ export function createGeminiService(config: VertexChatConfig) {
     const response = await result.response;
     const responseParts = response.candidates?.[0]?.content?.parts || [];
     const functionCalls = extractFunctionCalls(responseParts);
-    const hasInvalidContactSubmission = functionCalls.some((call) => (
+    const hasInvalidSubmission = functionCalls.some((call) => (
       (call.name === 'submit_lead' || call.name === 'submit_service_request')
-      && !hasContactMethod(call.args)
+      && (!hasPriorContactStatus(call.args) || !hasContactMethod(call.args))
     ));
 
-    if (!hasInvalidContactSubmission) {
+    if (!hasInvalidSubmission) {
       for (const content of initialTextChunks) {
         yield { type: 'token', content };
       }
@@ -218,6 +230,19 @@ export function createGeminiService(config: VertexChatConfig) {
         });
       } else if (call.name === 'submit_lead') {
         hasActionCalls = true;
+        if (!hasPriorContactStatus(call.args)) {
+          functionResponses.push({
+            functionResponse: {
+              name: 'submit_lead',
+              response: {
+                success: false,
+                needsPriorContact: true,
+                message: 'Kläre zuerst mit genau einer natürlichen Frage, ob die Person wegen dieses Anliegens schon Kontakt mit uns hatte. Wenn sie es nicht weiß oder nicht sagen möchte, verwende unknown.',
+              },
+            },
+          });
+          continue;
+        }
         if (!hasContactMethod(call.args)) {
           functionResponses.push({
             functionResponse: {
@@ -240,6 +265,19 @@ export function createGeminiService(config: VertexChatConfig) {
         });
       } else if (call.name === 'submit_service_request') {
         hasActionCalls = true;
+        if (!hasPriorContactStatus(call.args)) {
+          functionResponses.push({
+            functionResponse: {
+              name: 'submit_service_request',
+              response: {
+                success: false,
+                needsPriorContact: true,
+                message: 'Kläre zuerst mit genau einer natürlichen Frage, ob die Person wegen dieses Anliegens schon Kontakt mit uns hatte. Wenn sie es nicht weiß oder nicht sagen möchte, verwende unknown.',
+              },
+            },
+          });
+          continue;
+        }
         if (!hasContactMethod(call.args)) {
           functionResponses.push({
             functionResponse: {

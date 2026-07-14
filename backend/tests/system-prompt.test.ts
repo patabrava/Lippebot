@@ -54,6 +54,16 @@ describe('buildSystemPrompt', () => {
     expect(prompt).not.toContain('Vorname, Nachname, Telefonnummer (Pflicht)');
   });
 
+  it('asks both funnels about prior contact and follows a yes with a reference before contact details', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?');
+    expect(prompt).toContain('Hast du dazu eine Angebots-, Auftrags- oder Vorgangsnummer zur Hand?');
+    expect(prompt).toContain('Welche E-Mail-Adresse oder Telefonnummer hast du damals verwendet?');
+    expect(prompt).toContain('Frage nicht erneut, wenn');
+    expect(prompt).toContain('priorContact = unknown');
+    expect(prompt).toContain('Eine Antwort mit nein verhindert niemals die bestehende CRM-Dublettenprüfung');
+  });
+
   it('includes boundary rules', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('Preise nennen');

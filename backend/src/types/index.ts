@@ -11,12 +11,15 @@ export interface ChatRequest {
 }
 
 export type Mode = 'berater' | 'anfrage' | 'service' | 'undetermined';
+export type PriorContactStatus = 'yes' | 'no' | 'unknown';
 
 export type SupportCategory = 'technik' | 'finance' | 'sales' | 'lossau';
 export type SupportMatchState = 'unique' | 'ambiguous' | 'unresolved';
 export type SupportNoteStatus = 'created' | 'failed' | 'skipped';
 
 export interface LeadData {
+  priorContact?: PriorContactStatus;
+  priorContactReference?: string;
   customerSegment?: 'privatperson' | 'firma';
   stairLocation?: 'innen' | 'aussen';
   stairType?: 'gerade' | 'kurvig';
@@ -45,6 +48,8 @@ export interface LeadCrmResult {
 }
 
 export interface SupportData {
+  priorContact?: PriorContactStatus;
+  priorContactReference?: string;
   customerName?: string;
   phone?: string;
   email?: string;

@@ -49,7 +49,26 @@ describe('createGeminiService', () => {
     expect(serviceDeclaration.parameters.properties.offerNumber).toBeDefined();
     expect(serviceDeclaration.parameters.properties.leadId).toBeDefined();
     expect(serviceDeclaration.parameters.properties.sparePartReference).toBeDefined();
-    expect(serviceDeclaration.parameters.required).toEqual(['customerName', 'category', 'issueDescription']);
+    expect(serviceDeclaration.parameters.required).toEqual(['customerName', 'category', 'issueDescription', 'priorContact']);
+  });
+
+  it('registers prior-contact status and reference on state and both submission tools', async () => {
+    const { createGeminiService } = await import('../src/services/gemini.js');
+    createGeminiService({ projectId: 'test-project', location: 'us-central1' });
+
+    const declarations = getGenerativeModelMock.mock.calls[0][0].tools[0].functionDeclarations;
+    const stateDeclaration = declarations.find((declaration: { name: string }) => declaration.name === 'report_state');
+    const leadDeclaration = declarations.find((declaration: { name: string }) => declaration.name === 'submit_lead');
+    const serviceDeclaration = declarations.find((declaration: { name: string }) => declaration.name === 'submit_service_request');
+
+    expect(stateDeclaration.parameters.properties.collectedData.properties.priorContact.enum).toEqual(['yes', 'no', 'unknown']);
+    expect(stateDeclaration.parameters.properties.collectedData.properties.priorContactReference).toBeDefined();
+    expect(leadDeclaration.parameters.properties.priorContact.enum).toEqual(['yes', 'no', 'unknown']);
+    expect(leadDeclaration.parameters.properties.priorContactReference).toBeDefined();
+    expect(leadDeclaration.parameters.required).toContain('priorContact');
+    expect(serviceDeclaration.parameters.properties.priorContact.enum).toEqual(['yes', 'no', 'unknown']);
+    expect(serviceDeclaration.parameters.properties.priorContactReference).toBeDefined();
+    expect(serviceDeclaration.parameters.required).toContain('priorContact');
   });
 
   it('registers phone-or-email submission contracts without requiring phone specifically', async () => {
@@ -75,7 +94,7 @@ describe('createGeminiService', () => {
     const initialResponse = {
       candidates: [{
         content: {
-          parts: [{ functionCall: { name: functionName, args: { customerName: 'Maria Schmidt' } } }],
+          parts: [{ functionCall: { name: functionName, args: { customerName: 'Maria Schmidt', priorContact: 'unknown' } } }],
         },
       }],
     };
@@ -111,6 +130,55 @@ describe('createGeminiService', () => {
     expect(functionResponse.response).toEqual(expect.objectContaining({
       success: false,
       needsContact: true,
+    }));
+  });
+
+  it.each([
+    { functionName: 'submit_lead', eventType: 'lead' },
+    { functionName: 'submit_service_request', eventType: 'service' },
+  ])('rejects $functionName without prior-contact status before reporting success', async ({ functionName, eventType }) => {
+    const initialResponse = {
+      candidates: [{
+        content: {
+          parts: [{ functionCall: { name: functionName, args: { customerName: 'Maria Schmidt', email: 'maria@example.de' } } }],
+        },
+      }],
+    };
+    const followUpResponse = { candidates: [{ content: { parts: [] } }] };
+    generateContentStreamMock
+      .mockResolvedValueOnce({
+        stream: (async function* () {
+          yield { candidates: [{ content: { parts: [{ text: 'Dein Anliegen wurde erfolgreich übergeben.' }] } }] };
+        })(),
+        response: Promise.resolve(initialResponse),
+      })
+      .mockResolvedValueOnce({
+        stream: (async function* () {
+          yield { candidates: [{ content: { parts: [{ text: 'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?' }] } }] };
+        })(),
+        response: Promise.resolve(followUpResponse),
+      });
+
+    const { createGeminiService } = await import('../src/services/gemini.js');
+    const service = createGeminiService({ projectId: 'test-project', location: 'us-central1' });
+    const events = [];
+    for await (const event of service.streamChat('missing-prior-contact', 'Das ist alles', [])) {
+      events.push(event);
+    }
+
+    expect(events.some((event) => event.type === eventType)).toBe(false);
+    expect(events).not.toContainEqual({ type: 'token', content: 'Dein Anliegen wurde erfolgreich übergeben.' });
+    expect(events).toContainEqual({
+      type: 'token',
+      content: 'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?',
+    });
+    expect(generateContentStreamMock).toHaveBeenCalledTimes(2);
+    const followUpContents = generateContentStreamMock.mock.calls[1][0].contents;
+    const functionResponse = followUpContents.at(-1).parts[0].functionResponse;
+    expect(functionResponse.name).toBe(functionName);
+    expect(functionResponse.response).toEqual(expect.objectContaining({
+      success: false,
+      needsPriorContact: true,
     }));
   });
 });
