@@ -21,6 +21,7 @@ const email = createEmailService({
   port: config.smtpPort,
   user: config.smtpUser,
   pass: config.smtpPass,
+  pipedriveWebBaseUrl: config.pipedriveWebBaseUrl,
 });
 const conversationTracker = createConversationTracker({
   enabled: config.conversationTrackingEnabled,

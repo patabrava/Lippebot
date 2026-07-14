@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { buildPipedriveDealUrl } from '../crm/pipedrive-links.js';
 import { buildSupportEmailHtml, buildSupportEmailSubject } from '../support/support-routing.js';
 import type {
   LeadData,
@@ -21,6 +22,7 @@ interface SmtpConfig {
   port: number;
   user: string;
   pass: string;
+  pipedriveWebBaseUrl?: string;
 }
 
 interface MailOptions {
@@ -52,6 +54,7 @@ function escapeHtml(value: string): string {
 
 export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
   const configured = smtp.host.length > 0;
+  const pipedriveWebBaseUrl = smtp.pipedriveWebBaseUrl ?? 'https://lippelift.pipedrive.com';
 
   let sendFn: SendFn;
   if (sendOverride) {
@@ -86,9 +89,16 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
         failed: 'CRM-Übertragung fehlgeschlagen',
       }[crmContext.outcome]
       : undefined;
+    const dealUrl = buildPipedriveDealUrl(pipedriveWebBaseUrl, crmContext?.dealId);
+    const crmAction = crmContext
+      ? dealUrl
+        ? `<p><a href="${escapeHtml(dealUrl)}" style="display:inline-block;padding:10px 16px;background:#0b63ce;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold;">Fall in Pipedrive öffnen</a></p>`
+        : '<p><strong>Manuelle Prüfung erforderlich</strong></p>'
+      : '';
 
     const html = `
       <h2>Neue Anfrage über Sarah (Chatbot)</h2>
+      ${crmAction}
       <table style="border-collapse:collapse;">
         ${crmLabel ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">CRM-Zuordnung:</td><td>${crmLabel}</td></tr>` : ''}
         ${crmContext?.personId ? `<tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Person-ID:</td><td>${crmContext.personId}</td></tr>` : ''}

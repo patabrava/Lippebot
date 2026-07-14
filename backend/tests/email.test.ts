@@ -64,7 +64,13 @@ describe('createEmailService', () => {
   it('sendLeadNotification identifies a reused CRM case for the internal team', async () => {
     const sendMock = vi.fn().mockResolvedValue({ messageId: 'reused-lead' });
     const service = createEmailService(
-      { host: 'smtp.test.com', port: 587, user: 'a', pass: 'b' },
+      {
+        host: 'smtp.test.com',
+        port: 587,
+        user: 'a',
+        pass: 'b',
+        pipedriveWebBaseUrl: 'https://lippelift.pipedrive.com',
+      },
       sendMock,
     );
 
@@ -85,6 +91,29 @@ describe('createEmailService', () => {
     expect(call.html).toContain('Bestehender CRM-Fall wiederverwendet');
     expect(call.html).toContain('123');
     expect(call.html).toContain('456');
+    expect(call.html).toContain('Fall in Pipedrive öffnen');
+    expect(call.html).toContain('href="https://lippelift.pipedrive.com/deal/456"');
+  });
+
+  it('sendLeadNotification links a newly created opportunity to its exact Pipedrive deal', async () => {
+    const sendMock = vi.fn().mockResolvedValue({ messageId: 'created-lead' });
+    const service = createEmailService(
+      { host: 'smtp.test.com', port: 587, user: 'a', pass: 'b' },
+      sendMock,
+    );
+
+    await service.sendLeadNotification('test@example.com', {
+      firstName: 'Max',
+      lastName: 'Mustermann',
+    }, {
+      outcome: 'created',
+      personId: 321,
+      dealId: 789,
+    });
+
+    const call = sendMock.mock.calls[0][0];
+    expect(call.html).toContain('Neuer CRM-Fall erstellt');
+    expect(call.html).toContain('href="https://lippelift.pipedrive.com/deal/789"');
   });
 
   it.each([
@@ -114,6 +143,36 @@ describe('createEmailService', () => {
     expect(call.html).toContain(expectedLabel);
     expect(call.html).toContain('&lt;unsafe reason&gt;');
     expect(call.html).not.toContain('<unsafe reason>');
+    expect(call.html).toContain('Manuelle Prüfung erforderlich');
+    expect(call.html).not.toContain('Fall in Pipedrive öffnen');
+    expect(call.html).not.toContain('href="');
+  });
+
+  it('sendLeadNotification falls back to manual review for an unsafe CRM web URL', async () => {
+    const sendMock = vi.fn().mockResolvedValue({ messageId: 'unsafe-link' });
+    const service = createEmailService(
+      {
+        host: 'smtp.test.com',
+        port: 587,
+        user: 'a',
+        pass: 'b',
+        pipedriveWebBaseUrl: 'http://lippelift.pipedrive.com',
+      },
+      sendMock,
+    );
+
+    await service.sendLeadNotification('test@example.com', {
+      firstName: 'Max',
+      lastName: 'Mustermann',
+    }, {
+      outcome: 'reused',
+      dealId: 456,
+    });
+
+    const call = sendMock.mock.calls[0][0];
+    expect(call.html).toContain('Manuelle Prüfung erforderlich');
+    expect(call.html).not.toContain('Fall in Pipedrive öffnen');
+    expect(call.html).not.toContain('href="');
   });
 
   it('sendServiceNotification formats email correctly', async () => {
