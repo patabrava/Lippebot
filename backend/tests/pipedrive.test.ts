@@ -1808,6 +1808,25 @@ describe('createPipedriveService', () => {
     expect(body.content).toContain('Lead-ID: LEAD-123');
   });
 
+  it('createSupportNote preserves the unresolved match state on a review case', async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ success: true, data: { id: 9003 } }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await createPipedriveService('test-key', 1, 2).createSupportNote(701, {
+      customerName: 'Camilo',
+      category: 'lossau',
+      issueDescription: 'Installation ausstehend.',
+      email: 'camilo@example.de',
+    }, 801, 'unresolved');
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.content).toContain('CRM-Treffer: unresolved');
+    expect(body.deal_id).toBe(801);
+  });
+
   it('createChatTranscriptNote pins a full chat transcript to its person and opportunity', async () => {
     const mockFetch = vi.fn()
       .mockResolvedValueOnce({
@@ -1897,5 +1916,107 @@ describe('createPipedriveService', () => {
 
     const postCalls = mockFetch.mock.calls.filter(([, init]) => init?.method === 'POST');
     expect(postCalls).toHaveLength(1);
+  });
+
+  it('createSupportCase creates a reviewable person and deal for an unresolved request', async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/persons') && init?.method === 'POST') {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 701 } }) };
+      }
+      if (url.pathname.endsWith('/deals') && init?.method === 'POST') {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 801 } }) };
+      }
+      throw new Error(`Unexpected request: ${init?.method ?? 'GET'} ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await createPipedriveService('test-key', 1, 2).createSupportCase({
+      customerName: 'Camilo',
+      email: ' CAECHMA@gmail.com ',
+      category: 'lossau',
+      issueDescription: 'Der Treppenlift muss noch installiert werden.',
+    }, {
+      matchState: 'unresolved',
+      candidateCount: 0,
+    });
+
+    expect(result).toEqual({ personId: 701, dealId: 801, createdPerson: true });
+    const personCall = mockFetch.mock.calls.find(([url]) => new URL(String(url)).pathname.endsWith('/persons'));
+    expect(JSON.parse(personCall![1]!.body as string)).toEqual(expect.objectContaining({
+      name: 'Camilo',
+      email: [{ value: 'caechma@gmail.com', primary: true }],
+    }));
+    const dealCall = mockFetch.mock.calls.find(([url]) => new URL(String(url)).pathname.endsWith('/deals'));
+    expect(JSON.parse(dealCall![1]!.body as string)).toEqual(expect.objectContaining({
+      title: 'Sarah Support [lossau]: Camilo – Zuordnung prüfen',
+      person_id: 701,
+      pipeline_id: 1,
+      stage_id: 2,
+    }));
+  });
+
+  it('createSupportCase reuses a uniquely matched person that has no open deal', async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/deals') && init?.method === 'POST') {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 802 } }) };
+      }
+      throw new Error(`Unexpected request: ${init?.method ?? 'GET'} ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await createPipedriveService('test-key', 1, 2).createSupportCase({
+      customerName: 'Maria Schmidt',
+      phone: '05261 96660',
+      category: 'technik',
+      issueDescription: 'Der Lift bleibt stehen.',
+    }, {
+      matchState: 'unique',
+      personId: 501,
+      candidateCount: 1,
+    });
+
+    expect(result).toEqual({ personId: 501, dealId: 802, createdPerson: false });
+    expect(mockFetch.mock.calls.some(([url]) => new URL(String(url)).pathname.endsWith('/persons'))).toBe(false);
+    const dealBody = JSON.parse(mockFetch.mock.calls[0][1]!.body as string);
+    expect(dealBody).toEqual(expect.objectContaining({ person_id: 501, pipeline_id: 1, stage_id: 2 }));
+  });
+
+  it('createSupportCase reuses its newly created person when an immediate deal retry is needed', async () => {
+    let dealAttempts = 0;
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/persons') && init?.method === 'POST') {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 703 } }) };
+      }
+      if (url.pathname.endsWith('/deals') && init?.method === 'POST') {
+        dealAttempts += 1;
+        if (dealAttempts === 1) {
+          return { ok: false, status: 503, statusText: 'Service Unavailable' };
+        }
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 803 } }) };
+      }
+      throw new Error(`Unexpected request: ${init?.method ?? 'GET'} ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+    const service = createPipedriveService('test-key', 1, 2);
+    const data = {
+      customerName: 'Retry Kunde',
+      email: 'retry@example.de',
+      category: 'lossau' as const,
+      issueDescription: 'Installation ausstehend.',
+    };
+    const match = { matchState: 'unresolved' as const, candidateCount: 0 };
+
+    await expect(service.createSupportCase(data, match)).rejects.toThrow('503 Service Unavailable');
+    await expect(service.createSupportCase(data, match)).resolves.toEqual({
+      personId: 703,
+      dealId: 803,
+      createdPerson: false,
+    });
+
+    const personPosts = mockFetch.mock.calls.filter(([url]) => new URL(String(url)).pathname.endsWith('/persons'));
+    expect(personPosts).toHaveLength(1);
   });
 });

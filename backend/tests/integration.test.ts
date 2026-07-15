@@ -24,6 +24,7 @@ function createMockPipedrive(): PipedriveService {
     isConfigured: () => false,
     createLead: vi.fn(),
     createServiceActivity: vi.fn(),
+    createSupportCase: vi.fn(),
     resolveSupportPerson: vi.fn(),
     createSupportNote: vi.fn(),
     createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
@@ -1038,6 +1039,7 @@ describe('POST /api/chat', () => {
 
   it('accepts an email-only support handoff without requesting a phone number', async () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
+    const createSupportCase = vi.fn().mockResolvedValue({ personId: 501, dealId: 7002, createdPerson: false });
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
     const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
     const supportData = {
@@ -1058,6 +1060,7 @@ describe('POST /api/chat', () => {
         createLead: vi.fn(),
         createServiceActivity: vi.fn(),
         resolveSupportPerson,
+        createSupportCase,
         createSupportNote,
         createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
@@ -1081,7 +1084,10 @@ describe('POST /api/chat', () => {
 
     const text = await res.text();
     expect(resolveSupportPerson).toHaveBeenCalledWith(supportData);
-    expect(createSupportNote).toHaveBeenCalledWith(501, supportData, undefined);
+    expect(createSupportCase).toHaveBeenCalledWith(supportData, {
+      matchState: 'unique', personId: 501, candidateCount: 1,
+    });
+    expect(createSupportNote).toHaveBeenCalledWith(501, supportData, 7002);
     expect(sendSupportNotification).toHaveBeenCalled();
     expect(text).toContain('"status":"accepted"');
   });
@@ -1137,9 +1143,11 @@ describe('POST /api/chat', () => {
     expect(createSupportNote).toHaveBeenCalledWith(501, supportData, 7001);
   });
 
-  it('does not create a Pipedrive note for unresolved support matches but still sends the email', async () => {
+  it('creates a reviewable Pipedrive case and full transcript for unresolved support matches', async () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unresolved', candidateCount: 0 });
-    const createSupportNote = vi.fn();
+    const createSupportCase = vi.fn().mockResolvedValue({ personId: 701, dealId: 801, createdPerson: true });
+    const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
+    const createChatTranscriptNote = vi.fn().mockResolvedValue({ noteId: 9100 });
     const createServiceActivity = vi.fn();
     const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
     const supportData = {
@@ -1160,8 +1168,9 @@ describe('POST /api/chat', () => {
         createLead: vi.fn(),
         createServiceActivity,
         resolveSupportPerson,
+        createSupportCase,
         createSupportNote,
-        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
+        createChatTranscriptNote,
       },
       email: {
         isConfigured: () => true,
@@ -1182,14 +1191,137 @@ describe('POST /api/chat', () => {
     });
 
     expect(res.status).toBe(200);
-    await res.text();
-    expect(createSupportNote).not.toHaveBeenCalled();
+    const text = await res.text();
+    expect(createSupportCase).toHaveBeenCalledWith(supportData, {
+      matchState: 'unresolved',
+      candidateCount: 0,
+    });
+    expect(createSupportNote).toHaveBeenCalledWith(701, supportData, 801, 'unresolved');
+    expect(createChatTranscriptNote).toHaveBeenCalledWith(
+      'support-unresolved',
+      701,
+      801,
+      expect.stringContaining('Vollständiges Sarah-Chatprotokoll'),
+    );
     expect(createServiceActivity).not.toHaveBeenCalled();
     expect(sendSupportNotification).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
       intendedInbox: 'finance@lippelift.de',
       matchState: 'unresolved',
-      noteStatus: 'skipped',
+      noteStatus: 'created',
+      dealId: 801,
     }));
+    expect(text).toContain('"type":"done"');
+  });
+
+  it('creates a separate review case without guessing an ambiguous existing customer', async () => {
+    const match = { matchState: 'ambiguous' as const, candidateCount: 2 };
+    const resolveSupportPerson = vi.fn().mockResolvedValue(match);
+    const createSupportCase = vi.fn().mockResolvedValue({ personId: 702, dealId: 802, createdPerson: true });
+    const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9002 });
+    const createChatTranscriptNote = vi.fn().mockResolvedValue({ noteId: 9102 });
+    const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
+    const supportData = {
+      priorContact: 'yes' as const,
+      customerName: 'Maria Schmidt',
+      email: 'new-address@example.de',
+      category: 'technik' as const,
+      issueDescription: 'Der Lift bleibt stehen.',
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          yield { type: 'service' as const, serviceData: supportData };
+        },
+      },
+      pipedrive: {
+        ...createMockPipedrive(),
+        isConfigured: () => true,
+        resolveSupportPerson,
+        createSupportCase,
+        createSupportNote,
+        createChatTranscriptNote,
+      },
+      email: {
+        ...createMockEmail(),
+        isConfigured: () => true,
+        sendSupportNotification,
+      },
+      notificationEmailTo: '',
+      serviceEmailTo: 'berg@lippelift.de,caechma@gmail.com',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'support-ambiguous-review', message: 'Lift defekt', history: [] }),
+    })).text();
+
+    expect(createSupportCase).toHaveBeenCalledWith(supportData, match);
+    expect(createSupportNote).toHaveBeenCalledWith(702, supportData, 802, 'ambiguous');
+    expect(createChatTranscriptNote).toHaveBeenCalledWith(
+      'support-ambiguous-review', 702, 802, expect.any(String),
+    );
+    expect(sendSupportNotification).toHaveBeenCalledWith(
+      'berg@lippelift.de,caechma@gmail.com',
+      expect.objectContaining({ matchState: 'ambiguous', noteStatus: 'created', dealId: 802 }),
+    );
+    expect(text).toContain('"type":"done"');
+  });
+
+  it('emails the team but does not report completion when fallback CRM case creation fails', async () => {
+    const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unresolved', candidateCount: 0 });
+    const createSupportCase = vi.fn().mockRejectedValue(new Error('Pipedrive API error: 503 Service Unavailable'));
+    const createSupportNote = vi.fn();
+    const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const supportData = {
+      priorContact: 'unknown' as const,
+      customerName: 'Camilo Test',
+      email: 'camilo.test@example.de',
+      category: 'lossau' as const,
+      issueDescription: 'Installation ausstehend.',
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          yield { type: 'service' as const, serviceData: supportData };
+        },
+      },
+      pipedrive: {
+        ...createMockPipedrive(),
+        isConfigured: () => true,
+        resolveSupportPerson,
+        createSupportCase,
+        createSupportNote,
+      },
+      email: {
+        ...createMockEmail(),
+        isConfigured: () => true,
+        sendSupportNotification,
+      },
+      notificationEmailTo: '',
+      serviceEmailTo: 'berg@lippelift.de',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'support-crm-failure', message: 'Installation', history: [] }),
+    })).text();
+
+    expect(createSupportNote).not.toHaveBeenCalled();
+    expect(sendSupportNotification).toHaveBeenCalledWith('berg@lippelift.de', expect.objectContaining({
+      matchState: 'unresolved',
+      noteStatus: 'failed',
+      noteError: 'Pipedrive API error: 503 Service Unavailable',
+    }));
+    expect(text).toContain('"type":"error"');
+    expect(text).not.toContain('"type":"done"');
+    expect(errorSpy).toHaveBeenCalledWith('Support case persistence error:', expect.any(Error));
   });
 
   it('rejects a directly submitted support handoff without phone or email', async () => {
@@ -1280,6 +1412,7 @@ describe('POST /api/chat', () => {
 
   it('still sends the support email when the unique-match note write fails', async () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
+    const createSupportCase = vi.fn().mockResolvedValue({ personId: 501, dealId: 7003, createdPerson: false });
     const createSupportNote = vi.fn().mockRejectedValue(new Error('Pipedrive API error: 500 Internal Server Error'));
     const createServiceActivity = vi.fn();
     const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
@@ -1302,6 +1435,7 @@ describe('POST /api/chat', () => {
         createLead: vi.fn(),
         createServiceActivity,
         resolveSupportPerson,
+        createSupportCase,
         createSupportNote,
         createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
@@ -1339,6 +1473,7 @@ describe('POST /api/chat', () => {
 
   it('does not duplicate the support note when the support email fails after a unique match', async () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
+    const createSupportCase = vi.fn().mockResolvedValue({ personId: 501, dealId: 7004, createdPerson: false });
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
     const sendSupportNotification = vi.fn().mockRejectedValue(new Error('SMTP unavailable'));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -1360,6 +1495,7 @@ describe('POST /api/chat', () => {
         createLead: vi.fn(),
         createServiceActivity: vi.fn(),
         resolveSupportPerson,
+        createSupportCase,
         createSupportNote,
         createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
@@ -1403,6 +1539,7 @@ describe('POST /api/chat', () => {
 
   it('does not run a second support handoff for the same session', async () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
+    const createSupportCase = vi.fn().mockResolvedValue({ personId: 501, dealId: 7005, createdPerson: false });
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
     const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
     const supportData = {
@@ -1423,6 +1560,7 @@ describe('POST /api/chat', () => {
         createLead: vi.fn(),
         createServiceActivity: vi.fn(),
         resolveSupportPerson,
+        createSupportCase,
         createSupportNote,
         createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
@@ -1618,6 +1756,7 @@ describe('POST /api/chat', () => {
         createLead: vi.fn(),
         createServiceActivity: vi.fn(),
         resolveSupportPerson: vi.fn().mockResolvedValue({ matchState: 'unique', personId: 789, candidateCount: 1 }),
+        createSupportCase: vi.fn().mockResolvedValue({ personId: 789, dealId: 7006, createdPerson: false }),
         createSupportNote: vi.fn().mockResolvedValue(undefined),
         createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
@@ -1643,6 +1782,7 @@ describe('POST /api/chat', () => {
       payload: {
         matchState: 'unique',
         personId: 789,
+        dealId: 7006,
         intendedInbox: 'technik@lippelift.de',
         emailRecipient: 'caechma@gmail.com',
         noteStatus: 'created',
@@ -1681,6 +1821,7 @@ describe('POST /api/chat', () => {
         createLead: vi.fn(),
         createServiceActivity: vi.fn(),
         resolveSupportPerson: vi.fn().mockResolvedValue({ matchState: 'unique', personId: 789, candidateCount: 1 }),
+        createSupportCase: vi.fn().mockResolvedValue({ personId: 789, dealId: 7007, createdPerson: false }),
         createSupportNote: vi.fn().mockResolvedValue(undefined),
         createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
@@ -1711,6 +1852,7 @@ describe('POST /api/chat', () => {
       payload: {
         matchState: 'unique',
         personId: 789,
+        dealId: 7007,
         intendedInbox: 'technik@lippelift.de',
         emailRecipient: 'technik@example.test',
         noteStatus: 'created',

@@ -1,4 +1,4 @@
-import { buildSupportNoteContent } from '../support/support-routing.js';
+import { buildSupportNoteContent, resolveSupportCategory } from '../support/support-routing.js';
 import { buildPipedriveTranscriptMarker } from '../chat/transcript.js';
 import { formatBerlinDate } from '../time/berlin.js';
 import type { LeadCrmResult, LeadData, ServiceData, SupportData, SupportMatchResult } from '../types/index.js';
@@ -799,13 +799,58 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     return { personId: person.id, activityId: activity.id };
   }
 
-  async function createSupportNote(personId: number, data: SupportData, dealId?: number): Promise<{ noteId: number }> {
+  async function createSupportCase(
+    data: SupportData,
+    match: SupportMatchResult,
+  ): Promise<{ personId: number; dealId: number; createdPerson: boolean }> {
+    if (!configured) throw new Error('Pipedrive not configured');
+
+    const customerName = data.customerName?.trim() || 'Unbekannter Kunde';
+    const email = normalizeEmail(data.email);
+    const phone = normalizePhoneNumber(data.phone);
+    const phoneKey = normalizeGermanPhoneKey(data.phone);
+    const cachedSupportPersonId = match.personId
+      ? undefined
+      : (email ? cachedPersonId('email', email) : undefined)
+        ?? (phoneKey ? cachedPersonId('phone', phoneKey) : undefined);
+    const createdPerson = !match.personId && !cachedSupportPersonId;
+    const personId = match.personId ?? cachedSupportPersonId ?? (await apiCall('/persons', {
+      name: customerName,
+      owner_id: STEPHANIE_KREUZBUSCH_USER_ID,
+      ...(phone ? { phone: [{ value: phone, primary: true }] } : {}),
+      ...(email ? { email: [{ value: email, primary: true }] } : {}),
+      ...defaultPersonCustomFields,
+    })).id;
+    cachePersonId(personId, email, data.phone);
+
+    const category = resolveSupportCategory(data);
+    const reviewSuffix = match.matchState === 'unique' ? '' : ' – Zuordnung prüfen';
+    const deal = await apiCall('/deals', {
+      title: `Sarah Support [${category}]: ${customerName}${reviewSuffix}`,
+      person_id: personId,
+      pipeline_id: pipelineId,
+      stage_id: stageId,
+      visible_to: 3,
+      user_id: STEPHANIE_KREUZBUSCH_USER_ID,
+      [dealFieldKeys.requestDate]: today(),
+      ...defaultDealCustomFields,
+    });
+
+    return { personId, dealId: deal.id, createdPerson };
+  }
+
+  async function createSupportNote(
+    personId: number,
+    data: SupportData,
+    dealId?: number,
+    matchState: SupportMatchResult['matchState'] = 'unique',
+  ): Promise<{ noteId: number }> {
     if (!configured) throw new Error('Pipedrive not configured');
 
     const note = await apiCall('/notes', {
       person_id: personId,
       ...(dealId ? { deal_id: dealId, pinned_to_deal_flag: 1 } : {}),
-      content: buildSupportNoteContent(data, 'unique'),
+      content: buildSupportNoteContent(data, matchState),
       pinned_to_person_flag: 1,
     });
 
@@ -842,6 +887,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     isConfigured: () => configured,
     createLead,
     createServiceActivity,
+    createSupportCase,
     resolveSupportPerson,
     createSupportNote,
     createChatTranscriptNote,

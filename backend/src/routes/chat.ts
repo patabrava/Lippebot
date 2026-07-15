@@ -287,6 +287,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
     let dealId: number | undefined;
     let noteStatus: SupportNoteStatus = 'skipped';
     let noteError: string | undefined;
+    let crmError: Error | undefined;
 
     if (deps.pipedrive.isConfigured()) {
       try {
@@ -294,13 +295,26 @@ export function createChatRoute(deps: ChatDeps): Hono {
         matchState = match.matchState;
         personId = match.personId;
         dealId = match.dealId;
+
+        if (!dealId) {
+          const supportCase = await deps.pipedrive.createSupportCase(normalizedSupportData, match);
+          personId = supportCase.personId;
+          dealId = supportCase.dealId;
+        }
       } catch (err) {
-        console.error('Support person resolution error:', err);
+        crmError = err instanceof Error ? err : new Error(String(err));
+        noteStatus = 'failed';
+        noteError = crmError.message;
+        console.error('Support case persistence error:', err);
       }
 
-      if (matchState === 'unique' && personId) {
+      if (!crmError && personId && dealId) {
         try {
-          await deps.pipedrive.createSupportNote(personId, normalizedSupportData, dealId);
+          if (matchState === 'unique') {
+            await deps.pipedrive.createSupportNote(personId, normalizedSupportData, dealId);
+          } else {
+            await deps.pipedrive.createSupportNote(personId, normalizedSupportData, dealId, matchState);
+          }
           noteStatus = 'created';
         } catch (err) {
           noteStatus = 'failed';
@@ -308,6 +322,10 @@ export function createChatRoute(deps: ChatDeps): Hono {
           console.error('Support note creation error:', err);
         }
       }
+    } else {
+      crmError = new Error('Pipedrive not configured');
+      noteStatus = 'failed';
+      noteError = crmError.message;
     }
 
     const result: SupportHandoffResult = {
@@ -319,7 +337,6 @@ export function createChatRoute(deps: ChatDeps): Hono {
       noteStatus,
       noteError,
     };
-    completedSupportActions.set(sessionId, result);
     const clientActionResult = buildSupportClientActionResult(result, normalizedSupportData);
     let emailStatus: 'not_configured' | 'sent' | 'failed' = deps.email.isConfigured() && emailRecipient
       ? 'sent'
@@ -360,6 +377,12 @@ export function createChatRoute(deps: ChatDeps): Hono {
         supportIntendedInbox: result.intendedInbox,
       }));
     }
+
+    if (crmError || !personId || !dealId) {
+      throw crmError ?? new Error('Support handoff has no concrete Pipedrive case');
+    }
+
+    completedSupportActions.set(sessionId, result);
 
     await stream.writeSSE({
       data: JSON.stringify({ type: 'action', action: 'create_service', data: clientActionResult }),
