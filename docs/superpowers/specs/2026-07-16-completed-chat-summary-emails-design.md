@@ -2,7 +2,7 @@
 
 ## Ziel
 
-Nach jeder erfolgreich abgeschlossenen Sarah-Unterhaltung wird genau eine interne E-Mail verschickt. Sie enthält oben eine kurze Zusammenfassung und darunter das vollständige chronologische Transkript einschließlich Sarahs finaler Antwort. Das gilt für allgemeine Chats, Pipedrive-Opportunities und Pipedrive-Cases.
+Nach jeder tatsächlich beendeten Sarah-Unterhaltung wird genau eine interne E-Mail verschickt. Sie enthält oben eine kurze Zusammenfassung und darunter das vollständige chronologische Transkript einschließlich Sarahs finaler Antwort. Bei Pipedrive-Opportunities und Pipedrive-Cases ist das erfolgreiche Handoff der Abschluss; allgemeine oder unvollständige Chats werden über den bestehenden Inaktivitätsabschluss beendet.
 
 ## Bestehendes Problem
 
@@ -10,7 +10,7 @@ Opportunity- und Support-E-Mails werden derzeit bereits beim jeweiligen Gemini-T
 
 ## Architektur
 
-Der E-Mail-Versand wird aus den frühen Lead- und Support-Aktionen entfernt und in einen gemeinsamen Post-Stream-Abschlussschritt in `backend/src/routes/chat.ts` verschoben. Der Abschluss hat dann zwei verpflichtende externe Seiteneffekte:
+Der E-Mail-Versand wird aus den frühen Lead- und Support-Aktionen entfernt und in einen gemeinsamen Post-Stream-Abschlussschritt in `backend/src/routes/chat.ts` verschoben. Ein normales SSE-`done` beendet nur einen einzelnen Antwort-Turn und löst deshalb keine vorzeitige E-Mail aus. Ein Opportunity-/Case-Abschluss hat zwei verpflichtende externe Seiteneffekte:
 
 1. Wenn ein konkreter Pipedrive-Kontakt vorliegt, wird die vollständige Transkript-Notiz am zugehörigen Deal gespeichert.
 2. Für jede abgeschlossene Session wird eine Abschluss-E-Mail verschickt.
@@ -32,7 +32,7 @@ Die Zusammenfassung wird ohne zusätzlichen Modellaufruf aus den bereits vorlieg
 
 - Opportunity: Name, Anliegen beziehungsweise Nachricht, Standort und Erreichbarkeit sowie CRM-Ergebnis.
 - Case: Kunde, Kategorie und Problembeschreibung sowie CRM-Zuordnung.
-- Allgemeiner Chat: letzte inhaltliche Nutzernachricht und Sarahs finale Antwort.
+- Allgemeiner beziehungsweise unvollständiger Chat: letzte inhaltliche Nutzernachricht und bisheriges Gesamttranskript aus dem Inaktivitäts-Abschlusspfad.
 
 Alle dynamischen Inhalte werden vor dem Einfügen in HTML escaped. Das Transkript verwendet Berlin-Zeit, eindeutige Sprecherbezeichnungen und erhält sämtliche Nachrichten aus `history`, die aktuelle Nutzernachricht und Sarahs vollständige finale Antwort.
 
@@ -40,7 +40,7 @@ Alle dynamischen Inhalte werden vor dem Einfügen in HTML escaped. Das Transkrip
 
 - Opportunity: `NOTIFICATION_EMAIL_TO`.
 - Case: `SERVICE_EMAIL_TO`.
-- Allgemeiner Chat: `SERVICE_EMAIL_TO`.
+- Allgemeiner oder unvollständiger Chat: `SERVICE_EMAIL_TO` über `/api/chat/abandoned`.
 - Wenn die jeweils erforderliche Variable leer ist, wird `berg@lippelift.de` verwendet.
 
 Die Empfängeradresse aus dem Chat selbst ist niemals Ziel dieser internen Abschluss-E-Mail.
@@ -65,7 +65,7 @@ Ein bereits bestätigter Versand wird bei einer Wiederholung derselben Session n
 
 ## Abgebrochene Chats
 
-Der vorhandene `/api/chat/abandoned`-Pfad bleibt bestehen. Er nutzt weiterhin seine eigene Idempotenz, wird aber auf denselben Fallback-Empfänger und dieselben sicheren Summary-/Transkript-Darstellungsbausteine ausgerichtet. Er zählt nicht als erfolgreich abgeschlossener Chat und sendet deshalb weiterhin eine entsprechend bezeichnete Abbruchmail.
+Der vorhandene `/api/chat/abandoned`-Pfad ist der Abschlussmechanismus für allgemeine oder unvollständige Gespräche, da der Server ansonsten nicht erkennen kann, ob ein gewöhnliches `done` nur einen Zwischen-Turn beendet. Er nutzt weiterhin seine eigene Idempotenz, wird auf denselben Fallback-Empfänger und dieselben sicheren Summary-/Transkript-Darstellungsbausteine ausgerichtet und sendet eine entsprechend bezeichnete Inaktivitätsmail.
 
 ## Fehlerbehandlung und Tracking
 
@@ -75,7 +75,8 @@ Conversation Tracking wird um eindeutige Ereignisse für erfolgreiche und fehlge
 
 Die Umsetzung erfolgt testgetrieben. Regressionstests müssen zunächst nachweisen, dass der aktuelle Code folgende Anforderungen verletzt:
 
-- allgemeiner Chat versendet nach Stream-Ende Summary plus vollständiges Transkript,
+- ein gewöhnlicher Zwischen-Turn versendet keine vorzeitige Abschlussmail,
+- ein inaktiver allgemeiner Chat versendet über `/api/chat/abandoned` Summary plus vollständiges Transkript,
 - Opportunity-Mail enthält strukturierte Daten, exakten Deal-Link, Summary und finales Transkript,
 - Case-Mail enthält strukturierte Daten, exakten Deal-Link, Summary und finales Transkript,
 - die Mail wird erst nach Sarahs finalem Token verschickt,

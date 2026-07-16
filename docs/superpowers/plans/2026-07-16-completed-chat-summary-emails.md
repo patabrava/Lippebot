@@ -78,20 +78,20 @@ git commit -m "feat: render completed chat summary emails"
 
 - [ ] **Step 1: Write failing route regression tests**
 
-Add focused integration tests proving:
+Add focused integration tests proving that ordinary response turns do not trigger a premature completion email, while completed opportunity and case handoffs do:
 
 ```ts
 expect(sendCompletedChatSummary).toHaveBeenCalledWith(
   'berg@lippelift.de',
   expect.objectContaining({
-    kind: 'general',
-    summary: expect.stringContaining('Ich brauche Hilfe'),
+    kind: 'opportunity',
+    summary: expect.stringContaining('Anfrage'),
     transcript: expect.stringContaining('Sarahs finale Antwort'),
   }),
 );
 ```
 
-Add opportunity and case variants that assert the structured payload and deal ID, verify the call occurs after the last token, verify the old early notification methods are not called, and verify recipient selection. Add retry, permanent failure/no-`done`, sequential duplicate, and concurrent duplicate cases.
+Add opportunity and case variants that assert the structured payload and deal ID, verify the call occurs after the last token, verify the old early notification methods are not called, and verify recipient selection. Add retry, unconfigured SMTP, permanent failure/no-`done`, sequential duplicate, and concurrent duplicate cases. Keep the existing abandoned-chat test as coverage for general and incomplete conversation closure.
 
 - [ ] **Step 2: Run route tests and verify RED**
 
@@ -116,7 +116,7 @@ In `chat.ts`, add focused helpers that select:
 
 - opportunity summary from lead name, message, location, availability, and CRM outcome;
 - case summary from customer, category, issue description, and match state;
-- general summary from the last user message plus Sarah's final response.
+- no summary for ordinary intermediate turns; general/incomplete sessions continue through the existing abandoned-chat summary builder.
 
 Use the existing transcript builder output so email and Pipedrive contain the same complete exchange.
 
