@@ -3,7 +3,7 @@ import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
 import type { GeminiService } from '../services/gemini.js';
 import type { PipedriveService } from '../services/pipedrive.js';
-import type { EmailService } from '../services/email.js';
+import type { CompletedChatSummary, EmailService } from '../services/email.js';
 import type { ConversationTracker } from '../services/conversation-tracking.js';
 import type {
   ChatMessage,
@@ -17,6 +17,9 @@ import { getSupportInbox, resolveSupportCategory } from '../support/support-rout
 import { hasContactMethod } from '../contact/contact-method.js';
 import { hasPriorContactStatus } from '../contact/prior-contact.js';
 import { buildPipedriveTranscriptNote } from '../chat/transcript.js';
+import { formatBerlinDateTime } from '../time/berlin.js';
+
+const DEFAULT_INTERNAL_EMAIL_TO = 'berg@lippelift.de';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -115,11 +118,51 @@ function formatTranscript(messages: TranscriptMessage[]): string {
     .map((msg) => {
       const speaker = msg.role === 'user' ? 'Nutzer' : 'Sarah';
       const timestamp = Number.isFinite(msg.timestamp)
-        ? new Date(msg.timestamp).toISOString()
+        ? formatBerlinDateTime(new Date(msg.timestamp))
         : 'Zeit unbekannt';
       return `[${timestamp}] ${speaker}: ${msg.content}`;
     })
     .join('\n\n');
+}
+
+function buildCompletedTranscript(input: {
+  history: ChatMessage[];
+  currentMessage: string;
+  assistantText: string;
+  currentUserTimestamp: number;
+  assistantTimestamp: number;
+}): string {
+  const messages: ChatMessage[] = [
+    ...input.history,
+    { role: 'user', content: input.currentMessage, timestamp: input.currentUserTimestamp },
+  ];
+  if (input.assistantText.trim()) {
+    messages.push({ role: 'assistant', content: input.assistantText, timestamp: input.assistantTimestamp });
+  }
+  return formatTranscript(messages);
+}
+
+function buildLeadSummary(data: LeadData, result: LeadInternalResult): string {
+  const name = [data.firstName, data.lastName].filter(Boolean).join(' ');
+  const location = [data.postalCode, data.city].filter(Boolean).join(' ');
+  const details = [
+    name && `Anfrage von ${name}`,
+    data.message && `Anliegen: ${data.message}`,
+    location && `Ort: ${location}`,
+    data.availability && `Erreichbarkeit: ${data.availability}`,
+    `CRM-Ergebnis: ${result.outcome}`,
+  ].filter(Boolean);
+  return `${details.join('. ')}.`;
+}
+
+function buildSupportSummary(data: SupportData, result: SupportHandoffResult): string {
+  const details = [
+    data.customerName && `Servicefall von ${data.customerName}`,
+    data.category && `Kategorie: ${data.category}`,
+    data.issueDescription && `Problem: ${data.issueDescription}`,
+    `CRM-Zuordnung: ${result.matchState}`,
+  ].filter(Boolean);
+  return `${details.join('. ')}.`;
 }
 
 function getLastUserMessage(messages: TranscriptMessage[]): string | undefined {
@@ -152,6 +195,8 @@ export function createChatRoute(deps: ChatDeps): Hono {
   const completedSupportActions = new Map<string, SupportHandoffResult>();
   const completedTranscriptNotes = new Set<string>();
   const inFlightTranscriptNotes = new Map<string, Promise<void>>();
+  const completedSummaryEmails = new Set<string>();
+  const inFlightSummaryEmails = new Map<string, Promise<void>>();
   const completedAbandonedSummaries = new Set<string>();
 
   async function emitLeadAction(
@@ -228,14 +273,6 @@ export function createChatRoute(deps: ChatDeps): Hono {
       }
     }
 
-    if (deps.email.isConfigured() && deps.notificationEmailTo) {
-      try {
-        await deps.email.sendLeadNotification(deps.notificationEmailTo, leadData, result);
-      } catch (err) {
-        console.error('Lead notification error:', err);
-      }
-    }
-
     const clientResult: LeadClientActionResult = { status: 'accepted' };
     await stream.writeSSE({
       data: JSON.stringify({ type: 'action', action: 'create_lead', data: clientResult }),
@@ -280,7 +317,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
     const category = resolveSupportCategory(supportData);
     const normalizedSupportData = { ...supportData, category };
     const intendedInbox = getSupportInbox(category);
-    const emailRecipient = deps.serviceEmailTo || 'caechma@gmail.com';
+    const emailRecipient = deps.serviceEmailTo || DEFAULT_INTERNAL_EMAIL_TO;
 
     let matchState: SupportHandoffResult['matchState'] = 'unresolved';
     let personId: number | undefined;
@@ -338,36 +375,11 @@ export function createChatRoute(deps: ChatDeps): Hono {
       noteError,
     };
     const clientActionResult = buildSupportClientActionResult(result, normalizedSupportData);
-    let emailStatus: 'not_configured' | 'sent' | 'failed' = deps.email.isConfigured() && emailRecipient
-      ? 'sent'
-      : 'not_configured';
-    let emailError: string | undefined;
-
-    try {
-      if (deps.email.isConfigured() && emailRecipient) {
-        await deps.email.sendSupportNotification(emailRecipient, {
-          data: normalizedSupportData,
-          intendedInbox,
-          matchState,
-          noteStatus,
-          noteError,
-          dealId,
-        });
-      }
-    } catch (err) {
-      emailStatus = 'failed';
-      emailError = err instanceof Error ? err.message : String(err);
-      console.error('Support email notification error:', err);
-    }
     if (tracker?.isEnabled()) {
       void track(() => tracker.recordEvent({
         sessionId,
         eventType: 'support_handoff_created',
-        payload: {
-          ...result,
-          emailStatus,
-          emailError,
-        },
+        payload: { ...result },
       }));
       void track(() => tracker.updateSession({
         sessionId,
@@ -378,15 +390,13 @@ export function createChatRoute(deps: ChatDeps): Hono {
       }));
     }
 
-    if (crmError || !personId || !dealId) {
-      throw crmError ?? new Error('Support handoff has no concrete Pipedrive case');
-    }
-
     completedSupportActions.set(sessionId, result);
 
-    await stream.writeSSE({
-      data: JSON.stringify({ type: 'action', action: 'create_service', data: clientActionResult }),
-    });
+    if (!crmError && personId && dealId) {
+      await stream.writeSSE({
+        data: JSON.stringify({ type: 'action', action: 'create_service', data: clientActionResult }),
+      });
+    }
     return result;
   }
 
@@ -450,6 +460,70 @@ export function createChatRoute(deps: ChatDeps): Hono {
     }
   }
 
+  async function persistCompletedSummaryEmail(
+    sessionId: string,
+    recipient: string,
+    input: CompletedChatSummary,
+  ): Promise<void> {
+    if (completedSummaryEmails.has(sessionId)) return;
+    const existingWrite = inFlightSummaryEmails.get(sessionId);
+    if (existingWrite) {
+      await existingWrite;
+      return;
+    }
+
+    const write = (async () => {
+      if (!deps.email.isConfigured()) {
+        const error = new Error('Email not configured');
+        if (tracker?.isEnabled()) {
+          await track(() => tracker.recordEvent({
+            sessionId,
+            eventType: 'completed_summary_email_failed',
+            payload: { recipient, mode: input.mode, kind: input.kind, error: error.message },
+          }));
+        }
+        throw error;
+      }
+
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          await deps.email.sendCompletedChatSummary(recipient, input);
+          completedSummaryEmails.add(sessionId);
+          if (tracker?.isEnabled()) {
+            await track(() => tracker.recordEvent({
+              sessionId,
+              eventType: 'completed_summary_email_sent',
+              payload: { recipient, mode: input.mode, kind: input.kind, attempt },
+            }));
+          }
+          return;
+        } catch (err) {
+          lastError = err;
+        }
+      }
+
+      const error = lastError instanceof Error ? lastError : new Error(String(lastError));
+      if (tracker?.isEnabled()) {
+        await track(() => tracker.recordEvent({
+          sessionId,
+          eventType: 'completed_summary_email_failed',
+          payload: { recipient, mode: input.mode, kind: input.kind, error: error.message },
+        }));
+      }
+      throw error;
+    })();
+
+    inFlightSummaryEmails.set(sessionId, write);
+    try {
+      await write;
+    } finally {
+      if (inFlightSummaryEmails.get(sessionId) === write) {
+        inFlightSummaryEmails.delete(sessionId);
+      }
+    }
+  }
+
   app.post('/api/chat', async (c) => {
     const body = await c.req.json();
     const parsed = chatRequestSchema.safeParse(body);
@@ -482,6 +556,8 @@ export function createChatRoute(deps: ChatDeps): Hono {
         let serviceActionAttempted = false;
         let leadResult: LeadInternalResult | undefined;
         let supportResult: SupportHandoffResult | undefined;
+        let leadDataForEmail: LeadData | undefined;
+        let supportDataForEmail: SupportData | undefined;
         let assistantText = '';
 
         for await (const event of gen) {
@@ -509,11 +585,16 @@ export function createChatRoute(deps: ChatDeps): Hono {
 
           if (event.type === 'lead' && event.leadData) {
             leadActionAttempted = true;
+            leadDataForEmail = event.leadData;
             leadResult = await emitLeadAction(stream, sessionId, event.leadData, 'Lead creation error:');
           }
 
           if (event.type === 'service' && event.serviceData) {
             serviceActionAttempted = true;
+            supportDataForEmail = {
+              ...event.serviceData,
+              category: resolveSupportCategory(event.serviceData),
+            };
             supportResult = await emitSupportAction(stream, sessionId, event.serviceData);
           }
         }
@@ -522,22 +603,76 @@ export function createChatRoute(deps: ChatDeps): Hono {
         // trigger Pipedrive/email based on mode + collected data completeness
         const collectedObj = lastCollectedData as Record<string, unknown>;
         if (!leadActionAttempted && lastMode === 'anfrage' && hasRequiredLeadFields(collectedObj)) {
+          leadDataForEmail = collectedObj as LeadData;
           leadResult = await emitLeadAction(stream, sessionId, collectedObj as LeadData, 'Lead creation from state error:');
         }
         if (!serviceActionAttempted && lastMode === 'service' && hasRequiredServiceFields(collectedObj)) {
+          supportDataForEmail = {
+            ...(collectedObj as SupportData),
+            category: resolveSupportCategory(collectedObj as SupportData),
+          };
           supportResult = await emitSupportAction(stream, sessionId, collectedObj as SupportData);
         }
 
+        const assistantTimestamp = Date.now();
         const transcript = buildPipedriveTranscriptNote({
           sessionId,
           history,
           currentMessage: message,
           assistantText,
           currentUserTimestamp,
-          assistantTimestamp: Date.now(),
+          assistantTimestamp,
         });
         await persistTranscriptNote(sessionId, leadResult?.personId, leadResult?.dealId, transcript);
         await persistTranscriptNote(sessionId, supportResult?.personId, supportResult?.dealId, transcript);
+
+        const completedTranscript = buildCompletedTranscript({
+          history,
+          currentMessage: message,
+          assistantText,
+          currentUserTimestamp,
+          assistantTimestamp,
+        });
+        if (leadResult && leadDataForEmail) {
+          await persistCompletedSummaryEmail(
+            sessionId,
+            deps.notificationEmailTo || DEFAULT_INTERNAL_EMAIL_TO,
+            {
+              sessionId,
+              mode: lastMode,
+              kind: 'opportunity',
+              summary: buildLeadSummary(leadDataForEmail, leadResult),
+              transcript: completedTranscript,
+              completedAt: formatBerlinDateTime(new Date(assistantTimestamp)),
+              leadData: leadDataForEmail,
+              leadContext: leadResult,
+            },
+          );
+        } else if (supportResult && supportDataForEmail) {
+          await persistCompletedSummaryEmail(
+            sessionId,
+            deps.serviceEmailTo || DEFAULT_INTERNAL_EMAIL_TO,
+            {
+              sessionId,
+              mode: lastMode,
+              kind: 'case',
+              summary: buildSupportSummary(supportDataForEmail, supportResult),
+              transcript: completedTranscript,
+              completedAt: formatBerlinDateTime(new Date(assistantTimestamp)),
+              supportData: supportDataForEmail,
+              supportContext: {
+                matchState: supportResult.matchState,
+                noteStatus: supportResult.noteStatus,
+                noteError: supportResult.noteError,
+                intendedInbox: supportResult.intendedInbox,
+                dealId: supportResult.dealId,
+              },
+            },
+          );
+          if (!supportResult.personId || !supportResult.dealId) {
+            throw new Error(supportResult.noteError || 'Support handoff has no concrete Pipedrive case');
+          }
+        }
 
         if (tracker?.isEnabled() && assistantText.trim().length > 0) {
           void track(() => tracker.recordMessage({
@@ -587,7 +722,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
     }
 
     const { sessionId, reason, history } = parsed.data;
-    const emailRecipient = deps.serviceEmailTo || 'caechma@gmail.com';
+    const emailRecipient = deps.serviceEmailTo || DEFAULT_INTERNAL_EMAIL_TO;
 
     if (completedAbandonedSummaries.has(sessionId)) {
       return c.json({ status: 'duplicate' });

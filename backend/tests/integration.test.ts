@@ -33,11 +33,12 @@ function createMockPipedrive(): PipedriveService {
 
 function createMockEmail(): EmailService {
   return {
-    isConfigured: () => false,
+    isConfigured: () => true,
     sendLeadNotification: vi.fn(),
     sendServiceNotification: vi.fn(),
     sendAbandonedChatSummary: vi.fn(),
     sendSupportNotification: vi.fn(),
+    sendCompletedChatSummary: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -98,6 +99,307 @@ describe('POST /api/chat', () => {
     expect(text).toContain('Ich bin Sarah.');
     expect(text).toContain('"type":"done"');
     expect(text).toContain('"mode":"berater"');
+  });
+
+  it('does not mistake an ordinary response turn for the end of a general conversation', async () => {
+    const sequence: string[] = [];
+    const sendCompletedChatSummary = vi.fn().mockImplementation(async () => {
+      sequence.push('email');
+    });
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          sequence.push('token-1');
+          yield { type: 'token' as const, content: 'Sarahs ' };
+          sequence.push('token-2');
+          yield { type: 'token' as const, content: 'finale Antwort' };
+          yield { type: 'state' as const, state: { sessionId, mode: 'berater' as const, collectedData: {} } };
+        },
+      },
+      pipedrive: createMockPipedrive(),
+      email: { ...createMockEmail(), sendCompletedChatSummary },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'completed-general',
+        message: 'Ich brauche Hilfe',
+        history: [
+          { role: 'assistant', content: 'Willkommen bei LIPPE Lift.', timestamp: 1_752_652_000_000 },
+        ],
+      }),
+    })).text();
+
+    expect(sequence).toEqual(['token-1', 'token-2']);
+    expect(sendCompletedChatSummary).not.toHaveBeenCalled();
+    expect(text).toContain('"type":"done"');
+  });
+
+  it('sends one opportunity summary with structured data and suppresses the early lead email', async () => {
+    const sendLeadNotification = vi.fn();
+    const sendCompletedChatSummary = vi.fn().mockResolvedValue(undefined);
+    const leadData = {
+      priorContact: 'unknown' as const,
+      customerSegment: 'privatperson' as const,
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      email: 'max@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+      message: 'Ich brauche einen Sitzlift.',
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'lead' as const, leadData };
+          yield { type: 'token' as const, content: 'Ihre Anfrage wurde aufgenommen.' };
+          yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: leadData } };
+        },
+      },
+      pipedrive: {
+        ...createMockPipedrive(),
+        isConfigured: () => true,
+        createLead: vi.fn().mockResolvedValue({ outcome: 'created', personId: 321, dealId: 654 }),
+      },
+      email: { ...createMockEmail(), sendLeadNotification, sendCompletedChatSummary },
+      notificationEmailTo: 'sales@example.com',
+      serviceEmailTo: 'support@example.com',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'completed-opportunity', message: 'Absenden', history: [] }),
+    })).text();
+
+    expect(sendLeadNotification).not.toHaveBeenCalled();
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('sales@example.com', expect.objectContaining({
+      kind: 'opportunity',
+      leadData,
+      leadContext: { outcome: 'created', personId: 321, dealId: 654 },
+      transcript: expect.stringContaining('Ihre Anfrage wurde aufgenommen.'),
+    }));
+    expect(text).toContain('"type":"done"');
+  });
+
+  it('sends one case summary with structured data and suppresses the early support email', async () => {
+    const sendSupportNotification = vi.fn();
+    const sendCompletedChatSummary = vi.fn().mockResolvedValue(undefined);
+    const supportData = {
+      priorContact: 'unknown' as const,
+      customerName: 'Maria Schmidt',
+      email: 'maria@example.de',
+      category: 'technik' as const,
+      issueDescription: 'Der Lift bleibt im Erdgeschoss stehen.',
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'service' as const, serviceData: supportData };
+          yield { type: 'token' as const, content: 'Der Servicefall wurde aufgenommen.' };
+          yield { type: 'state' as const, state: { sessionId, mode: 'service' as const, collectedData: supportData } };
+        },
+      },
+      pipedrive: {
+        ...createMockPipedrive(),
+        isConfigured: () => true,
+        resolveSupportPerson: vi.fn().mockResolvedValue({
+          matchState: 'unique', personId: 501, dealId: 7001, candidateCount: 1,
+        }),
+        createSupportNote: vi.fn().mockResolvedValue({ noteId: 9001 }),
+      },
+      email: { ...createMockEmail(), sendSupportNotification, sendCompletedChatSummary },
+      notificationEmailTo: 'sales@example.com',
+      serviceEmailTo: 'support@example.com',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'completed-case', message: 'Servicefall absenden', history: [] }),
+    })).text();
+
+    expect(sendSupportNotification).not.toHaveBeenCalled();
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('support@example.com', expect.objectContaining({
+      kind: 'case',
+      supportData,
+      supportContext: expect.objectContaining({
+        matchState: 'unique', noteStatus: 'created', intendedInbox: 'technik@lippelift.de', dealId: 7001,
+      }),
+      transcript: expect.stringContaining('Der Servicefall wurde aufgenommen.'),
+    }));
+    expect(text).toContain('"type":"done"');
+  });
+
+  it('retries a completed summary email and gates done on permanent SMTP failure', async () => {
+    const tracker = createMockTracker();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const sendCompletedChatSummary = vi.fn().mockRejectedValue(new Error('SMTP unavailable'));
+    const leadData = {
+      priorContact: 'unknown' as const,
+      customerSegment: 'privatperson' as const,
+      firstName: 'Retry',
+      lastName: 'Test',
+      email: 'retry@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'lead' as const, leadData };
+          yield { type: 'token' as const, content: 'Anfrage aufgenommen.' };
+          yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: leadData } };
+        },
+      },
+      pipedrive: {
+        ...createMockPipedrive(),
+        isConfigured: () => true,
+        createLead: vi.fn().mockResolvedValue({ outcome: 'created', personId: 321, dealId: 654 }),
+      },
+      email: { ...createMockEmail(), sendCompletedChatSummary },
+      conversationTracker: tracker,
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'completed-email-failure', message: 'Hallo', history: [] }),
+    })).text();
+
+    expect(sendCompletedChatSummary).toHaveBeenCalledTimes(3);
+    expect(tracker.recordEvent).toHaveBeenCalledWith({
+      sessionId: 'completed-email-failure',
+      eventType: 'completed_summary_email_failed',
+      payload: expect.objectContaining({ recipient: 'berg@lippelift.de', error: 'SMTP unavailable' }),
+    });
+    expect(text).toContain('"type":"error"');
+    expect(text).not.toContain('"type":"done"');
+    expect(errorSpy).toHaveBeenCalledWith('Chat stream error:', expect.any(Error));
+  });
+
+  it('does not report a completed opportunity when SMTP is not configured', async () => {
+    const tracker = createMockTracker();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const sendCompletedChatSummary = vi.fn();
+    const leadData = {
+      priorContact: 'unknown' as const,
+      customerSegment: 'privatperson' as const,
+      firstName: 'Config',
+      lastName: 'Test',
+      email: 'config@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'lead' as const, leadData };
+          yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: leadData } };
+        },
+      },
+      pipedrive: {
+        ...createMockPipedrive(),
+        isConfigured: () => true,
+        createLead: vi.fn().mockResolvedValue({ outcome: 'created', personId: 321, dealId: 654 }),
+      },
+      email: { ...createMockEmail(), isConfigured: () => false, sendCompletedChatSummary },
+      conversationTracker: tracker,
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'completed-email-unconfigured', message: 'Absenden', history: [] }),
+    })).text();
+
+    expect(sendCompletedChatSummary).not.toHaveBeenCalled();
+    expect(tracker.recordEvent).toHaveBeenCalledWith({
+      sessionId: 'completed-email-unconfigured',
+      eventType: 'completed_summary_email_failed',
+      payload: expect.objectContaining({ recipient: 'berg@lippelift.de', error: 'Email not configured' }),
+    });
+    expect(text).toContain('"type":"error"');
+    expect(text).not.toContain('"type":"done"');
+    expect(errorSpy).toHaveBeenCalledWith('Chat stream error:', expect.any(Error));
+  });
+
+  it('deduplicates completed summary email writes for repeated and concurrent session completion', async () => {
+    let resolveSend: (() => void) | undefined;
+    const sendCompletedChatSummary = vi.fn().mockImplementation(() => new Promise<void>((resolve) => {
+      resolveSend = resolve;
+    }));
+    const leadData = {
+      priorContact: 'unknown' as const,
+      customerSegment: 'privatperson' as const,
+      firstName: 'Dedupe',
+      lastName: 'Test',
+      email: 'dedupe@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'lead' as const, leadData };
+          yield { type: 'token' as const, content: 'Anfrage aufgenommen.' };
+          yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: leadData } };
+        },
+      },
+      pipedrive: {
+        ...createMockPipedrive(),
+        isConfigured: () => true,
+        createLead: vi.fn().mockResolvedValue({ outcome: 'created', personId: 321, dealId: 654 }),
+      },
+      email: { ...createMockEmail(), sendCompletedChatSummary },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const request = () => testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'completed-email-dedupe', message: 'Hallo', history: [] }),
+    }).then((res) => res.text());
+
+    const first = request();
+    const second = request();
+    await vi.waitFor(() => expect(sendCompletedChatSummary).toHaveBeenCalledOnce());
+    resolveSend?.();
+    const [firstText, secondText] = await Promise.all([first, second]);
+    const thirdText = await request();
+
+    expect(sendCompletedChatSummary).toHaveBeenCalledOnce();
+    expect(firstText).toContain('"type":"done"');
+    expect(secondText).toContain('"type":"done"');
+    expect(thirdText).toContain('"type":"done"');
   });
 
   it('does not run state fallback after a lead action was already emitted', async () => {
@@ -486,7 +788,7 @@ describe('POST /api/chat', () => {
   it('keeps a reused CRM case internal while notifying and tracking the reuse', async () => {
     const tracker = createMockTracker();
     const createLead = vi.fn().mockResolvedValue({ outcome: 'reused', personId: 321, dealId: 654 });
-    const sendLeadNotification = vi.fn().mockResolvedValue(undefined);
+    const sendCompletedChatSummary = vi.fn().mockResolvedValue(undefined);
     const leadData = {
       priorContact: 'unknown' as const,
       customerSegment: 'Privatperson' as never,
@@ -515,7 +817,7 @@ describe('POST /api/chat', () => {
       email: {
         ...createMockEmail(),
         isConfigured: () => true,
-        sendLeadNotification,
+        sendCompletedChatSummary,
       },
       conversationTracker: tracker,
       notificationEmailTo: 'team@example.com',
@@ -536,11 +838,11 @@ describe('POST /api/chat', () => {
     expect(text).not.toContain('"personId"');
     expect(text).not.toContain('"dealId"');
     expect(text).not.toContain('reused');
-    expect(sendLeadNotification).toHaveBeenCalledWith('team@example.com', leadData, {
-      outcome: 'reused',
-      personId: 321,
-      dealId: 654,
-    });
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('team@example.com', expect.objectContaining({
+      kind: 'opportunity',
+      leadData,
+      leadContext: { outcome: 'reused', personId: 321, dealId: 654 },
+    }));
     expect(tracker.recordEvent).toHaveBeenCalledWith({
       sessionId: 'reused-case',
       eventType: 'lead_reused',
@@ -553,7 +855,7 @@ describe('POST /api/chat', () => {
     [{ outcome: 'identity_review', candidateCount: 2, reason: 'conflicting_contact_identifiers' }, 'review-identity'],
   ] as const)('keeps the %s lead review internal while notifying and tracking it', async (crmResult, sessionId) => {
     const tracker = createMockTracker();
-    const sendLeadNotification = vi.fn().mockResolvedValue(undefined);
+    const sendCompletedChatSummary = vi.fn().mockResolvedValue(undefined);
     const leadData = {
       priorContact: 'unknown' as const,
       customerSegment: 'Privatperson' as never,
@@ -582,7 +884,7 @@ describe('POST /api/chat', () => {
       email: {
         ...createMockEmail(),
         isConfigured: () => true,
-        sendLeadNotification,
+        sendCompletedChatSummary,
       },
       conversationTracker: tracker,
       notificationEmailTo: 'team@example.com',
@@ -600,7 +902,9 @@ describe('POST /api/chat', () => {
     expect(text).toContain('"status":"accepted"');
     expect(text).not.toContain(crmResult.outcome);
     expect(text).not.toContain('"personId"');
-    expect(sendLeadNotification).toHaveBeenCalledWith('team@example.com', leadData, crmResult);
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('team@example.com', expect.objectContaining({
+      kind: 'opportunity', leadData, leadContext: crmResult,
+    }));
     expect(tracker.recordEvent).toHaveBeenCalledWith({
       sessionId,
       eventType: 'lead_review',
@@ -611,7 +915,7 @@ describe('POST /api/chat', () => {
   it('still accepts and emails a complete lead when Pipedrive fails', async () => {
     const tracker = createMockTracker();
     const createLead = vi.fn().mockRejectedValue(new Error('Pipedrive unavailable'));
-    const sendLeadNotification = vi.fn().mockResolvedValue(undefined);
+    const sendCompletedChatSummary = vi.fn().mockResolvedValue(undefined);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const leadData = {
       priorContact: 'unknown' as const,
@@ -641,7 +945,7 @@ describe('POST /api/chat', () => {
       email: {
         ...createMockEmail(),
         isConfigured: () => true,
-        sendLeadNotification,
+        sendCompletedChatSummary,
       },
       conversationTracker: tracker,
       notificationEmailTo: 'team@example.com',
@@ -659,10 +963,11 @@ describe('POST /api/chat', () => {
     const text = await res.text();
     expect(text).toContain('"status":"accepted"');
     expect(text).not.toContain('Pipedrive unavailable');
-    expect(sendLeadNotification).toHaveBeenCalledWith('team@example.com', leadData, {
-      outcome: 'failed',
-      reason: 'Pipedrive unavailable',
-    });
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('team@example.com', expect.objectContaining({
+      kind: 'opportunity',
+      leadData,
+      leadContext: { outcome: 'failed', reason: 'Pipedrive unavailable' },
+    }));
     expect(tracker.recordEvent).toHaveBeenCalledWith({
       sessionId: 'crm-failed',
       eventType: 'lead_failed',
@@ -972,7 +1277,7 @@ describe('POST /api/chat', () => {
     });
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
     const createServiceActivity = vi.fn();
-    const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
+    const sendCompletedChatSummary = vi.fn().mockResolvedValue(undefined);
     const supportData = {
       priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
@@ -996,10 +1301,9 @@ describe('POST /api/chat', () => {
         createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
+        ...createMockEmail(),
         isConfigured: () => true,
-        sendLeadNotification: vi.fn(),
-        sendServiceNotification: vi.fn(),
-        sendSupportNotification,
+        sendCompletedChatSummary,
       },
       notificationEmailTo: '',
       serviceEmailTo: 'caechma@gmail.com',
@@ -1018,12 +1322,12 @@ describe('POST /api/chat', () => {
     expect(resolveSupportPerson).toHaveBeenCalledWith(supportData);
     expect(createSupportNote).toHaveBeenCalledWith(501, supportData, 654);
     expect(createServiceActivity).not.toHaveBeenCalled();
-    expect(sendSupportNotification).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
-      data: supportData,
-      intendedInbox: 'technik@lippelift.de',
-      matchState: 'unique',
-      noteStatus: 'created',
-      dealId: 654,
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
+      kind: 'case',
+      supportData,
+      supportContext: expect.objectContaining({
+        intendedInbox: 'technik@lippelift.de', matchState: 'unique', noteStatus: 'created', dealId: 654,
+      }),
     }));
     expect(text).toContain('"action":"create_service"');
     expect(text).toContain('"status":"accepted"');
@@ -1041,7 +1345,7 @@ describe('POST /api/chat', () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
     const createSupportCase = vi.fn().mockResolvedValue({ personId: 501, dealId: 7002, createdPerson: false });
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
-    const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
+    const sendCompletedChatSummary = vi.fn().mockResolvedValue(undefined);
     const supportData = {
       priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
@@ -1065,10 +1369,9 @@ describe('POST /api/chat', () => {
         createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
+        ...createMockEmail(),
         isConfigured: () => true,
-        sendLeadNotification: vi.fn(),
-        sendServiceNotification: vi.fn(),
-        sendSupportNotification,
+        sendCompletedChatSummary,
       },
       notificationEmailTo: '',
       serviceEmailTo: 'caechma@gmail.com',
@@ -1088,7 +1391,9 @@ describe('POST /api/chat', () => {
       matchState: 'unique', personId: 501, candidateCount: 1,
     });
     expect(createSupportNote).toHaveBeenCalledWith(501, supportData, 7002);
-    expect(sendSupportNotification).toHaveBeenCalled();
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
+      kind: 'case', supportData,
+    }));
     expect(text).toContain('"status":"accepted"');
   });
 
@@ -1126,9 +1431,8 @@ describe('POST /api/chat', () => {
         createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
+        ...createMockEmail(),
         isConfigured: () => true,
-        sendLeadNotification: vi.fn(),
-        sendSupportNotification,
       },
       notificationEmailTo: '',
       serviceEmailTo: 'berg@lippelift.de',
@@ -1149,7 +1453,7 @@ describe('POST /api/chat', () => {
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
     const createChatTranscriptNote = vi.fn().mockResolvedValue({ noteId: 9100 });
     const createServiceActivity = vi.fn();
-    const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
+    const sendCompletedChatSummary = vi.fn().mockResolvedValue(undefined);
     const supportData = {
       priorContact: 'unknown' as const,
       customerName: 'Unbekannter Kunde',
@@ -1173,10 +1477,9 @@ describe('POST /api/chat', () => {
         createChatTranscriptNote,
       },
       email: {
+        ...createMockEmail(),
         isConfigured: () => true,
-        sendLeadNotification: vi.fn(),
-        sendServiceNotification: vi.fn(),
-        sendSupportNotification,
+        sendCompletedChatSummary,
       },
       notificationEmailTo: '',
       serviceEmailTo: 'caechma@gmail.com',
@@ -1204,11 +1507,12 @@ describe('POST /api/chat', () => {
       expect.stringContaining('Vollständiges Sarah-Chatprotokoll'),
     );
     expect(createServiceActivity).not.toHaveBeenCalled();
-    expect(sendSupportNotification).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
-      intendedInbox: 'finance@lippelift.de',
-      matchState: 'unresolved',
-      noteStatus: 'created',
-      dealId: 801,
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
+      kind: 'case',
+      supportData,
+      supportContext: expect.objectContaining({
+        intendedInbox: 'finance@lippelift.de', matchState: 'unresolved', noteStatus: 'created', dealId: 801,
+      }),
     }));
     expect(text).toContain('"type":"done"');
   });
@@ -1219,7 +1523,7 @@ describe('POST /api/chat', () => {
     const createSupportCase = vi.fn().mockResolvedValue({ personId: 702, dealId: 802, createdPerson: true });
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9002 });
     const createChatTranscriptNote = vi.fn().mockResolvedValue({ noteId: 9102 });
-    const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
+    const sendCompletedChatSummary = vi.fn().mockResolvedValue(undefined);
     const supportData = {
       priorContact: 'yes' as const,
       customerName: 'Maria Schmidt',
@@ -1244,7 +1548,7 @@ describe('POST /api/chat', () => {
       email: {
         ...createMockEmail(),
         isConfigured: () => true,
-        sendSupportNotification,
+        sendCompletedChatSummary,
       },
       notificationEmailTo: '',
       serviceEmailTo: 'berg@lippelift.de,caechma@gmail.com',
@@ -1263,9 +1567,12 @@ describe('POST /api/chat', () => {
     expect(createChatTranscriptNote).toHaveBeenCalledWith(
       'support-ambiguous-review', 702, 802, expect.any(String),
     );
-    expect(sendSupportNotification).toHaveBeenCalledWith(
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith(
       'berg@lippelift.de,caechma@gmail.com',
-      expect.objectContaining({ matchState: 'ambiguous', noteStatus: 'created', dealId: 802 }),
+      expect.objectContaining({
+        kind: 'case',
+        supportContext: expect.objectContaining({ matchState: 'ambiguous', noteStatus: 'created', dealId: 802 }),
+      }),
     );
     expect(text).toContain('"type":"done"');
   });
@@ -1274,7 +1581,7 @@ describe('POST /api/chat', () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unresolved', candidateCount: 0 });
     const createSupportCase = vi.fn().mockRejectedValue(new Error('Pipedrive API error: 503 Service Unavailable'));
     const createSupportNote = vi.fn();
-    const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
+    const sendCompletedChatSummary = vi.fn().mockResolvedValue(undefined);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const supportData = {
       priorContact: 'unknown' as const,
@@ -1299,7 +1606,7 @@ describe('POST /api/chat', () => {
       email: {
         ...createMockEmail(),
         isConfigured: () => true,
-        sendSupportNotification,
+        sendCompletedChatSummary,
       },
       notificationEmailTo: '',
       serviceEmailTo: 'berg@lippelift.de',
@@ -1314,10 +1621,11 @@ describe('POST /api/chat', () => {
     })).text();
 
     expect(createSupportNote).not.toHaveBeenCalled();
-    expect(sendSupportNotification).toHaveBeenCalledWith('berg@lippelift.de', expect.objectContaining({
-      matchState: 'unresolved',
-      noteStatus: 'failed',
-      noteError: 'Pipedrive API error: 503 Service Unavailable',
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('berg@lippelift.de', expect.objectContaining({
+      kind: 'case',
+      supportContext: expect.objectContaining({
+        matchState: 'unresolved', noteStatus: 'failed', noteError: 'Pipedrive API error: 503 Service Unavailable',
+      }),
     }));
     expect(text).toContain('"type":"error"');
     expect(text).not.toContain('"type":"done"');
@@ -1326,7 +1634,7 @@ describe('POST /api/chat', () => {
 
   it('rejects a directly submitted support handoff without phone or email', async () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unresolved', candidateCount: 0 });
-    const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
+    const sendCompletedChatSummary = vi.fn().mockResolvedValue(undefined);
     const supportData = {
       priorContact: 'unknown' as const,
       customerName: 'Camilo Echeverri',
@@ -1348,10 +1656,9 @@ describe('POST /api/chat', () => {
         createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
+        ...createMockEmail(),
         isConfigured: () => true,
-        sendLeadNotification: vi.fn(),
-        sendServiceNotification: vi.fn(),
-        sendSupportNotification,
+        sendCompletedChatSummary,
       },
       notificationEmailTo: '',
       serviceEmailTo: 'caechma@gmail.com',
@@ -1368,7 +1675,7 @@ describe('POST /api/chat', () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     expect(resolveSupportPerson).not.toHaveBeenCalled();
-    expect(sendSupportNotification).not.toHaveBeenCalled();
+    expect(sendCompletedChatSummary).not.toHaveBeenCalled();
     expect(text).toContain('"action":"create_service"');
     expect(text).toContain('"status":"needs_contact"');
     expect(text).not.toContain('"matchState"');
@@ -1415,7 +1722,7 @@ describe('POST /api/chat', () => {
     const createSupportCase = vi.fn().mockResolvedValue({ personId: 501, dealId: 7003, createdPerson: false });
     const createSupportNote = vi.fn().mockRejectedValue(new Error('Pipedrive API error: 500 Internal Server Error'));
     const createServiceActivity = vi.fn();
-    const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
+    const sendCompletedChatSummary = vi.fn().mockResolvedValue(undefined);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const supportData = {
       priorContact: 'unknown' as const,
@@ -1440,10 +1747,9 @@ describe('POST /api/chat', () => {
         createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
+        ...createMockEmail(),
         isConfigured: () => true,
-        sendLeadNotification: vi.fn(),
-        sendServiceNotification: vi.fn(),
-        sendSupportNotification,
+        sendCompletedChatSummary,
       },
       notificationEmailTo: '',
       serviceEmailTo: 'caechma@gmail.com',
@@ -1461,21 +1767,24 @@ describe('POST /api/chat', () => {
     await res.text();
     expect(createServiceActivity).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalledWith('Support note creation error:', expect.any(Error));
-    expect(sendSupportNotification).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
-      intendedInbox: 'lossau@lippelift.de',
-      matchState: 'unique',
-      noteStatus: 'failed',
-      noteError: 'Pipedrive API error: 500 Internal Server Error',
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
+      kind: 'case',
+      supportContext: expect.objectContaining({
+        intendedInbox: 'lossau@lippelift.de',
+        matchState: 'unique',
+        noteStatus: 'failed',
+        noteError: 'Pipedrive API error: 500 Internal Server Error',
+      }),
     }));
 
     errorSpy.mockRestore();
   });
 
-  it('does not duplicate the support note when the support email fails after a unique match', async () => {
+  it('does not duplicate the support note while retrying a failed completed summary email', async () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
     const createSupportCase = vi.fn().mockResolvedValue({ personId: 501, dealId: 7004, createdPerson: false });
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
-    const sendSupportNotification = vi.fn().mockRejectedValue(new Error('SMTP unavailable'));
+    const sendCompletedChatSummary = vi.fn().mockRejectedValue(new Error('SMTP unavailable'));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const supportData = {
       priorContact: 'unknown' as const,
@@ -1500,10 +1809,9 @@ describe('POST /api/chat', () => {
         createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
+        ...createMockEmail(),
         isConfigured: () => true,
-        sendLeadNotification: vi.fn(),
-        sendServiceNotification: vi.fn(),
-        sendSupportNotification,
+        sendCompletedChatSummary,
       },
       notificationEmailTo: '',
       serviceEmailTo: 'caechma@gmail.com',
@@ -1520,6 +1828,8 @@ describe('POST /api/chat', () => {
     expect(first.status).toBe(200);
     const firstText = await first.text();
     expect(firstText).toContain('"status":"accepted"');
+    expect(firstText).toContain('"type":"error"');
+    expect(firstText).not.toContain('"type":"done"');
     expect(firstText).not.toContain('SMTP unavailable');
 
     const second = await testApp.request('/api/chat', {
@@ -1531,17 +1841,18 @@ describe('POST /api/chat', () => {
     const secondText = await second.text();
 
     expect(createSupportNote).toHaveBeenCalledTimes(1);
-    expect(sendSupportNotification).toHaveBeenCalledTimes(1);
-    expect(errorSpy).toHaveBeenCalledWith('Support email notification error:', expect.any(Error));
+    expect(sendCompletedChatSummary).toHaveBeenCalledTimes(6);
+    expect(errorSpy).toHaveBeenCalledWith('Chat stream error:', expect.any(Error));
     expect(secondText).toContain('"duplicate":true');
-    expect(secondText).not.toContain('SMTP unavailable');
+    expect(secondText).toContain('"type":"error"');
+    expect(secondText).not.toContain('"type":"done"');
   });
 
   it('does not run a second support handoff for the same session', async () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
     const createSupportCase = vi.fn().mockResolvedValue({ personId: 501, dealId: 7005, createdPerson: false });
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
-    const sendSupportNotification = vi.fn().mockResolvedValue(undefined);
+    const sendCompletedChatSummary = vi.fn().mockResolvedValue(undefined);
     const supportData = {
       priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
@@ -1565,10 +1876,9 @@ describe('POST /api/chat', () => {
         createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
+        ...createMockEmail(),
         isConfigured: () => true,
-        sendLeadNotification: vi.fn(),
-        sendServiceNotification: vi.fn(),
-        sendSupportNotification,
+        sendCompletedChatSummary,
       },
       notificationEmailTo: '',
       serviceEmailTo: 'caechma@gmail.com',
@@ -1595,7 +1905,7 @@ describe('POST /api/chat', () => {
     expect(second.status).toBe(200);
     expect(resolveSupportPerson).toHaveBeenCalledTimes(1);
     expect(createSupportNote).toHaveBeenCalledTimes(1);
-    expect(sendSupportNotification).toHaveBeenCalledTimes(1);
+    expect(sendCompletedChatSummary).toHaveBeenCalledTimes(1);
     const secondText = await second.text();
     expect(secondText).toContain('"action":"create_service"');
     expect(secondText).toContain('"status":"accepted"');
@@ -1784,11 +2094,9 @@ describe('POST /api/chat', () => {
         personId: 789,
         dealId: 7006,
         intendedInbox: 'technik@lippelift.de',
-        emailRecipient: 'caechma@gmail.com',
+        emailRecipient: 'berg@lippelift.de',
         noteStatus: 'created',
         noteError: undefined,
-        emailStatus: 'not_configured',
-        emailError: undefined,
       },
     });
     expect(tracker.updateSession).toHaveBeenCalledWith({
@@ -1800,7 +2108,7 @@ describe('POST /api/chat', () => {
     });
   });
 
-  it('records support email failures in the handoff event payload', async () => {
+  it('records completed summary email failures separately from the handoff event', async () => {
     const tracker = createMockTracker();
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const supportData = {
@@ -1826,10 +2134,9 @@ describe('POST /api/chat', () => {
         createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
       },
       email: {
+        ...createMockEmail(),
         isConfigured: () => true,
-        sendLeadNotification: vi.fn(),
-        sendServiceNotification: vi.fn(),
-        sendSupportNotification: vi.fn().mockRejectedValue(new Error('SMTP unavailable')),
+        sendCompletedChatSummary: vi.fn().mockRejectedValue(new Error('SMTP unavailable')),
       },
       conversationTracker: tracker,
       notificationEmailTo: '',
@@ -1848,20 +2155,12 @@ describe('POST /api/chat', () => {
     await res.text();
     expect(tracker.recordEvent).toHaveBeenCalledWith({
       sessionId: 'tracked-support-email-fail',
-      eventType: 'support_handoff_created',
-      payload: {
-        matchState: 'unique',
-        personId: 789,
-        dealId: 7007,
-        intendedInbox: 'technik@lippelift.de',
-        emailRecipient: 'technik@example.test',
-        noteStatus: 'created',
-        noteError: undefined,
-        emailStatus: 'failed',
-        emailError: 'SMTP unavailable',
-      },
+      eventType: 'completed_summary_email_failed',
+      payload: expect.objectContaining({
+        recipient: 'technik@example.test', kind: 'case', error: 'SMTP unavailable',
+      }),
     });
-    expect(errorSpy).toHaveBeenCalledWith('Support email notification error:', expect.any(Error));
+    expect(errorSpy).toHaveBeenCalledWith('Chat stream error:', expect.any(Error));
   });
 
   it('records chat_error when generation fails', async () => {
