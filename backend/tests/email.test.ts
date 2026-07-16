@@ -322,4 +322,104 @@ describe('createEmailService', () => {
     expect(call.html).toContain('Manuelle Prüfung erforderlich');
     expect(call.html).not.toContain('href="');
   });
+
+  it('sendCompletedChatSummary renders an escaped summary before the full transcript', async () => {
+    const sendMock = vi.fn().mockResolvedValue({ messageId: 'completed-general' });
+    const service = createEmailService(
+      { host: 'smtp.test.com', port: 587, user: 'a', pass: 'b' },
+      sendMock,
+    );
+
+    await service.sendCompletedChatSummary('team@example.com', {
+      sessionId: 'session-<unsafe>',
+      mode: 'berater',
+      kind: 'general',
+      summary: 'Nutzer fragt nach <script>alert(1)</script>.',
+      transcript: '<strong>Nutzer</strong>: Hallo\nSarah: Vollständige Antwort',
+      completedAt: '2026-07-16T08:00:00.000Z',
+    });
+
+    const call = sendMock.mock.calls[0][0];
+    expect(call.to).toBe('team@example.com');
+    expect(call.subject).toContain('Chat-Zusammenfassung');
+    expect(call.html.indexOf('Zusammenfassung')).toBeLessThan(call.html.indexOf('Vollständiges Transkript'));
+    expect(call.html).toContain('Nutzer fragt nach &lt;script&gt;alert(1)&lt;/script&gt;.');
+    expect(call.html).toContain('&lt;strong&gt;Nutzer&lt;/strong&gt;: Hallo');
+    expect(call.html).toContain('Sarah: Vollständige Antwort');
+    expect(call.html).not.toContain('<script>');
+  });
+
+  it('sendCompletedChatSummary includes opportunity data and the exact deal link', async () => {
+    const sendMock = vi.fn().mockResolvedValue({ messageId: 'completed-opportunity' });
+    const service = createEmailService(
+      { host: 'smtp.test.com', port: 587, user: 'a', pass: 'b' },
+      sendMock,
+    );
+
+    await service.sendCompletedChatSummary('sales@example.com', {
+      sessionId: 'opportunity-1',
+      mode: 'anfrage',
+      kind: 'opportunity',
+      summary: 'Max Mustermann benötigt einen Sitzlift in Lemgo.',
+      transcript: 'Nutzer: Anfrage\nSarah: Anfrage aufgenommen',
+      completedAt: '2026-07-16T08:00:00.000Z',
+      leadData: {
+        firstName: 'Max',
+        lastName: 'Mustermann',
+        email: 'max@example.de',
+        postalCode: '32657',
+        city: 'Lemgo',
+        message: 'Sitzlift benötigt',
+      },
+      leadContext: { outcome: 'created', personId: 321, dealId: 789 },
+    });
+
+    const call = sendMock.mock.calls[0][0];
+    expect(call.subject).toContain('Opportunity');
+    expect(call.html).toContain('Max Mustermann benötigt einen Sitzlift');
+    expect(call.html).toContain('Sitzlift benötigt');
+    expect(call.html).toContain('href="https://lippelift.pipedrive.com/deal/789"');
+    expect(call.html).toContain('Vollständiges Transkript');
+  });
+
+  it('sendCompletedChatSummary includes case data and manual review without an unsafe link', async () => {
+    const sendMock = vi.fn().mockResolvedValue({ messageId: 'completed-case' });
+    const service = createEmailService(
+      {
+        host: 'smtp.test.com',
+        port: 587,
+        user: 'a',
+        pass: 'b',
+        pipedriveWebBaseUrl: 'http://unsafe.example.com',
+      },
+      sendMock,
+    );
+
+    await service.sendCompletedChatSummary('support@example.com', {
+      sessionId: 'case-1',
+      mode: 'service',
+      kind: 'case',
+      summary: 'Maria meldet einen technischen Stillstand.',
+      transcript: 'Nutzer: Lift steht\nSarah: Servicefall aufgenommen',
+      completedAt: '2026-07-16T08:00:00.000Z',
+      supportData: {
+        customerName: 'Maria Schmidt',
+        category: 'technik',
+        issueDescription: 'Lift bleibt stehen.',
+      },
+      supportContext: {
+        matchState: 'unique',
+        noteStatus: 'created',
+        intendedInbox: 'technik@lippelift.de',
+        dealId: 1618,
+      },
+    });
+
+    const call = sendMock.mock.calls[0][0];
+    expect(call.subject).toContain('Case');
+    expect(call.html).toContain('Maria Schmidt');
+    expect(call.html).toContain('Lift bleibt stehen.');
+    expect(call.html).toContain('Manuelle Prüfung erforderlich');
+    expect(call.html).not.toContain('href="');
+  });
 });

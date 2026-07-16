@@ -43,6 +43,27 @@ export interface AbandonedChatSummary {
   submittedAt: string;
 }
 
+export type CompletedChatKind = 'general' | 'opportunity' | 'case';
+
+export interface CompletedChatSummary {
+  sessionId: string;
+  mode: string;
+  kind: CompletedChatKind;
+  summary: string;
+  transcript: string;
+  completedAt: string;
+  leadData?: LeadData;
+  leadContext?: LeadNotificationContext;
+  supportData?: SupportData;
+  supportContext?: {
+    matchState: SupportMatchState;
+    noteStatus: SupportNoteStatus;
+    noteError?: string;
+    intendedInbox: string;
+    dealId?: number;
+  };
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -190,12 +211,87 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
     });
   }
 
+  async function sendCompletedChatSummary(to: string, input: CompletedChatSummary): Promise<void> {
+    if (!configured && !sendOverride) return;
+
+    const kindLabel = {
+      general: 'Chat',
+      opportunity: 'Opportunity',
+      case: 'Case',
+    }[input.kind];
+    const dealId = input.leadContext?.dealId ?? input.supportContext?.dealId;
+    const dealUrl = buildPipedriveDealUrl(pipedriveWebBaseUrl, dealId);
+    const crmAction = input.kind === 'general'
+      ? ''
+      : dealUrl
+        ? `<p><a href="${escapeHtml(dealUrl)}" style="display:inline-block;padding:10px 16px;background:#0b63ce;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold;">Fall in Pipedrive öffnen</a></p>`
+        : '<p><strong>Manuelle Prüfung erforderlich</strong></p>';
+
+    const leadRows = input.leadData
+      ? `
+        ${row('Name', [input.leadData.firstName, input.leadData.lastName].filter(Boolean).join(' '))}
+        ${row('Telefon', input.leadData.phone)}
+        ${row('E-Mail', input.leadData.email)}
+        ${row('Vorheriger Kontakt', input.leadData.priorContact)}
+        ${row('Referenz', input.leadData.priorContactReference)}
+        ${row('Adresse', [input.leadData.street, input.leadData.postalCode, input.leadData.city].filter(Boolean).join(', '))}
+        ${row('Erreichbarkeit', input.leadData.availability)}
+        ${row('Lifttyp', input.leadData.liftType)}
+        ${row('Anliegen', input.leadData.message)}
+        ${row('CRM-Ergebnis', input.leadContext?.outcome)}
+        ${row('Person-ID', input.leadContext?.personId)}
+        ${row('Fall-ID', input.leadContext?.dealId)}
+        ${row('CRM-Hinweis', input.leadContext?.reason)}
+      `
+      : '';
+    const supportRows = input.supportData
+      ? `
+        ${row('Kunde', input.supportData.customerName)}
+        ${row('Telefon', input.supportData.phone)}
+        ${row('E-Mail', input.supportData.email)}
+        ${row('Kategorie', input.supportData.category)}
+        ${row('Problem', input.supportData.issueDescription)}
+        ${row('Lift-Modell', input.supportData.liftModel)}
+        ${row('Referenz', input.supportData.priorContactReference)}
+        ${row('CRM-Treffer', input.supportContext?.matchState)}
+        ${row('CRM-Notiz', input.supportContext?.noteStatus)}
+        ${row('CRM-Notizfehler', input.supportContext?.noteError)}
+        ${row('Ziel-Postfach', input.supportContext?.intendedInbox)}
+        ${row('Fall-ID', input.supportContext?.dealId)}
+      `
+      : '';
+    const structuredRows = leadRows || supportRows;
+
+    const html = `
+      <h2>Sarah ${kindLabel} abgeschlossen</h2>
+      ${crmAction}
+      <h3>Zusammenfassung</h3>
+      <p>${escapeHtml(input.summary)}</p>
+      <table style="border-collapse:collapse;">
+        ${row('Session', input.sessionId)}
+        ${row('Modus', input.mode)}
+        ${row('Abgeschlossen', input.completedAt)}
+        ${structuredRows}
+      </table>
+      <h3>Vollständiges Transkript</h3>
+      <pre style="white-space:pre-wrap;font-family:Arial,sans-serif;border:1px solid #ddd;padding:12px;border-radius:8px;">${escapeHtml(input.transcript)}</pre>
+    `;
+
+    await sendFn({
+      from,
+      to,
+      subject: `Sarah ${kindLabel}-Zusammenfassung: ${input.sessionId}`,
+      html,
+    });
+  }
+
   return {
     isConfigured: () => configured,
     sendLeadNotification,
     sendServiceNotification,
     sendSupportNotification,
     sendAbandonedChatSummary,
+    sendCompletedChatSummary,
   };
 }
 
