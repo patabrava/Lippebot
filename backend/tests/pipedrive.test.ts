@@ -1746,7 +1746,7 @@ describe('createPipedriveService', () => {
     const mockFetch = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ success: true, data: [] }),
+        json: () => Promise.resolve({ success: true, data: null }),
       })
       .mockResolvedValueOnce({
         ok: true,

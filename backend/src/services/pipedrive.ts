@@ -790,10 +790,10 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     if (!configured) throw new Error('Pipedrive not configured');
 
     const marker = buildPipedriveTranscriptMarker(sessionId);
-    const existingNotes = await apiGet<Array<{ id: number; content?: string }>>('/notes', {
+    const existingNotes = (await apiGet<Array<{ id: number; content?: string }> | null>('/notes', {
       ...(dealId ? { deal_id: dealId } : { person_id: personId }),
       limit: 500,
-    });
+    })) ?? [];
     const existingNote = existingNotes.find((note) => note.content?.includes(marker));
     if (existingNote) return { noteId: existingNote.id };
 
