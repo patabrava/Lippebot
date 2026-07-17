@@ -3,6 +3,7 @@ import type { ChatMessage } from '../types/index.js';
 
 interface PipedriveTranscriptInput {
   sessionId: string;
+  summary: string;
   history: ChatMessage[];
   currentMessage: string;
   assistantText: string;
@@ -48,6 +49,9 @@ export function buildPipedriveTranscriptNote(input: PipedriveTranscriptInput): s
   }
 
   return [
+    '<strong>Kurzfassung</strong>',
+    `<p>${formatContent(input.summary)}</p>`,
+    '<hr>',
     '<strong>Vollständiges Sarah-Chatprotokoll</strong>',
     `<small>Sitzung: ${escapeHtml(input.sessionId)} · ${buildPipedriveTranscriptMarker(input.sessionId)}</small>`,
     '<hr>',

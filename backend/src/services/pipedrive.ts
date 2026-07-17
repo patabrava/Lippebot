@@ -1,4 +1,4 @@
-import { buildSupportNoteContent, resolveSupportCategory } from '../support/support-routing.js';
+import { resolveSupportCategory } from '../support/support-routing.js';
 import { buildPipedriveTranscriptMarker } from '../chat/transcript.js';
 import { formatBerlinDate } from '../time/berlin.js';
 import type { LeadCrmResult, LeadData, ServiceData, SupportData, SupportMatchResult } from '../types/index.js';
@@ -218,29 +218,6 @@ function buildDealCustomFields(data: LeadData): Record<string, number> {
   }
 
   return customFields;
-}
-
-function escapeHtml(value: unknown): string {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function buildLeadFollowUpNote(data: LeadData, heading = 'Sarah Folgeanfrage'): string {
-  const address = [data.street, data.postalCode, data.city].filter(Boolean).join(', ');
-  return [
-    `<strong>${escapeHtml(heading)}</strong>`,
-    data.availability ? `Erreichbarkeit: ${escapeHtml(data.availability)}` : '',
-    data.email ? `E-Mail: ${escapeHtml(data.email)}` : '',
-    data.phone ? `Telefon: ${escapeHtml(data.phone)}` : '',
-    data.priorContact ? `Vorheriger Kontakt: ${escapeHtml(data.priorContact)}` : '',
-    data.priorContactReference ? `Referenz: ${escapeHtml(data.priorContactReference)}` : '',
-    address ? `Adresse: ${escapeHtml(address)}` : '',
-    data.message ? `Nachricht: ${escapeHtml(data.message)}` : '',
-  ].filter(Boolean).join('<br>');
 }
 
 export function createPipedriveService(apiKey: string, pipelineId: number, stageId: number) {
@@ -703,13 +680,6 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
 
       await updatePerson(reference.personId, data, firstName, lastName, phone, email, street, postalCode, city);
       cachePersonId(reference.personId, email, phone);
-      await apiCall('/notes', {
-        person_id: reference.personId,
-        deal_id: reference.dealId,
-        content: buildLeadFollowUpNote(data),
-        pinned_to_person_flag: 1,
-        pinned_to_deal_flag: 1,
-      });
       return { outcome: 'reused', personId: reference.personId, dealId: reference.dealId };
     }
 
@@ -720,11 +690,6 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     if (existingPersonId) {
       const openDeals = await getOpenPersonDeals(existingPersonId);
       if (openDeals.length > 1) {
-        await apiCall('/notes', {
-          person_id: existingPersonId,
-          content: buildLeadFollowUpNote(data, `Sarah Folgeanfrage – manuelle Fallzuordnung (${openDeals.length} offene Fälle)`),
-          pinned_to_person_flag: 1,
-        });
         return {
           outcome: 'person_review',
           personId: existingPersonId,
@@ -735,23 +700,9 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
 
       await updatePerson(existingPersonId, data, firstName, lastName, phone, email, street, postalCode, city);
       if (openDeals.length === 1) {
-        await apiCall('/notes', {
-          person_id: existingPersonId,
-          deal_id: openDeals[0].id,
-          content: buildLeadFollowUpNote(data),
-          pinned_to_person_flag: 1,
-          pinned_to_deal_flag: 1,
-        });
         return { outcome: 'reused', personId: existingPersonId, dealId: openDeals[0].id };
       }
     }
-
-    const dealNotes = [
-      `Erreichbarkeit: ${data.availability}`,
-      data.priorContact ? `Vorheriger Kontakt: ${escapeHtml(data.priorContact)}` : '',
-      data.priorContactReference ? `Referenz: ${escapeHtml(data.priorContactReference)}` : '',
-      data.message ? `Nachricht: ${data.message}` : '',
-    ].filter(Boolean).join('\n');
 
     const deal = await apiCall('/deals', {
       title: `Sarah Lead: ${firstName} ${lastName}`,
@@ -763,15 +714,6 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
       [dealFieldKeys.requestDate]: today(),
       ...buildDealCustomFields(data),
     });
-
-    if (dealNotes) {
-      // Only store values without dedicated Pipedrive fields as note content.
-      await apiCall('/notes', {
-        deal_id: deal.id,
-        content: dealNotes,
-        pinned_to_deal_flag: 1,
-      }).catch(() => {}); // non-critical
-    }
 
     return { outcome: 'created', personId, dealId: deal.id };
   }
@@ -839,24 +781,6 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     return { personId, dealId: deal.id, createdPerson };
   }
 
-  async function createSupportNote(
-    personId: number,
-    data: SupportData,
-    dealId?: number,
-    matchState: SupportMatchResult['matchState'] = 'unique',
-  ): Promise<{ noteId: number }> {
-    if (!configured) throw new Error('Pipedrive not configured');
-
-    const note = await apiCall('/notes', {
-      person_id: personId,
-      ...(dealId ? { deal_id: dealId, pinned_to_deal_flag: 1 } : {}),
-      content: buildSupportNoteContent(data, matchState),
-      pinned_to_person_flag: 1,
-    });
-
-    return { noteId: note.id };
-  }
-
   async function createChatTranscriptNote(
     sessionId: string,
     personId: number,
@@ -889,7 +813,6 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     createServiceActivity,
     createSupportCase,
     resolveSupportPerson,
-    createSupportNote,
     createChatTranscriptNote,
   };
 }

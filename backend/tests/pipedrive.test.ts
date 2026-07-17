@@ -71,13 +71,7 @@ describe('createPipedriveService', () => {
       new URL(String(url)).pathname.endsWith('/deals') && init?.method === 'POST'
     ))).toBe(false);
     const noteCall = mockFetch.mock.calls.find(([url]) => new URL(String(url)).pathname.endsWith('/notes'));
-    expect(noteCall).toBeDefined();
-    expect(JSON.parse(noteCall![1]!.body as string)).toEqual(expect.objectContaining({
-      person_id: 321,
-      deal_id: 456,
-      pinned_to_person_flag: 1,
-      pinned_to_deal_flag: 1,
-    }));
+    expect(noteCall).toBeUndefined();
   });
 
   it('createLead reuses one exact open reference deal and deduplicates repeated search hits', async () => {
@@ -132,15 +126,7 @@ describe('createPipedriveService', () => {
     expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456 });
     expect(mockFetch.mock.calls.some(([url]) => new URL(String(url)).pathname.endsWith('/persons/321/deals'))).toBe(false);
     const noteCall = mockFetch.mock.calls.find(([url]) => new URL(String(url)).pathname.endsWith('/notes'));
-    const noteBody = JSON.parse(noteCall![1]!.body as string);
-    expect(noteBody).toEqual(expect.objectContaining({
-      person_id: 321,
-      deal_id: 456,
-      pinned_to_person_flag: 1,
-      pinned_to_deal_flag: 1,
-    }));
-    expect(noteBody.content).toContain('Vorheriger Kontakt: yes');
-    expect(noteBody.content).toContain('Referenz: ANG-TEST-42');
+    expect(noteCall).toBeUndefined();
   });
 
   it('createLead lets an exact open reference override an uncorroborated name-only match', async () => {
@@ -487,7 +473,7 @@ describe('createPipedriveService', () => {
     ))).toBe(false);
   });
 
-  it('createLead never creates a second deal when the reused-deal note fails', async () => {
+  it('createLead reuses the deal without writing a preliminary note', async () => {
     const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith('/persons/search')) {
@@ -521,10 +507,13 @@ describe('createPipedriveService', () => {
       postalCode: '12345',
       city: 'Lemgo',
       availability: '08:00 - 12:00',
-    })).rejects.toThrow('Pipedrive API error: 500 Note Failed');
+    })).resolves.toEqual({ outcome: 'reused', personId: 321, dealId: 456 });
 
     expect(mockFetch.mock.calls.some(([url, init]) => (
       new URL(String(url)).pathname.endsWith('/deals') && init?.method === 'POST'
+    ))).toBe(false);
+    expect(mockFetch.mock.calls.some(([url, init]) => (
+      new URL(String(url)).pathname.endsWith('/notes') && init?.method === 'POST'
     ))).toBe(false);
   });
 
@@ -573,12 +562,9 @@ describe('createPipedriveService', () => {
       candidateCount: 2,
       reason: 'multiple_open_deals',
     });
-    const noteBody = JSON.parse(mockFetch.mock.calls[2][1].body as string);
-    expect(noteBody).toEqual(expect.objectContaining({
-      person_id: 321,
-      pinned_to_person_flag: 1,
-    }));
-    expect(noteBody).not.toHaveProperty('deal_id');
+    expect(mockFetch.mock.calls.some(([url, init]) => (
+      new URL(String(url)).pathname.endsWith('/notes') && init?.method === 'POST'
+    ))).toBe(false);
   });
 
   it('createLead reuses a normalized name match only when the stored address corroborates it', async () => {
@@ -1209,8 +1195,9 @@ describe('createPipedriveService', () => {
     expect(dealBody['9c08a82b8cad15eab222f89a6a961c59bc8c95e3']).toBeUndefined();
     expect(dealBody['684a7860061d276f4a76498fd1653d721e37cb6f']).toBeUndefined();
 
-    const noteBody = JSON.parse(mockFetch.mock.calls[4][1].body);
-    expect(noteBody.content).toBe('Erreichbarkeit: 12:00 - 16:00');
+    expect(mockFetch.mock.calls.some(([url, init]) => (
+      new URL(String(url)).pathname.endsWith('/notes') && init?.method === 'POST'
+    ))).toBe(false);
   });
 
   it('createLead maps German display labels to custom option IDs', async () => {
@@ -1258,7 +1245,7 @@ describe('createPipedriveService', () => {
     expect(dealBody['684a7860061d276f4a76498fd1653d721e37cb6f']).toBe(128);
   });
 
-  it('createLead only stores non-structured data in the deal note', async () => {
+  it('createLead leaves note persistence to the completed conversation writer', async () => {
     const mockFetch = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -1300,11 +1287,10 @@ describe('createPipedriveService', () => {
       message: 'Bitte am besten vormittags anrufen.',
     });
 
-    const noteBody = JSON.parse(mockFetch.mock.calls[4][1].body);
-    expect(noteBody.content).toBe('Erreichbarkeit: 08:00 - 12:00\nNachricht: Bitte am besten vormittags anrufen.');
-    expect(noteBody.content).not.toContain('Treppe:');
-    expect(noteBody.content).not.toContain('Adresse:');
-    expect(noteBody.content).not.toContain('Newsletter:');
+    const noteCalls = mockFetch.mock.calls.filter(([url, init]) => (
+      new URL(String(url)).pathname.endsWith('/notes') && init?.method === 'POST'
+    ));
+    expect(noteCalls).toHaveLength(0);
   });
 
   it('createServiceActivity builds correct activity payload', async () => {
@@ -1754,77 +1740,6 @@ describe('createPipedriveService', () => {
     expect(result).toEqual({ matchState: 'unresolved', candidateCount: 0 });
     expect(mockFetch.mock.calls[1][0]).toContain('fields=phone');
     expect(mockFetch.mock.calls[1][0]).toContain('term=0049526196660');
-  });
-
-  it('createSupportNote writes a compact person note only for a unique support match', async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ success: true, data: { id: 9001 } }),
-    });
-    vi.stubGlobal('fetch', mockFetch);
-
-    const service = createPipedriveService('test-key', 1, 2);
-    const result = await service.createSupportNote(501, {
-      customerName: 'Maria Schmidt',
-      category: 'technik',
-      issueDescription: 'Lift bleibt stehen.',
-      phone: '05261 96660',
-    });
-
-    expect(result).toEqual({ noteId: 9001 });
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.person_id).toBe(501);
-    expect(body.content).toContain('Sarah Chatbot');
-    expect(body.content).toContain('Kategorie: technik');
-    expect(body.content).toContain('Kurzfassung: Lift bleibt stehen.');
-    expect(body.content).not.toContain('activity_id');
-    expect(body.content).not.toContain('deal_id');
-  });
-
-  it('createSupportNote pins the same support note to the matched opportunity when provided', async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ success: true, data: { id: 9002 } }),
-    });
-    vi.stubGlobal('fetch', mockFetch);
-
-    const service = createPipedriveService('test-key', 1, 2);
-    const result = await service.createSupportNote(501, {
-      customerName: 'Maria Schmidt',
-      category: 'sales',
-      issueDescription: 'TEST NOTE',
-      offerNumber: '14.28',
-      leadId: 'LEAD-123',
-    }, 7001);
-
-    expect(result).toEqual({ noteId: 9002 });
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.person_id).toBe(501);
-    expect(body.deal_id).toBe(7001);
-    expect(body.pinned_to_person_flag).toBe(1);
-    expect(body.pinned_to_deal_flag).toBe(1);
-    expect(body.content).toContain('Kurzfassung: TEST NOTE');
-    expect(body.content).toContain('Angebotsnummer: 14.28');
-    expect(body.content).toContain('Lead-ID: LEAD-123');
-  });
-
-  it('createSupportNote preserves the unresolved match state on a review case', async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ success: true, data: { id: 9003 } }),
-    });
-    vi.stubGlobal('fetch', mockFetch);
-
-    await createPipedriveService('test-key', 1, 2).createSupportNote(701, {
-      customerName: 'Camilo',
-      category: 'lossau',
-      issueDescription: 'Installation ausstehend.',
-      email: 'camilo@example.de',
-    }, 801, 'unresolved');
-
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.content).toContain('CRM-Treffer: unresolved');
-    expect(body.deal_id).toBe(801);
   });
 
   it('createChatTranscriptNote pins a full chat transcript to its person and opportunity', async () => {

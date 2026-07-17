@@ -165,6 +165,53 @@ function buildSupportSummary(data: SupportData, result: SupportHandoffResult): s
   return `${details.join('. ')}.`;
 }
 
+function summaryLine(label: string, value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.trim().length === 0) return undefined;
+  return `${label}: ${value.trim()}`;
+}
+
+function buildLeadPipedriveSummary(data: LeadData, result: LeadInternalResult): string {
+  const name = [data.firstName, data.lastName].filter(Boolean).join(' ');
+  const address = [data.street, data.postalCode, data.city].filter(Boolean).join(', ');
+  return [
+    summaryLine('Anfrage von', name),
+    summaryLine('E-Mail', data.email),
+    summaryLine('Telefon', data.phone),
+    summaryLine('Adresse', address),
+    summaryLine('Erreichbarkeit', data.availability),
+    summaryLine('Vorheriger Kontakt', data.priorContact),
+    summaryLine('Referenz', data.priorContactReference),
+    summaryLine('Anliegen', data.message),
+    `CRM-Ergebnis: ${result.outcome}`,
+  ].filter(Boolean).join('\n');
+}
+
+function buildSupportPipedriveSummary(data: SupportData, result: SupportHandoffResult): string {
+  return [
+    summaryLine('Kunde', data.customerName),
+    summaryLine('Kategorie', data.category),
+    summaryLine('Problem', data.issueDescription),
+    summaryLine('E-Mail', data.email),
+    summaryLine('Telefon', data.phone),
+    summaryLine('Vorheriger Kontakt', data.priorContact),
+    summaryLine('Referenz', data.priorContactReference),
+    summaryLine('Lift-Modell', data.liftModel),
+    summaryLine('Symptomdetails', data.symptomDetails),
+    summaryLine('Auslöser/Bedingungen', data.triggerConditions),
+    summaryLine('Rechnungsnummer', data.invoiceNumber),
+    summaryLine('Kundennummer', data.customerNumber),
+    summaryLine('Zahlungsreferenz', data.paymentReference),
+    summaryLine('Auftragsnummer', data.orderNumber),
+    summaryLine('Angebotsnummer', data.offerNumber),
+    summaryLine('Lead-ID', data.leadId),
+    summaryLine('Vertragsreferenz', data.contractReference),
+    summaryLine('Ersatzteilreferenz', data.sparePartReference),
+    summaryLine('Installationskontext', data.installationContext),
+    summaryLine('Mangelkontext', data.defectContext),
+    `CRM-Zuordnung: ${result.matchState}`,
+  ].filter(Boolean).join('\n');
+}
+
 function getLastUserMessage(messages: TranscriptMessage[]): string | undefined {
   return [...messages].reverse().find((msg) => msg.role === 'user' && msg.content.trim())?.content.trim();
 }
@@ -193,8 +240,8 @@ export function createChatRoute(deps: ChatDeps): Hono {
   const tracker = deps.conversationTracker;
   const completedLeadActions = new Map<string, LeadInternalResult>();
   const completedSupportActions = new Map<string, SupportHandoffResult>();
-  const completedTranscriptNotes = new Set<string>();
-  const inFlightTranscriptNotes = new Map<string, Promise<void>>();
+  const completedTranscriptNotes = new Map<string, number>();
+  const inFlightTranscriptNotes = new Map<string, Promise<number>>();
   const completedSummaryEmails = new Set<string>();
   const inFlightSummaryEmails = new Map<string, Promise<void>>();
   const completedAbandonedSummaries = new Set<string>();
@@ -345,20 +392,6 @@ export function createChatRoute(deps: ChatDeps): Hono {
         console.error('Support case persistence error:', err);
       }
 
-      if (!crmError && personId && dealId) {
-        try {
-          if (matchState === 'unique') {
-            await deps.pipedrive.createSupportNote(personId, normalizedSupportData, dealId);
-          } else {
-            await deps.pipedrive.createSupportNote(personId, normalizedSupportData, dealId, matchState);
-          }
-          noteStatus = 'created';
-        } catch (err) {
-          noteStatus = 'failed';
-          noteError = err instanceof Error ? err.message : String(err);
-          console.error('Support note creation error:', err);
-        }
-      }
     } else {
       crmError = new Error('Pipedrive not configured');
       noteStatus = 'failed';
@@ -376,11 +409,6 @@ export function createChatRoute(deps: ChatDeps): Hono {
     };
     const clientActionResult = buildSupportClientActionResult(result, normalizedSupportData);
     if (tracker?.isEnabled()) {
-      void track(() => tracker.recordEvent({
-        sessionId,
-        eventType: 'support_handoff_created',
-        payload: { ...result },
-      }));
       void track(() => tracker.updateSession({
         sessionId,
         supportPersonId: result.personId,
@@ -405,15 +433,16 @@ export function createChatRoute(deps: ChatDeps): Hono {
     personId: number | undefined,
     dealId: number | undefined,
     content: string,
-  ): Promise<void> {
-    if (!personId) return;
+  ): Promise<number | undefined> {
+    if (!personId) return undefined;
 
     const completionKey = `${sessionId}:${personId}:${dealId ?? 'person'}`;
-    if (completedTranscriptNotes.has(completionKey)) return;
+    const completedNoteId = completedTranscriptNotes.get(completionKey);
+    if (completedNoteId) return completedNoteId;
     const existingWrite = inFlightTranscriptNotes.get(completionKey);
     if (existingWrite) {
       await existingWrite;
-      return;
+      return existingWrite;
     }
 
     const write = (async () => {
@@ -421,7 +450,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         try {
           const { noteId } = await deps.pipedrive.createChatTranscriptNote(sessionId, personId, dealId, content);
-          completedTranscriptNotes.add(completionKey);
+          completedTranscriptNotes.set(completionKey, noteId);
           if (tracker?.isEnabled()) {
             await track(() => tracker.recordEvent({
               sessionId,
@@ -429,7 +458,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
               payload: { personId, ...(dealId ? { dealId } : {}), noteId },
             }));
           }
-          return;
+          return noteId;
         } catch (err) {
           lastError = err;
         }
@@ -452,7 +481,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
 
     inFlightTranscriptNotes.set(completionKey, write);
     try {
-      await write;
+      return await write;
     } finally {
       if (inFlightTranscriptNotes.get(completionKey) === write) {
         inFlightTranscriptNotes.delete(completionKey);
@@ -615,16 +644,52 @@ export function createChatRoute(deps: ChatDeps): Hono {
         }
 
         const assistantTimestamp = Date.now();
-        const transcript = buildPipedriveTranscriptNote({
-          sessionId,
-          history,
-          currentMessage: message,
-          assistantText,
-          currentUserTimestamp,
-          assistantTimestamp,
-        });
-        await persistTranscriptNote(sessionId, leadResult?.personId, leadResult?.dealId, transcript);
-        await persistTranscriptNote(sessionId, supportResult?.personId, supportResult?.dealId, transcript);
+        if (leadResult && leadDataForEmail && leadResult.personId) {
+          const note = buildPipedriveTranscriptNote({
+            sessionId,
+            summary: buildLeadPipedriveSummary(leadDataForEmail, leadResult),
+            history,
+            currentMessage: message,
+            assistantText,
+            currentUserTimestamp,
+            assistantTimestamp,
+          });
+          await persistTranscriptNote(sessionId, leadResult.personId, leadResult.dealId, note);
+        } else if (supportResult && supportDataForEmail && supportResult.personId) {
+          const note = buildPipedriveTranscriptNote({
+            sessionId,
+            summary: buildSupportPipedriveSummary(supportDataForEmail, supportResult),
+            history,
+            currentMessage: message,
+            assistantText,
+            currentUserTimestamp,
+            assistantTimestamp,
+          });
+          const noteId = await persistTranscriptNote(
+            sessionId,
+            supportResult.personId,
+            supportResult.dealId,
+            note,
+          );
+          if (noteId) {
+            supportResult.noteStatus = 'created';
+            supportResult.noteError = undefined;
+            if (tracker?.isEnabled()) {
+              await track(() => tracker.recordEvent({
+                sessionId,
+                eventType: 'support_handoff_created',
+                payload: { ...supportResult },
+              }));
+              await track(() => tracker.updateSession({
+                sessionId,
+                supportPersonId: supportResult.personId,
+                supportNoteStatus: supportResult.noteStatus,
+                supportMatchState: supportResult.matchState,
+                supportIntendedInbox: supportResult.intendedInbox,
+              }));
+            }
+          }
+        }
 
         const completedTranscript = buildCompletedTranscript({
           history,

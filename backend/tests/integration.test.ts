@@ -1037,6 +1037,10 @@ describe('POST /api/chat', () => {
 
     expect(createChatTranscriptNote).toHaveBeenCalledWith('opportunity-transcript', 321, 654, expect.any(String));
     const transcript = createChatTranscriptNote.mock.calls[0][3];
+    expect(createChatTranscriptNote).toHaveBeenCalledTimes(1);
+    expect(transcript).toContain('<strong>Kurzfassung</strong>');
+    expect(transcript).toContain('E-Mail: max.transcript@example.de');
+    expect(transcript).toContain('Erreichbarkeit: 08:00 - 12:00');
     expect(transcript).toContain('Willkommen bei LIPPE Lift.');
     expect(transcript).toContain('Ich brauche einen Sitzlift.');
     expect(transcript).toContain('Bitte senden Sie die Anfrage ab.');
@@ -1045,7 +1049,7 @@ describe('POST /api/chat', () => {
     expect(text).toContain('"type":"done"');
   });
 
-  it('writes a separate complete transcript note for a resolved support case', async () => {
+  it('writes one combined summary and transcript note for a resolved support case', async () => {
     const supportData = {
       priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
@@ -1088,13 +1092,17 @@ describe('POST /api/chat', () => {
       }),
     })).text();
 
-    expect(createSupportNote).toHaveBeenCalledWith(501, supportData, 7001);
+    expect(createSupportNote).not.toHaveBeenCalled();
+    expect(createChatTranscriptNote).toHaveBeenCalledTimes(1);
     expect(createChatTranscriptNote).toHaveBeenCalledWith(
       'support-transcript',
       501,
       7001,
       expect.stringContaining('Vollständiges Sarah-Chatprotokoll'),
     );
+    expect(createChatTranscriptNote.mock.calls[0][3]).toContain('<strong>Kurzfassung</strong>');
+    expect(createChatTranscriptNote.mock.calls[0][3]).toContain('Problem: Der Lift bleibt stehen.');
+    expect(createChatTranscriptNote.mock.calls[0][3]).toContain('Telefon: 05261 96660');
     expect(createChatTranscriptNote.mock.calls[0][3]).toContain('Der Servicefall wurde aufgenommen.');
   });
 
@@ -1268,7 +1276,7 @@ describe('POST /api/chat', () => {
     expect(errorSpy).toHaveBeenCalledWith('Chat stream error:', expect.any(Error));
   });
 
-  it('creates a compact support note and sends one routed support email for a unique match', async () => {
+  it('creates one combined support note and sends one routed support email for a unique match', async () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({
       matchState: 'unique',
       personId: 501,
@@ -1320,7 +1328,7 @@ describe('POST /api/chat', () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     expect(resolveSupportPerson).toHaveBeenCalledWith(supportData);
-    expect(createSupportNote).toHaveBeenCalledWith(501, supportData, 654);
+    expect(createSupportNote).not.toHaveBeenCalled();
     expect(createServiceActivity).not.toHaveBeenCalled();
     expect(sendCompletedChatSummary).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
       kind: 'case',
@@ -1390,14 +1398,14 @@ describe('POST /api/chat', () => {
     expect(createSupportCase).toHaveBeenCalledWith(supportData, {
       matchState: 'unique', personId: 501, candidateCount: 1,
     });
-    expect(createSupportNote).toHaveBeenCalledWith(501, supportData, 7002);
+    expect(createSupportNote).not.toHaveBeenCalled();
     expect(sendCompletedChatSummary).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
       kind: 'case', supportData,
     }));
     expect(text).toContain('"status":"accepted"');
   });
 
-  it('passes a matched opportunity id to the support note writer', async () => {
+  it('pins the combined support note to the matched opportunity', async () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({
       matchState: 'unique',
       personId: 501,
@@ -1405,6 +1413,7 @@ describe('POST /api/chat', () => {
       candidateCount: 1,
     });
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
+    const createChatTranscriptNote = vi.fn().mockResolvedValue({ noteId: 9100 });
     const sendSupportNotification = vi.fn().mockResolvedValue({ messageId: 'support-1' });
     const supportData = {
       priorContact: 'unknown' as const,
@@ -1428,7 +1437,7 @@ describe('POST /api/chat', () => {
         createServiceActivity: vi.fn(),
         resolveSupportPerson,
         createSupportNote,
-        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
+        createChatTranscriptNote,
       },
       email: {
         ...createMockEmail(),
@@ -1438,13 +1447,17 @@ describe('POST /api/chat', () => {
       serviceEmailTo: 'berg@lippelift.de',
     });
 
-    await app.request('/api/chat', {
+    const response = await app.request('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: 'support-opportunity', message: 'Status Angebot 14.28', history: [] }),
     });
+    await response.text();
 
-    expect(createSupportNote).toHaveBeenCalledWith(501, supportData, 7001);
+    expect(createSupportNote).not.toHaveBeenCalled();
+    expect(createChatTranscriptNote).toHaveBeenCalledWith(
+      'support-opportunity', 501, 7001, expect.stringContaining('<strong>Kurzfassung</strong>'),
+    );
   });
 
   it('creates a reviewable Pipedrive case and full transcript for unresolved support matches', async () => {
@@ -1499,7 +1512,7 @@ describe('POST /api/chat', () => {
       matchState: 'unresolved',
       candidateCount: 0,
     });
-    expect(createSupportNote).toHaveBeenCalledWith(701, supportData, 801, 'unresolved');
+    expect(createSupportNote).not.toHaveBeenCalled();
     expect(createChatTranscriptNote).toHaveBeenCalledWith(
       'support-unresolved',
       701,
@@ -1563,7 +1576,7 @@ describe('POST /api/chat', () => {
     })).text();
 
     expect(createSupportCase).toHaveBeenCalledWith(supportData, match);
-    expect(createSupportNote).toHaveBeenCalledWith(702, supportData, 802, 'ambiguous');
+    expect(createSupportNote).not.toHaveBeenCalled();
     expect(createChatTranscriptNote).toHaveBeenCalledWith(
       'support-ambiguous-review', 702, 802, expect.any(String),
     );
@@ -1717,10 +1730,11 @@ describe('POST /api/chat', () => {
     expect(await res.text()).toContain('"status":"needs_prior_contact"');
   });
 
-  it('still sends the support email when the unique-match note write fails', async () => {
+  it('does not report support completion when the combined note write fails', async () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
     const createSupportCase = vi.fn().mockResolvedValue({ personId: 501, dealId: 7003, createdPerson: false });
     const createSupportNote = vi.fn().mockRejectedValue(new Error('Pipedrive API error: 500 Internal Server Error'));
+    const createChatTranscriptNote = vi.fn().mockRejectedValue(new Error('Pipedrive API error: 500 Internal Server Error'));
     const createServiceActivity = vi.fn();
     const sendCompletedChatSummary = vi.fn().mockResolvedValue(undefined);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -1744,7 +1758,7 @@ describe('POST /api/chat', () => {
         resolveSupportPerson,
         createSupportCase,
         createSupportNote,
-        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
+        createChatTranscriptNote,
       },
       email: {
         ...createMockEmail(),
@@ -1764,18 +1778,14 @@ describe('POST /api/chat', () => {
     });
 
     expect(res.status).toBe(200);
-    await res.text();
+    const text = await res.text();
     expect(createServiceActivity).not.toHaveBeenCalled();
-    expect(errorSpy).toHaveBeenCalledWith('Support note creation error:', expect.any(Error));
-    expect(sendCompletedChatSummary).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
-      kind: 'case',
-      supportContext: expect.objectContaining({
-        intendedInbox: 'lossau@lippelift.de',
-        matchState: 'unique',
-        noteStatus: 'failed',
-        noteError: 'Pipedrive API error: 500 Internal Server Error',
-      }),
-    }));
+    expect(createSupportNote).not.toHaveBeenCalled();
+    expect(createChatTranscriptNote).toHaveBeenCalledTimes(3);
+    expect(sendCompletedChatSummary).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith('Chat stream error:', expect.any(Error));
+    expect(text).toContain('"type":"error"');
+    expect(text).not.toContain('"type":"done"');
 
     errorSpy.mockRestore();
   });
@@ -1784,6 +1794,7 @@ describe('POST /api/chat', () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
     const createSupportCase = vi.fn().mockResolvedValue({ personId: 501, dealId: 7004, createdPerson: false });
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
+    const createChatTranscriptNote = vi.fn().mockResolvedValue({ noteId: 9100 });
     const sendCompletedChatSummary = vi.fn().mockRejectedValue(new Error('SMTP unavailable'));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const supportData = {
@@ -1806,7 +1817,7 @@ describe('POST /api/chat', () => {
         resolveSupportPerson,
         createSupportCase,
         createSupportNote,
-        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
+        createChatTranscriptNote,
       },
       email: {
         ...createMockEmail(),
@@ -1840,7 +1851,8 @@ describe('POST /api/chat', () => {
     expect(second.status).toBe(200);
     const secondText = await second.text();
 
-    expect(createSupportNote).toHaveBeenCalledTimes(1);
+    expect(createSupportNote).not.toHaveBeenCalled();
+    expect(createChatTranscriptNote).toHaveBeenCalledTimes(1);
     expect(sendCompletedChatSummary).toHaveBeenCalledTimes(6);
     expect(errorSpy).toHaveBeenCalledWith('Chat stream error:', expect.any(Error));
     expect(secondText).toContain('"duplicate":true');
@@ -1852,6 +1864,7 @@ describe('POST /api/chat', () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
     const createSupportCase = vi.fn().mockResolvedValue({ personId: 501, dealId: 7005, createdPerson: false });
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
+    const createChatTranscriptNote = vi.fn().mockResolvedValue({ noteId: 9100 });
     const sendCompletedChatSummary = vi.fn().mockResolvedValue(undefined);
     const supportData = {
       priorContact: 'unknown' as const,
@@ -1873,7 +1886,7 @@ describe('POST /api/chat', () => {
         resolveSupportPerson,
         createSupportCase,
         createSupportNote,
-        createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 9100 }),
+        createChatTranscriptNote,
       },
       email: {
         ...createMockEmail(),
@@ -1904,7 +1917,8 @@ describe('POST /api/chat', () => {
 
     expect(second.status).toBe(200);
     expect(resolveSupportPerson).toHaveBeenCalledTimes(1);
-    expect(createSupportNote).toHaveBeenCalledTimes(1);
+    expect(createSupportNote).not.toHaveBeenCalled();
+    expect(createChatTranscriptNote).toHaveBeenCalledTimes(1);
     expect(sendCompletedChatSummary).toHaveBeenCalledTimes(1);
     const secondText = await second.text();
     expect(secondText).toContain('"action":"create_service"');
