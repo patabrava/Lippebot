@@ -347,6 +347,10 @@ describe('createEmailService', () => {
     expect(call.html).toContain('&lt;strong&gt;Nutzer&lt;/strong&gt;: Hallo');
     expect(call.html).toContain('Sarah: Vollständige Antwort');
     expect(call.html).not.toContain('<script>');
+    expect(call.html).toContain('Chatende');
+    expect(call.html).not.toContain('Session:');
+    expect(call.html).not.toContain('Modus:');
+    expect(call.html).not.toContain('Abgeschlossen:');
   });
 
   it('sendCompletedChatSummary includes opportunity data and the exact deal link', async () => {
@@ -371,7 +375,7 @@ describe('createEmailService', () => {
         city: 'Lemgo',
         message: 'Sitzlift benötigt',
       },
-      leadContext: { outcome: 'created', personId: 321, dealId: 789 },
+      leadContext: { outcome: 'created', personId: 321, dealId: 789, createdPerson: true },
     });
 
     const call = sendMock.mock.calls[0][0];
@@ -380,6 +384,11 @@ describe('createEmailService', () => {
     expect(call.html).toContain('Sitzlift benötigt');
     expect(call.html).toContain('href="https://lippelift.pipedrive.com/deal/789"');
     expect(call.html).toContain('Vollständiges Transkript');
+    expect(call.html).toContain('Kontaktstatus');
+    expect(call.html).toContain('Neu');
+    expect(call.html).not.toContain('Kontaktname');
+    expect(call.html).not.toContain('Person-ID:');
+    expect(call.html).not.toContain('Fall-ID:');
   });
 
   it('sendCompletedChatSummary includes case data and manual review without an unsafe link', async () => {
@@ -412,6 +421,7 @@ describe('createEmailService', () => {
         noteStatus: 'created',
         intendedInbox: 'technik@lippelift.de',
         dealId: 1618,
+        createdPerson: false,
       },
     });
 
@@ -421,5 +431,11 @@ describe('createEmailService', () => {
     expect(call.html).toContain('Lift bleibt stehen.');
     expect(call.html).toContain('Manuelle Prüfung erforderlich');
     expect(call.html).not.toContain('href="');
+    expect(call.html).toContain('Kontaktstatus');
+    expect(call.html).toContain('Bestehend');
+    expect(call.html).toContain('Kontaktname');
+    expect(call.html).toContain('Maria Schmidt');
+    expect(call.html).not.toContain('Person-ID:');
+    expect(call.html).not.toContain('Fall-ID:');
   });
 });

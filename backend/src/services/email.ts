@@ -14,6 +14,7 @@ export interface LeadNotificationContext {
   outcome: LeadCrmOutcome | 'failed';
   personId?: number;
   dealId?: number;
+  createdPerson?: boolean;
   reason?: string;
 }
 
@@ -61,6 +62,7 @@ export interface CompletedChatSummary {
     noteError?: string;
     intendedInbox: string;
     dealId?: number;
+    createdPerson?: boolean;
   };
 }
 
@@ -226,6 +228,17 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
       : dealUrl
         ? `<p><a href="${escapeHtml(dealUrl)}" style="display:inline-block;padding:10px 16px;background:#0b63ce;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold;">Fall in Pipedrive öffnen</a></p>`
         : '<p><strong>Manuelle Prüfung erforderlich</strong></p>';
+    const createdPerson = input.leadContext?.createdPerson ?? input.supportContext?.createdPerson;
+    const contactStatus = createdPerson === true
+      ? 'Neu'
+      : createdPerson === false
+        ? 'Bestehend'
+        : undefined;
+    const contactName = createdPerson === false
+      ? input.leadData
+        ? [input.leadData.firstName, input.leadData.lastName].filter(Boolean).join(' ')
+        : input.supportData?.customerName
+      : undefined;
 
     const leadRows = input.leadData
       ? `
@@ -239,8 +252,6 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
         ${row('Lifttyp', input.leadData.liftType)}
         ${row('Anliegen', input.leadData.message)}
         ${row('CRM-Ergebnis', input.leadContext?.outcome)}
-        ${row('Person-ID', input.leadContext?.personId)}
-        ${row('Fall-ID', input.leadContext?.dealId)}
         ${row('CRM-Hinweis', input.leadContext?.reason)}
       `
       : '';
@@ -257,20 +268,19 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
         ${row('CRM-Notiz', input.supportContext?.noteStatus)}
         ${row('CRM-Notizfehler', input.supportContext?.noteError)}
         ${row('Ziel-Postfach', input.supportContext?.intendedInbox)}
-        ${row('Fall-ID', input.supportContext?.dealId)}
       `
       : '';
     const structuredRows = leadRows || supportRows;
 
     const html = `
-      <h2>Sarah ${kindLabel} abgeschlossen</h2>
+      <h2>Sarah ${kindLabel} – Chatende</h2>
       ${crmAction}
       <h3>Zusammenfassung</h3>
       <p>${escapeHtml(input.summary)}</p>
       <table style="border-collapse:collapse;">
-        ${row('Session', input.sessionId)}
-        ${row('Modus', input.mode)}
-        ${row('Abgeschlossen', input.completedAt)}
+        ${row('Chatende', input.completedAt)}
+        ${row('Kontaktstatus', contactStatus)}
+        ${row('Kontaktname', contactName)}
         ${structuredRows}
       </table>
       <h3>Vollständiges Transkript</h3>

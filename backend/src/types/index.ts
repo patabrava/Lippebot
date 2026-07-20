@@ -43,6 +43,7 @@ export interface LeadCrmResult {
   outcome: LeadCrmOutcome;
   personId?: number;
   dealId?: number;
+  createdPerson?: boolean;
   candidateCount?: number;
   reason?: string;
 }
@@ -81,6 +82,7 @@ export interface SupportHandoffResult {
   matchState: SupportMatchState;
   personId?: number;
   dealId?: number;
+  createdPerson?: boolean;
   intendedInbox: string;
   emailRecipient: string;
   noteStatus: SupportNoteStatus;

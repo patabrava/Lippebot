@@ -167,7 +167,7 @@ describe('POST /api/chat', () => {
       pipedrive: {
         ...createMockPipedrive(),
         isConfigured: () => true,
-        createLead: vi.fn().mockResolvedValue({ outcome: 'created', personId: 321, dealId: 654 }),
+        createLead: vi.fn().mockResolvedValue({ outcome: 'created', personId: 321, dealId: 654, createdPerson: true }),
       },
       email: { ...createMockEmail(), sendLeadNotification, sendCompletedChatSummary },
       notificationEmailTo: 'sales@example.com',
@@ -186,7 +186,7 @@ describe('POST /api/chat', () => {
     expect(sendCompletedChatSummary).toHaveBeenCalledWith('sales@example.com', expect.objectContaining({
       kind: 'opportunity',
       leadData,
-      leadContext: { outcome: 'created', personId: 321, dealId: 654 },
+      leadContext: { outcome: 'created', personId: 321, dealId: 654, createdPerson: true },
       transcript: expect.stringContaining('Ihre Anfrage wurde aufgenommen.'),
     }));
     expect(text).toContain('"type":"done"');
@@ -237,6 +237,7 @@ describe('POST /api/chat', () => {
       supportData,
       supportContext: expect.objectContaining({
         matchState: 'unique', noteStatus: 'created', intendedInbox: 'technik@lippelift.de', dealId: 7001,
+        createdPerson: false,
       }),
       transcript: expect.stringContaining('Der Servicefall wurde aufgenommen.'),
     }));
@@ -1525,6 +1526,7 @@ describe('POST /api/chat', () => {
       supportData,
       supportContext: expect.objectContaining({
         intendedInbox: 'finance@lippelift.de', matchState: 'unresolved', noteStatus: 'created', dealId: 801,
+        createdPerson: true,
       }),
     }));
     expect(text).toContain('"type":"done"');
@@ -1584,7 +1586,9 @@ describe('POST /api/chat', () => {
       'berg@lippelift.de,caechma@gmail.com',
       expect.objectContaining({
         kind: 'case',
-        supportContext: expect.objectContaining({ matchState: 'ambiguous', noteStatus: 'created', dealId: 802 }),
+        supportContext: expect.objectContaining({
+          matchState: 'ambiguous', noteStatus: 'created', dealId: 802, createdPerson: true,
+        }),
       }),
     );
     expect(text).toContain('"type":"done"');
@@ -2107,6 +2111,7 @@ describe('POST /api/chat', () => {
         matchState: 'unique',
         personId: 789,
         dealId: 7006,
+        createdPerson: false,
         intendedInbox: 'technik@lippelift.de',
         emailRecipient: 'berg@lippelift.de',
         noteStatus: 'created',

@@ -66,7 +66,7 @@ describe('createPipedriveService', () => {
       message: 'Folgeanfrage zum selben Fall',
     });
 
-    expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456 });
+    expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456, createdPerson: false });
     expect(mockFetch.mock.calls.some(([url, init]) => (
       new URL(String(url)).pathname.endsWith('/deals') && init?.method === 'POST'
     ))).toBe(false);
@@ -123,7 +123,7 @@ describe('createPipedriveService', () => {
       message: 'Bitte dem vorhandenen Angebot zuordnen.',
     });
 
-    expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456 });
+    expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456, createdPerson: false });
     expect(mockFetch.mock.calls.some(([url]) => new URL(String(url)).pathname.endsWith('/persons/321/deals'))).toBe(false);
     const noteCall = mockFetch.mock.calls.find(([url]) => new URL(String(url)).pathname.endsWith('/notes'));
     expect(noteCall).toBeUndefined();
@@ -178,7 +178,7 @@ describe('createPipedriveService', () => {
       availability: '08:00 - 12:00',
     });
 
-    expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456 });
+    expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456, createdPerson: false });
   });
 
   it('createLead sends an exact reference and contact conflict to identity review without mutation', async () => {
@@ -310,7 +310,7 @@ describe('createPipedriveService', () => {
       availability: '08:00 - 12:00',
     });
 
-    expect(result).toEqual({ outcome: 'created', personId: 321, dealId: 789 });
+    expect(result).toEqual({ outcome: 'created', personId: 321, dealId: 789, createdPerson: false });
     expect(mockFetch.mock.calls.some(([url, init]) => (
       new URL(String(url)).pathname.endsWith('/deals/456') && init?.method === 'PUT'
     ))).toBe(false);
@@ -412,7 +412,7 @@ describe('createPipedriveService', () => {
       availability: '08:00 - 12:00',
     });
 
-    expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456 });
+    expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456, createdPerson: false });
   });
 
   it('createLead never creates a person or deal when identity search fails', async () => {
@@ -507,7 +507,7 @@ describe('createPipedriveService', () => {
       postalCode: '12345',
       city: 'Lemgo',
       availability: '08:00 - 12:00',
-    })).resolves.toEqual({ outcome: 'reused', personId: 321, dealId: 456 });
+    })).resolves.toEqual({ outcome: 'reused', personId: 321, dealId: 456, createdPerson: false });
 
     expect(mockFetch.mock.calls.some(([url, init]) => (
       new URL(String(url)).pathname.endsWith('/deals') && init?.method === 'POST'
@@ -559,6 +559,7 @@ describe('createPipedriveService', () => {
     expect(result).toEqual({
       outcome: 'person_review',
       personId: 321,
+      createdPerson: false,
       candidateCount: 2,
       reason: 'multiple_open_deals',
     });
@@ -619,7 +620,7 @@ describe('createPipedriveService', () => {
       availability: '08:00 - 12:00',
     });
 
-    expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456 });
+    expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456, createdPerson: false });
     expect(mockFetch.mock.calls.some(([url, init]) => (
       new URL(String(url)).pathname.endsWith('/persons') && init?.method === 'POST'
     ))).toBe(false);
@@ -715,7 +716,7 @@ describe('createPipedriveService', () => {
       availability: '08:00 - 12:00',
     });
 
-    expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456 });
+    expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456, createdPerson: false });
     expect(searchTerms).toEqual(['0049526196660']);
   });
 
@@ -753,7 +754,7 @@ describe('createPipedriveService', () => {
       availability: '08:00 - 12:00',
     });
 
-    expect(result).toEqual({ outcome: 'created', personId: 321, dealId: 456 });
+    expect(result).toEqual({ outcome: 'created', personId: 321, dealId: 456, createdPerson: false });
 
     expect(mockFetch.mock.calls[0][0]).toContain('/persons/search');
     expect(mockFetch.mock.calls[0][0]).toContain('term=max%40example.de');
@@ -861,7 +862,7 @@ describe('createPipedriveService', () => {
       availability: '08:00 - 12:00',
     });
 
-    expect(result).toEqual({ outcome: 'created', personId: 654, dealId: 456 });
+    expect(result).toEqual({ outcome: 'created', personId: 654, dealId: 456, createdPerson: false });
     expect(mockFetch.mock.calls[0][0]).toContain('/persons/search');
     expect(mockFetch.mock.calls[0][0]).toContain('term=0049526196660');
     expect(mockFetch.mock.calls[0][0]).toContain('fields=phone');
@@ -919,7 +920,7 @@ describe('createPipedriveService', () => {
       availability: '08:00 - 12:00',
     });
 
-    expect(result).toEqual({ outcome: 'created', personId: 123, dealId: 456 });
+    expect(result).toEqual({ outcome: 'created', personId: 123, dealId: 456, createdPerson: true });
     expect(mockFetch.mock.calls[0][0]).toContain('fields=email');
     expect(mockFetch.mock.calls.some(([url]) => String(url).includes('fields=phone'))).toBe(false);
     const personCall = mockFetch.mock.calls.find(([url]) => new URL(String(url)).pathname.endsWith('/persons'));
@@ -969,7 +970,7 @@ describe('createPipedriveService', () => {
       availability: '08:00 - 12:00',
     });
 
-    expect(result).toEqual({ outcome: 'created', personId: 123, dealId: 456 });
+    expect(result).toEqual({ outcome: 'created', personId: 123, dealId: 456, createdPerson: true });
     expect(mockFetch.mock.calls[0][0]).toContain('fields=email');
     expect(mockFetch.mock.calls[1][0]).toContain('fields=phone');
     expect(mockFetch.mock.calls[2][0]).toContain('fields=name');
@@ -1029,8 +1030,8 @@ describe('createPipedriveService', () => {
     const first = await service.createLead(leadData);
     const second = await service.createLead(leadData);
 
-    expect(first).toEqual({ outcome: 'created', personId: 123, dealId: 456 });
-    expect(second).toEqual({ outcome: 'reused', personId: 123, dealId: 456 });
+    expect(first).toEqual({ outcome: 'created', personId: 123, dealId: 456, createdPerson: true });
+    expect(second).toEqual({ outcome: 'reused', personId: 123, dealId: 456, createdPerson: false });
 
     const searchCalls = mockFetch.mock.calls.filter(([url]) => String(url).includes('/persons/search'));
     expect(searchCalls).toHaveLength(5);
@@ -1085,7 +1086,7 @@ describe('createPipedriveService', () => {
       liftType: 'sitzlift',
     });
 
-    expect(result).toEqual({ outcome: 'created', personId: 123, dealId: 456 });
+    expect(result).toEqual({ outcome: 'created', personId: 123, dealId: 456, createdPerson: true });
 
     const personCall = mockFetch.mock.calls[3];
     expect(personCall[0]).toContain('/persons');

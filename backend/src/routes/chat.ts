@@ -369,6 +369,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
     let matchState: SupportHandoffResult['matchState'] = 'unresolved';
     let personId: number | undefined;
     let dealId: number | undefined;
+    let createdPerson: boolean | undefined;
     let noteStatus: SupportNoteStatus = 'skipped';
     let noteError: string | undefined;
     let crmError: Error | undefined;
@@ -379,11 +380,13 @@ export function createChatRoute(deps: ChatDeps): Hono {
         matchState = match.matchState;
         personId = match.personId;
         dealId = match.dealId;
+        if (personId && dealId) createdPerson = false;
 
         if (!dealId) {
           const supportCase = await deps.pipedrive.createSupportCase(normalizedSupportData, match);
           personId = supportCase.personId;
           dealId = supportCase.dealId;
+          createdPerson = supportCase.createdPerson;
         }
       } catch (err) {
         crmError = err instanceof Error ? err : new Error(String(err));
@@ -402,6 +405,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
       matchState,
       personId,
       dealId,
+      createdPerson,
       intendedInbox,
       emailRecipient,
       noteStatus,
@@ -731,6 +735,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
                 noteError: supportResult.noteError,
                 intendedInbox: supportResult.intendedInbox,
                 dealId: supportResult.dealId,
+                createdPerson: supportResult.createdPerson,
               },
             },
           );

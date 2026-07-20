@@ -680,7 +680,12 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
 
       await updatePerson(reference.personId, data, firstName, lastName, phone, email, street, postalCode, city);
       cachePersonId(reference.personId, email, phone);
-      return { outcome: 'reused', personId: reference.personId, dealId: reference.dealId };
+      return {
+        outcome: 'reused',
+        personId: reference.personId,
+        dealId: reference.dealId,
+        createdPerson: false,
+      };
     }
 
     const existingPersonId = identity.status === 'unique' ? identity.personId : undefined;
@@ -693,6 +698,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
         return {
           outcome: 'person_review',
           personId: existingPersonId,
+          createdPerson: false,
           candidateCount: openDeals.length,
           reason: 'multiple_open_deals',
         };
@@ -700,7 +706,12 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
 
       await updatePerson(existingPersonId, data, firstName, lastName, phone, email, street, postalCode, city);
       if (openDeals.length === 1) {
-        return { outcome: 'reused', personId: existingPersonId, dealId: openDeals[0].id };
+        return {
+          outcome: 'reused',
+          personId: existingPersonId,
+          dealId: openDeals[0].id,
+          createdPerson: false,
+        };
       }
     }
 
@@ -715,7 +726,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
       ...buildDealCustomFields(data),
     });
 
-    return { outcome: 'created', personId, dealId: deal.id };
+    return { outcome: 'created', personId, dealId: deal.id, createdPerson: !existingPersonId };
   }
 
   async function createServiceActivity(data: ServiceData): Promise<{ personId: number; activityId: number }> {
