@@ -435,6 +435,7 @@ describe('createEmailService', () => {
     expect(call.html).toContain('Bestehend');
     expect(call.html).toContain('Kontaktname');
     expect(call.html).toContain('Maria Schmidt');
+    expect(call.html).not.toContain('Kunde:');
     expect(call.html).not.toContain('Person-ID:');
     expect(call.html).not.toContain('Fall-ID:');
   });

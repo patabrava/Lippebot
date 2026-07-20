@@ -257,7 +257,6 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
       : '';
     const supportRows = input.supportData
       ? `
-        ${row('Kunde', input.supportData.customerName)}
         ${row('Telefon', input.supportData.phone)}
         ${row('E-Mail', input.supportData.email)}
         ${row('Kategorie', input.supportData.category)}
