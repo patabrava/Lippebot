@@ -263,8 +263,6 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
         ${row('Problem', input.supportData.issueDescription)}
         ${row('Lift-Modell', input.supportData.liftModel)}
         ${row('Referenz', input.supportData.priorContactReference)}
-        ${row('CRM-Treffer', input.supportContext?.matchState)}
-        ${row('CRM-Notiz', input.supportContext?.noteStatus)}
         ${row('CRM-Notizfehler', input.supportContext?.noteError)}
         ${row('Ziel-Postfach', input.supportContext?.intendedInbox)}
       `
