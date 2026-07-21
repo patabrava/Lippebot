@@ -2112,4 +2112,133 @@ describe('createPipedriveService', () => {
 
     expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456, createdPerson: false });
   });
+
+  it('resolveFactoryCase returns one exact Fabriknummer match including a closed source deal', async () => {
+    const factoryKey = 'factory-field-key';
+    const mockFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/dealFields')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: [{ id: 91, key: factoryKey, name: 'Fabriknummer' }] }) };
+      }
+      if (url.pathname.endsWith('/deals/search')) {
+        expect(url.searchParams.get('fields')).toBe('custom_fields');
+        return {
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { items: [{ item: { id: 701 } }] } }),
+        };
+      }
+      if (url.pathname.endsWith('/deals/701')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({
+            success: true,
+            data: { id: 701, status: 'won', person_id: { value: 501 }, [factoryKey]: ' FN  42 ' },
+          }),
+        };
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await expect(createPipedriveService('test-key', 2, 3).resolveFactoryCase('fn 42')).resolves.toEqual({
+      matchState: 'unique',
+      personId: 501,
+      dealId: 701,
+      factoryNumber: 'fn 42',
+    });
+  });
+
+  it('resolveFactoryCase ignores search hits whose Fabriknummer field does not match', async () => {
+    const factoryKey = 'factory-field-key';
+    const mockFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/dealFields')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: [{ key: factoryKey, name: 'Fabriknummer' }] }) };
+      }
+      if (url.pathname.endsWith('/deals/search')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { items: [{ item: { id: 701 } }] } }) };
+      }
+      if (url.pathname.endsWith('/deals/701')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { id: 701, person_id: { value: 501 }, [factoryKey]: 'OTHER-99' } }),
+        };
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await expect(createPipedriveService('test-key', 2, 3).resolveFactoryCase('FN-42')).resolves.toEqual({
+      matchState: 'unresolved',
+      candidateCount: 0,
+    });
+  });
+
+  it('resolveFactoryCase reports multiple exact deals as ambiguous after deduplication', async () => {
+    const factoryKey = 'factory-field-key';
+    const mockFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/dealFields')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: [{ key: factoryKey, name: 'Fabriknummer' }] }) };
+      }
+      if (url.pathname.endsWith('/deals/search')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({
+            success: true,
+            data: { items: [{ item: { id: 701 } }, { item: { id: 701 } }, { item: { id: 702 } }] },
+          }),
+        };
+      }
+      if (url.pathname.endsWith('/deals/701') || url.pathname.endsWith('/deals/702')) {
+        const id = Number(url.pathname.split('/').pop());
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id, person_id: { value: 501 }, [factoryKey]: 'FN-42' } }) };
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await expect(createPipedriveService('test-key', 2, 3).resolveFactoryCase('FN-42')).resolves.toEqual({
+      matchState: 'ambiguous',
+      candidateCount: 2,
+    });
+  });
+
+  it('resolveFactoryCase never returns a writable match without an attached person', async () => {
+    const factoryKey = 'factory-field-key';
+    const mockFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/dealFields')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: [{ key: factoryKey, name: 'Fabriknummer' }] }) };
+      }
+      if (url.pathname.endsWith('/deals/search')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { items: [{ item: { id: 701 } }] } }) };
+      }
+      if (url.pathname.endsWith('/deals/701')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 701, [factoryKey]: 'FN-42' } }) };
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await expect(createPipedriveService('test-key', 2, 3).resolveFactoryCase('FN-42')).resolves.toEqual({
+      matchState: 'ambiguous',
+      candidateCount: 1,
+    });
+  });
+
+  it('resolveFactoryCase fails closed when the Fabriknummer field cannot be uniquely identified', async () => {
+    const mockFetch = vi.fn(async () => ({
+      ok: true,
+      json: () => Promise.resolve({
+        success: true,
+        data: [{ key: 'a', name: 'Fabriknummer' }, { key: 'b', name: 'Fabriknummer' }],
+      }),
+    }));
+    vi.stubGlobal('fetch', mockFetch);
+
+    await expect(createPipedriveService('test-key', 2, 3).resolveFactoryCase('FN-42'))
+      .rejects.toThrow('Fabriknummer field is not uniquely configured');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
 });

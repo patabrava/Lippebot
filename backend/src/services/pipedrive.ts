@@ -1,7 +1,7 @@
 import { resolveSupportCategory } from '../support/support-routing.js';
 import { buildPipedriveTranscriptMarker } from '../chat/transcript.js';
 import { formatBerlinDate } from '../time/berlin.js';
-import type { LeadCrmResult, LeadData, ServiceData, SupportData, SupportMatchResult } from '../types/index.js';
+import type { FactoryCaseResult, LeadCrmResult, LeadData, ServiceData, SupportData, SupportMatchResult } from '../types/index.js';
 
 const PIPEDRIVE_API_BASE = 'https://api.pipedrive.com/v1';
 const STEPHANIE_KREUZBUSCH_USER_ID = 24093350;
@@ -223,6 +223,7 @@ function buildDealCustomFields(data: LeadData): Record<string, number> {
 export function createPipedriveService(apiKey: string, pipelineId: number, stageId: number) {
   const configured = apiKey.length > 0;
   const recentlyResolvedPersonIds = new Map<string, number>();
+  let factoryNumberFieldKey: string | undefined;
 
   async function apiCall(endpoint: string, body: Record<string, unknown>, method = 'POST'): Promise<{ id: number }> {
     const response = await fetch(`${PIPEDRIVE_API_BASE}${endpoint}?api_token=${apiKey}`, {
@@ -327,6 +328,50 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     return (result.items ?? [])
       .map((entry) => entry.item)
       .filter((deal): deal is DealSearchItem => typeof deal?.id === 'number');
+  }
+
+  function normalizeFactoryNumber(value: unknown): string {
+    return typeof value === 'string'
+      ? value.normalize('NFKC').trim().toLocaleLowerCase('de-DE').replace(/\s+/g, ' ')
+      : '';
+  }
+
+  async function getFactoryNumberFieldKey(): Promise<string> {
+    if (factoryNumberFieldKey) return factoryNumberFieldKey;
+    const fields = await apiGet<Array<{ key?: string; name?: string }> | null>('/dealFields', { limit: 500 });
+    const matches = (fields ?? []).filter((field) => field.name === 'Fabriknummer' && typeof field.key === 'string');
+    if (matches.length !== 1) {
+      throw new Error('Fabriknummer field is not uniquely configured');
+    }
+    factoryNumberFieldKey = matches[0].key!;
+    return factoryNumberFieldKey;
+  }
+
+  async function resolveFactoryCase(factoryNumber: string): Promise<FactoryCaseResult> {
+    if (!configured) throw new Error('Pipedrive not configured');
+    const normalizedFactoryNumber = normalizeFactoryNumber(factoryNumber);
+    if (!normalizedFactoryNumber) return { matchState: 'unresolved', candidateCount: 0 };
+
+    const fieldKey = await getFactoryNumberFieldKey();
+    const searchMatches = await searchDeals(factoryNumber, 'custom_fields');
+    const candidateIds = [...new Set(searchMatches.map((deal) => deal.id))];
+    const exactDeals: PersonDeal[] = [];
+    for (const dealId of candidateIds) {
+      const deal = await apiGet<PersonDeal & Record<string, unknown>>(`/deals/${dealId}`);
+      if (normalizeFactoryNumber(deal[fieldKey]) === normalizedFactoryNumber) exactDeals.push(deal);
+    }
+
+    if (exactDeals.length === 0) return { matchState: 'unresolved', candidateCount: 0 };
+    if (exactDeals.length > 1) return { matchState: 'ambiguous', candidateCount: exactDeals.length };
+
+    const personId = getDealPersonId(exactDeals[0]);
+    if (!personId) return { matchState: 'ambiguous', candidateCount: 1 };
+    return {
+      matchState: 'unique',
+      personId,
+      dealId: exactDeals[0].id,
+      factoryNumber: factoryNumber.trim(),
+    };
   }
 
   async function getOpenPersonDeals(personId: number): Promise<PersonDeal[]> {
@@ -882,6 +927,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     createLead,
     createServiceActivity,
     createSupportCase,
+    resolveFactoryCase,
     resolveSupportPerson,
     createChatTranscriptNote,
   };

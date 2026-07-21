@@ -34,6 +34,11 @@ export interface RequestContext {
   serviceRequestType?: ServiceRequestType;
 }
 
+export type FactoryCaseResult =
+  | { matchState: 'unique'; personId: number; dealId: number; factoryNumber: string }
+  | { matchState: 'unresolved'; candidateCount: 0 }
+  | { matchState: 'ambiguous'; candidateCount: number };
+
 export type SupportCategory = 'technik' | 'finance' | 'sales' | 'lossau';
 export type SupportMatchState = 'unique' | 'ambiguous' | 'unresolved';
 export type SupportNoteStatus = 'created' | 'failed' | 'skipped';
