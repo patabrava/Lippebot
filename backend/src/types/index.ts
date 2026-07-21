@@ -11,13 +11,35 @@ export interface ChatRequest {
 }
 
 export type Mode = 'berater' | 'anfrage' | 'service' | 'undetermined';
-export type PriorContactStatus = 'yes' | 'no' | 'unknown';
+export type YesNoUnknown = 'yes' | 'no' | 'unknown';
+export type PriorContactStatus = YesNoUnknown;
+
+export type LiftManufacturer = 'lippe' | 'other' | 'unknown';
+export type FactoryNumberStatus = 'provided' | 'unavailable' | 'unknown';
+export type ServiceRequestType =
+  | 'maintenance'
+  | 'repair'
+  | 'technical'
+  | 'invoice_payment'
+  | 'sales_contract_order'
+  | 'spare_parts_installation_warranty';
+export type RequestLifecycle = 'collecting' | 'matching' | 'ready' | 'processing' | 'completed' | 'failed';
+
+export interface RequestContext {
+  requestId: string;
+  ownsLift?: YesNoUnknown;
+  liftManufacturer?: LiftManufacturer;
+  factoryNumber?: string;
+  factoryNumberStatus?: FactoryNumberStatus;
+  serviceRequestType?: ServiceRequestType;
+}
 
 export type SupportCategory = 'technik' | 'finance' | 'sales' | 'lossau';
 export type SupportMatchState = 'unique' | 'ambiguous' | 'unresolved';
 export type SupportNoteStatus = 'created' | 'failed' | 'skipped';
 
 export interface LeadData {
+  ownsLift?: YesNoUnknown;
   priorContact?: PriorContactStatus;
   priorContactReference?: string;
   customerSegment?: 'privatperson' | 'firma';
@@ -49,6 +71,11 @@ export interface LeadCrmResult {
 }
 
 export interface SupportData {
+  ownsLift?: YesNoUnknown;
+  liftManufacturer?: LiftManufacturer;
+  factoryNumber?: string;
+  factoryNumberStatus?: FactoryNumberStatus;
+  serviceRequestType?: ServiceRequestType;
   priorContact?: PriorContactStatus;
   priorContactReference?: string;
   customerName?: string;
