@@ -5,6 +5,7 @@ import type {
   SupportNoteStatus,
 } from '../types/index.js';
 import { formatBerlinDateTime } from '../time/berlin.js';
+import { extractE2ESubject } from '../request/e2e-marker.js';
 
 const supportInboxes: Record<SupportCategory, string> = {
   technik: 'technik@lippelift.de',
@@ -138,19 +139,28 @@ function sanitizeEmailHeader(value: string): string {
   return value.replace(/[\r\n]+/g, ' ').trim();
 }
 
-export function buildSupportEmailSubject(data: SupportData): string {
+export function buildSupportEmailSubject(data: SupportData, requestId?: string): string {
+  const e2eSubject = extractE2ESubject(data.issueDescription);
+  if (e2eSubject) return e2eSubject;
   const category = resolveSupportCategory(data);
   const customerName = sanitizeEmailHeader(data.customerName ?? '') || 'Unbekannter Kunde';
+  if (requestId) {
+    return `Sarah [${category}] [${sanitizeEmailHeader(requestId)}]: ${customerName}`;
+  }
   return `Sarah Support [${category}]: ${customerName}`;
 }
 
 export function buildSupportEmailHtml(input: {
+  requestId?: string;
   data: SupportData;
   intendedInbox: string;
   matchState: SupportMatchState;
   noteStatus: SupportNoteStatus;
   noteError?: string;
   dealUrl?: string;
+  sourceDealUrl?: string;
+  serviceDealUrl?: string;
+  transcript?: string;
 }): string {
   const category = resolveSupportCategory(input.data);
   const matchLabel = input.matchState === 'unique'
@@ -159,12 +169,22 @@ export function buildSupportEmailHtml(input: {
       ? 'Mehrere moegliche CRM-Treffer'
       : 'Kein eindeutiger CRM-Treffer';
 
+  const primaryDealUrl = input.serviceDealUrl ?? input.dealUrl;
+  const hasAnyDealUrl = Boolean(primaryDealUrl || input.sourceDealUrl);
+
   return `
     <h2>Support-Anfrage ueber Sarah</h2>
-    ${input.dealUrl
-      ? `<p><a href="${escapeHtml(input.dealUrl)}" style="display:inline-block;padding:10px 16px;background:#0b63ce;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold;">Fall in Pipedrive öffnen</a></p>`
+    ${primaryDealUrl
+      ? `<p><a href="${escapeHtml(primaryDealUrl)}" style="display:inline-block;padding:10px 16px;background:#0b63ce;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold;">Serviceanfrage in Pipedrive öffnen</a></p>`
+      : ''}
+    ${input.sourceDealUrl
+      ? `<p><a href="${escapeHtml(input.sourceDealUrl)}">Originalen Vorgang in Pipedrive öffnen</a></p>`
+      : ''}
+    ${hasAnyDealUrl
+      ? ''
       : '<p><strong>Manuelle Prüfung erforderlich</strong></p>'}
     <table style="border-collapse:collapse;">
+      ${row('Anfrage-ID', input.requestId)}
       ${row('Kunde', input.data.customerName)}
       <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Kategorie:</td><td>${category}</td></tr>
       <tr><td style="padding:4px 12px 4px 0;font-weight:bold;">Zielteam:</td><td>${escapeHtml(input.intendedInbox)}</td></tr>
@@ -176,6 +196,9 @@ export function buildSupportEmailHtml(input: {
       ${row('Vorheriger Kontakt', input.data.priorContact)}
       ${row('Referenz', input.data.priorContactReference)}
       ${row('Kurzfassung', input.data.issueDescription)}
+      ${row('Hersteller', input.data.liftManufacturer)}
+      ${row('Fabriknummer', input.data.factoryNumber)}
+      ${row('Service-Typ', input.data.serviceRequestType)}
       ${row('Lift-Modell', input.data.liftModel)}
       ${row('Symptomdetails', input.data.symptomDetails)}
       ${row('Ausloeser/Bedingungen', input.data.triggerConditions)}
@@ -190,5 +213,9 @@ export function buildSupportEmailHtml(input: {
       ${row('Installationskontext', input.data.installationContext)}
       ${row('Mangelkontext', input.data.defectContext)}
     </table>
+    ${input.transcript ? `
+      <h3>Vollständiges Anfrage-Transkript</h3>
+      <pre style="white-space:pre-wrap;font-family:Arial,sans-serif;border:1px solid #ddd;padding:12px;border-radius:8px;">${escapeHtml(input.transcript)}</pre>
+    ` : ''}
   `;
 }

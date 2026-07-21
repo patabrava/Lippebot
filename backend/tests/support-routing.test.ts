@@ -115,7 +115,7 @@ describe('support routing helpers', () => {
       dealUrl: 'https://lippelift.pipedrive.com/deal/1618',
     });
 
-    expect(html).toContain('Fall in Pipedrive öffnen');
+    expect(html).toContain('Serviceanfrage in Pipedrive öffnen');
     expect(html).toContain('href="https://lippelift.pipedrive.com/deal/1618"');
     expect(html).not.toContain('Manuelle Prüfung erforderlich');
   });
@@ -147,5 +147,46 @@ describe('support routing helpers', () => {
       category: 'technik',
       issueDescription: 'Lift bleibt stehen',
     })).toBe('Sarah Support [technik]: Maria Bcc: attacker@example.com');
+  });
+
+  it('builds a traceable normal request subject', () => {
+    expect(buildSupportEmailSubject({ customerName: 'Erika Muster', category: 'technik' }, 'req-42'))
+      .toBe('Sarah [technik] [req-42]: Erika Muster');
+  });
+
+  it('preserves the strict E2E marker and use-case label as the entire subject', () => {
+    expect(buildSupportEmailSubject({
+      customerName: 'Erika Muster',
+      category: 'technik',
+      issueDescription: '[LIPPEBOT E2E][UC-11][20260721-a] LIPPE exact match - technical service',
+    }, 'req-e2e')).toBe('[LIPPEBOT E2E][UC-11][20260721-a] LIPPE exact match - technical service');
+  });
+
+  it('renders request, lift, exact links, and full transcript without guessing a link', () => {
+    const html = buildSupportEmailHtml({
+      requestId: 'req-42',
+      data: {
+        customerName: 'Erika Muster',
+        category: 'technik',
+        issueDescription: 'Steuerung reagiert nicht.',
+        liftManufacturer: 'lippe',
+        factoryNumber: 'FN-42',
+      },
+      intendedInbox: 'technik@lippelift.de',
+      matchState: 'unique',
+      noteStatus: 'created',
+      sourceDealUrl: 'https://lippelift.pipedrive.com/deal/701',
+      serviceDealUrl: 'https://lippelift.pipedrive.com/deal/801',
+      transcript: 'Nutzer: <Fehler>\nSarah: Danke.',
+    });
+
+    expect(html).toContain('req-42');
+    expect(html).toContain('lippe');
+    expect(html).toContain('FN-42');
+    expect(html).toContain('https://lippelift.pipedrive.com/deal/701');
+    expect(html).toContain('https://lippelift.pipedrive.com/deal/801');
+    expect(html).toContain('Vollständiges Anfrage-Transkript');
+    expect(html).toContain('Nutzer: &lt;Fehler&gt;');
+    expect(html).not.toContain('Nutzer: <Fehler>');
   });
 });

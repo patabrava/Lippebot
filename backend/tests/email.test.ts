@@ -201,6 +201,34 @@ describe('createEmailService', () => {
     expect(call.html).not.toContain('href="');
   });
 
+  it('sendLeadNotification uses the labeled E2E subject and includes request evidence', async () => {
+    const sendMock = vi.fn().mockResolvedValue({ messageId: 'e2e-uc-02' });
+    const service = createEmailService(
+      { host: 'smtp.test.com', port: 587, user: 'sarah@lippelift.de', pass: 'b' },
+      sendMock,
+    );
+
+    await service.sendLeadNotification('sales@lippelift.de', {
+      ownsLift: 'no',
+      firstName: 'Max',
+      lastName: 'Muster',
+      email: 'max@example.de',
+      message: '[LIPPEBOT E2E][UC-02][20260721-a] New opportunity without prior contact',
+    }, {
+      outcome: 'created',
+      personId: 321,
+      dealId: 789,
+      requestId: 'req-uc-02',
+      transcript: 'Nutzer: Ich brauche einen Lift.',
+    });
+
+    const call = sendMock.mock.calls[0][0];
+    expect(call.to).toBe('sales@lippelift.de');
+    expect(call.subject).toBe('[LIPPEBOT E2E][UC-02][20260721-a] New opportunity without prior contact');
+    expect(call.html).toContain('req-uc-02');
+    expect(call.html).toContain('Nutzer: Ich brauche einen Lift.');
+  });
+
   it('sendServiceNotification formats email correctly', async () => {
     const sendMock = vi.fn().mockResolvedValue({ messageId: '456' });
     const service = createEmailService(
@@ -321,6 +349,39 @@ describe('createEmailService', () => {
     expect(call.html).toContain('Pipedrive API error');
     expect(call.html).toContain('Manuelle Prüfung erforderlich');
     expect(call.html).not.toContain('href="');
+  });
+
+  it('sendSupportNotification sends the exact labeled use-case subject and structured evidence', async () => {
+    const sendMock = vi.fn().mockResolvedValue({ messageId: 'e2e-uc-11' });
+    const service = createEmailService(
+      { host: 'smtp.test.com', port: 587, user: 'sarah@lippelift.de', pass: 'b' },
+      sendMock,
+    );
+
+    await service.sendSupportNotification('technik@lippelift.de', {
+      requestId: 'req-uc-11',
+      data: {
+        customerName: 'Erika Muster',
+        category: 'technik',
+        issueDescription: '[LIPPEBOT E2E][UC-11][20260721-a] LIPPE exact match - technical service',
+        liftManufacturer: 'lippe',
+        factoryNumber: 'FN-42',
+      },
+      intendedInbox: 'technik@lippelift.de',
+      matchState: 'unique',
+      noteStatus: 'created',
+      sourceDealUrl: 'https://lippelift.pipedrive.com/deal/701',
+      serviceDealUrl: 'https://lippelift.pipedrive.com/deal/801',
+      transcript: 'Nutzer: technische Anfrage',
+    });
+
+    const call = sendMock.mock.calls[0][0];
+    expect(call.to).toBe('technik@lippelift.de');
+    expect(call.subject).toBe('[LIPPEBOT E2E][UC-11][20260721-a] LIPPE exact match - technical service');
+    expect(call.html).toContain('req-uc-11');
+    expect(call.html).toContain('/deal/701');
+    expect(call.html).toContain('/deal/801');
+    expect(call.html).toContain('Nutzer: technische Anfrage');
   });
 
   it('sendCompletedChatSummary renders an escaped summary before the full transcript', async () => {

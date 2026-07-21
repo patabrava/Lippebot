@@ -49,7 +49,11 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
     await journal.runStep(
       { sessionId: input.sessionId, requestId: input.requestId, step: 'email' },
       async () => {
-        await email.sendLeadNotification(opportunityRecipient, leadData, crm as LeadNotificationContext);
+        await email.sendLeadNotification(opportunityRecipient, leadData, {
+          ...crm as LeadNotificationContext,
+          requestId: input.requestId,
+          transcript: input.transcript,
+        });
         return { sent: true, recipient: opportunityRecipient };
       },
     );
@@ -102,11 +106,15 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
         const matchState = sourceCase?.matchState ?? 'unresolved';
         const dealId = crm?.dealId ?? (sourceCase?.matchState === 'unique' ? sourceCase.dealId : undefined);
         await email.sendSupportNotification(policy.recipient!, {
+          requestId: input.requestId,
           data: supportData,
           intendedInbox: policy.recipient!,
           matchState,
           noteStatus: crm ? 'created' : 'skipped',
           dealId,
+          sourceDealUrl: crm?.sourceDealUrl,
+          serviceDealUrl: crm?.serviceDealUrl,
+          transcript: input.transcript,
         });
         return { sent: true, recipient: policy.recipient! };
       },

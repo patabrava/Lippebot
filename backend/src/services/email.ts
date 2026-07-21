@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import { buildPipedriveDealUrl } from '../crm/pipedrive-links.js';
 import { buildSupportEmailHtml, buildSupportEmailSubject } from '../support/support-routing.js';
+import { extractE2ESubject } from '../request/e2e-marker.js';
 import type {
   LeadData,
   LeadCrmOutcome,
@@ -16,6 +17,8 @@ export interface LeadNotificationContext {
   dealId?: number;
   createdPerson?: boolean;
   reason?: string;
+  requestId?: string;
+  transcript?: string;
 }
 
 interface SmtpConfig {
@@ -132,6 +135,7 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
         ${crmContext?.personId ? row('Person-ID', crmContext.personId) : ''}
         ${crmContext?.dealId ? row('Fall-ID', crmContext.dealId) : ''}
         ${crmContext?.reason ? row('CRM-Hinweis', crmContext.reason) : ''}
+        ${row('Anfrage-ID', crmContext?.requestId)}
         ${row('Name', `${data.firstName} ${data.lastName}`)}
         ${row('Telefon', data.phone)}
         ${row('E-Mail', data.email)}
@@ -146,9 +150,17 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
         ${row('Nachricht', data.message)}
         ${row('Newsletter', data.newsletter || 'k.A.')}
       </table>
+      ${crmContext?.transcript ? `
+        <h3>Vollständiges Anfrage-Transkript</h3>
+        <pre style="white-space:pre-wrap;font-family:Arial,sans-serif;border:1px solid #ddd;padding:12px;border-radius:8px;">${escapeHtml(crmContext.transcript)}</pre>
+      ` : ''}
     `;
 
-    await sendFn({ from, to, subject: `Sarah Lead: ${data.firstName} ${data.lastName}`, html });
+    const e2eSubject = extractE2ESubject(data.message) ?? extractE2ESubject(crmContext?.transcript);
+    const normalSubject = crmContext?.requestId
+      ? `Sarah [opportunity] [${crmContext.requestId.replace(/[\r\n]+/g, ' ').trim()}]: ${data.firstName} ${data.lastName}`
+      : `Sarah Lead: ${data.firstName} ${data.lastName}`;
+    await sendFn({ from, to, subject: e2eSubject ?? normalSubject, html });
   }
 
   async function sendServiceNotification(to: string, data: ServiceData): Promise<void> {
@@ -169,22 +181,28 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
   }
 
   async function sendSupportNotification(to: string, input: {
+    requestId?: string;
     data: SupportData;
     intendedInbox: string;
     matchState: SupportMatchState;
     noteStatus: SupportNoteStatus;
     noteError?: string;
     dealId?: number;
+    sourceDealUrl?: string;
+    serviceDealUrl?: string;
+    transcript?: string;
   }): Promise<void> {
     if (!configured && !sendOverride) return;
 
     await sendFn({
       from,
       to,
-      subject: buildSupportEmailSubject(input.data),
+      subject: buildSupportEmailSubject(input.data, input.requestId),
       html: buildSupportEmailHtml({
         ...input,
-        dealUrl: buildPipedriveDealUrl(pipedriveWebBaseUrl, input.dealId),
+        dealUrl: input.sourceDealUrl || input.serviceDealUrl
+          ? undefined
+          : buildPipedriveDealUrl(pipedriveWebBaseUrl, input.dealId),
       }),
     });
   }
