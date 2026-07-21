@@ -15,7 +15,18 @@ export type ConversationEventType =
   | 'abandoned_summary_failed'
   | 'chat_done'
   | 'chat_error'
+  | 'request_checkpoint'
   | 'tracking_error';
+
+export type RequestCheckpointStep = 'crm' | 'email' | 'completed' | 'failed';
+
+export interface RequestCheckpoint {
+  sessionId?: string;
+  requestId: string;
+  step: RequestCheckpointStep;
+  payload: Record<string, unknown>;
+  createdAt?: string;
+}
 
 export interface ConversationTracker {
   isEnabled(): boolean;
@@ -42,6 +53,13 @@ export interface ConversationTracker {
     supportMatchState?: string;
     supportIntendedInbox?: string;
   }): Promise<void>;
+  getRequestEvents(sessionId: string, requestId: string): Promise<RequestCheckpoint[]>;
+  recordRequestCheckpoint(input: {
+    sessionId: string;
+    requestId: string;
+    step: RequestCheckpointStep;
+    payload: Record<string, unknown>;
+  }): Promise<void>;
 }
 
 interface ConversationTrackerConfig {
@@ -57,6 +75,8 @@ const disabledTracker: ConversationTracker = {
   recordMessage: async () => undefined,
   recordEvent: async () => undefined,
   updateSession: async () => undefined,
+  getRequestEvents: async () => [],
+  recordRequestCheckpoint: async () => undefined,
 };
 
 function jsonHeaders(serviceRoleKey: string): HeadersInit {
@@ -111,6 +131,35 @@ export function createConversationTracker(config: ConversationTrackerConfig): Co
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${baseUrl}/rest/v1/${path}`, {
+        ...init,
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`Supabase ${init.method || 'GET'} ${path} failed with ${res.status}: ${body}`);
+      }
+      return await res.json() as T;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async function ensureSessionReliable(sessionId: string): Promise<void> {
+    await request('conversation_sessions?on_conflict=session_id', {
+      method: 'POST',
+      headers: {
+        ...jsonHeaders(serviceRoleKey),
+        Prefer: 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify({ session_id: sessionId, updated_at: new Date().toISOString() }),
+    });
   }
 
   async function safeRequest(path: string, init: RequestInit): Promise<void> {
@@ -183,6 +232,48 @@ export function createConversationTracker(config: ConversationTrackerConfig): Co
         support_note_status: input.supportNoteStatus,
         support_match_state: input.supportMatchState,
         support_intended_inbox: input.supportIntendedInbox,
+      });
+    },
+
+    async getRequestEvents(sessionId, requestId): Promise<RequestCheckpoint[]> {
+      const params = new URLSearchParams({
+        session_id: `eq.${sessionId}`,
+        event_type: 'eq.request_checkpoint',
+        select: 'payload,created_at',
+        order: 'created_at.asc',
+      });
+      const rows = await requestJson<Array<{ payload?: Record<string, unknown>; created_at?: string }>>(
+        `conversation_events?${params.toString()}`,
+        { method: 'GET', headers: jsonHeaders(serviceRoleKey) },
+      );
+      return rows.flatMap((row) => {
+        const payload = row.payload;
+        if (!payload || payload.requestId !== requestId || typeof payload.step !== 'string') return [];
+        return [{
+          requestId,
+          step: payload.step as RequestCheckpointStep,
+          payload: payload.result && typeof payload.result === 'object'
+            ? payload.result as Record<string, unknown>
+            : {},
+          createdAt: row.created_at,
+        }];
+      });
+    },
+
+    async recordRequestCheckpoint(input): Promise<void> {
+      await ensureSessionReliable(input.sessionId);
+      await request('conversation_events', {
+        method: 'POST',
+        headers: jsonHeaders(serviceRoleKey),
+        body: JSON.stringify({
+          session_id: input.sessionId,
+          event_type: 'request_checkpoint',
+          payload: {
+            requestId: input.requestId,
+            step: input.step,
+            result: input.payload,
+          },
+        }),
       });
     },
   };

@@ -183,4 +183,67 @@ describe('createConversationTracker', () => {
     await expect(tracker.ensureSession('session-1')).resolves.toBeUndefined();
     expect(errorSpy).toHaveBeenCalledWith('Conversation tracking error:', expect.any(Error));
   });
+
+  it('records request checkpoints with reliable error propagation', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => '' });
+    vi.stubGlobal('fetch', fetchMock);
+    const tracker = createConversationTracker({
+      enabled: true,
+      supabaseUrl: 'https://qnvgiihzbihkedakggth.supabase.co',
+      serviceRoleKey: 'service-key',
+    });
+
+    await tracker.recordRequestCheckpoint({
+      sessionId: 'session-1',
+      requestId: 'request-2',
+      step: 'crm',
+      payload: { dealId: 801 },
+    });
+
+    expect(fetchMock.mock.calls).toHaveLength(2);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      session_id: 'session-1',
+      event_type: 'request_checkpoint',
+      payload: { requestId: 'request-2', step: 'crm', result: { dealId: 801 } },
+    });
+  });
+
+  it('reads and filters exact request checkpoint payloads', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [
+        { created_at: '2026-07-21T08:00:00Z', payload: { requestId: 'request-2', step: 'crm', result: { dealId: 801 } } },
+        { created_at: '2026-07-21T08:01:00Z', payload: { requestId: 'request-other', step: 'email', result: { messageId: 'x' } } },
+      ],
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const tracker = createConversationTracker({
+      enabled: true,
+      supabaseUrl: 'https://qnvgiihzbihkedakggth.supabase.co',
+      serviceRoleKey: 'service-key',
+    });
+
+    await expect(tracker.getRequestEvents('session-1', 'request-2')).resolves.toEqual([{
+      requestId: 'request-2',
+      step: 'crm',
+      payload: { dealId: 801 },
+      createdAt: '2026-07-21T08:00:00Z',
+    }]);
+    expect(fetchMock.mock.calls[0][0]).toContain('conversation_events?');
+    expect(fetchMock.mock.calls[0][0]).toContain('event_type=eq.request_checkpoint');
+  });
+
+  it('does not swallow reliable request checkpoint failures', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503, text: async () => 'unavailable' }));
+    const tracker = createConversationTracker({
+      enabled: true,
+      supabaseUrl: 'https://qnvgiihzbihkedakggth.supabase.co',
+      serviceRoleKey: 'service-key',
+    });
+
+    await expect(tracker.recordRequestCheckpoint({
+      sessionId: 'session-1', requestId: 'request-2', step: 'crm', payload: {},
+    })).rejects.toThrow('Supabase POST');
+  });
 });
