@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createEmailService } from '../src/services/email.js';
+import { createEmailService, EmailDeliveryError } from '../src/services/email.js';
 
 describe('createEmailService', () => {
   it('returns unconfigured service when SMTP host is empty', () => {
@@ -37,6 +37,48 @@ describe('createEmailService', () => {
     expect(call.subject).toContain('Max Mustermann');
     expect(call.html).toContain('Sitzlift');
     expect(call.html).toContain('Lemgo');
+  });
+
+  it('sendLeadNotification sends every configured recipient in an independent SMTP envelope', async () => {
+    const sendMock = vi.fn().mockResolvedValue({ messageId: 'multi-recipient-lead' });
+    const service = createEmailService(
+      { host: 'smtp.test.com', port: 587, user: 'a', pass: 'b' },
+      sendMock,
+    );
+
+    await service.sendLeadNotification(
+      'sales@lippelift.de, berg@lippelift.de; caechma@gmail.com, BERG@lippelift.de',
+      { firstName: 'Dual', lastName: 'Recipient' },
+    );
+
+    expect(sendMock).toHaveBeenCalledTimes(3);
+    expect(sendMock.mock.calls.map(([mail]) => mail.to)).toEqual([
+      'sales@lippelift.de',
+      'berg@lippelift.de',
+      'caechma@gmail.com',
+    ]);
+  });
+
+  it('sendLeadNotification rejects when SMTP reports a recipient rejection', async () => {
+    const sendMock = vi.fn().mockResolvedValue({
+      accepted: [],
+      rejected: ['caechma@gmail.com'],
+      messageId: 'partial-rejection',
+    });
+    const service = createEmailService(
+      { host: 'smtp.test.com', port: 587, user: 'a', pass: 'b' },
+      sendMock,
+    );
+
+    const delivery = service.sendLeadNotification('caechma@gmail.com', {
+      firstName: 'Rejected', lastName: 'Recipient',
+    });
+    await expect(delivery).rejects.toThrow('caechma@gmail.com');
+    await delivery.catch((error: unknown) => {
+      expect(error).toBeInstanceOf(EmailDeliveryError);
+      expect((error as EmailDeliveryError).failedRecipients).toEqual(['caechma@gmail.com']);
+      expect((error as EmailDeliveryError).deliveredRecipients).toEqual([]);
+    });
   });
 
   it('sendLeadNotification renders an email-only lead without an undefined phone row', async () => {

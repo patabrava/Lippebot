@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEFAULT_INTERNAL_EMAIL_RECIPIENTS } from '../email/recipients.js';
 
 function parseBoolean(value: string | undefined, defaultValue: boolean): boolean {
   if (value === undefined) {
@@ -31,8 +32,8 @@ const configSchema = z.object({
   smtpPort: z.coerce.number().default(587),
   smtpUser: z.string().default(''),
   smtpPass: z.string().default(''),
-  notificationEmailTo: z.string().default(''),
-  serviceEmailTo: z.string().default(''),
+  notificationEmailTo: z.string().default(DEFAULT_INTERNAL_EMAIL_RECIPIENTS),
+  serviceEmailTo: z.string().default(DEFAULT_INTERNAL_EMAIL_RECIPIENTS),
   supabaseUrl: z.string().default(''),
   supabaseServiceRoleKey: z.string().default(''),
   conversationTrackingEnabled: z.boolean().default(false),

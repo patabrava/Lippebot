@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { createChatRoute } from '../src/routes/chat.js';
 import type { GeminiService } from '../src/services/gemini.js';
 import type { PipedriveService } from '../src/services/pipedrive.js';
-import type { EmailService } from '../src/services/email.js';
+import { EmailDeliveryError, type EmailService } from '../src/services/email.js';
 import type { ConversationTracker } from '../src/services/conversation-tracking.js';
 
 function createMockGemini(): GeminiService {
@@ -299,12 +299,15 @@ describe('POST /api/chat', () => {
     })).text();
 
     expect(sendLeadNotification).not.toHaveBeenCalled();
-    expect(sendCompletedChatSummary).toHaveBeenCalledWith('sales@example.com', expect.objectContaining({
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith(
+      'sales@lippelift.de,sales@example.com,berg@lippelift.de,caechma@gmail.com',
+      expect.objectContaining({
       kind: 'opportunity',
       leadData,
       leadContext: { outcome: 'created', personId: 321, dealId: 654, createdPerson: true },
       transcript: expect.stringContaining('Ihre Anfrage wurde aufgenommen.'),
-    }));
+      }),
+    );
     expect(text).toContain('"type":"done"');
   });
 
@@ -348,7 +351,9 @@ describe('POST /api/chat', () => {
     })).text();
 
     expect(sendSupportNotification).not.toHaveBeenCalled();
-    expect(sendCompletedChatSummary).toHaveBeenCalledWith('support@example.com', expect.objectContaining({
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith(
+      'technik@lippelift.de,support@example.com,berg@lippelift.de,caechma@gmail.com',
+      expect.objectContaining({
       kind: 'case',
       supportData,
       supportContext: expect.objectContaining({
@@ -356,7 +361,8 @@ describe('POST /api/chat', () => {
         createdPerson: false,
       }),
       transcript: expect.stringContaining('Der Servicefall wurde aufgenommen.'),
-    }));
+      }),
+    );
     expect(text).toContain('"type":"done"');
   });
 
@@ -406,11 +412,54 @@ describe('POST /api/chat', () => {
     expect(tracker.recordEvent).toHaveBeenCalledWith({
       sessionId: 'completed-email-failure',
       eventType: 'completed_summary_email_failed',
-      payload: expect.objectContaining({ recipient: 'berg@lippelift.de', error: 'SMTP unavailable' }),
+      payload: expect.objectContaining({ recipient: 'sales@lippelift.de,berg@lippelift.de,caechma@gmail.com', error: 'SMTP unavailable' }),
     });
     expect(text).toContain('"type":"error"');
     expect(text).not.toContain('"type":"done"');
     expect(errorSpy).toHaveBeenCalledWith('Chat stream error:', expect.any(Error));
+  });
+
+  it('retries only a failed completed-summary recipient after partial SMTP delivery', async () => {
+    const sendCompletedChatSummary = vi.fn()
+      .mockRejectedValueOnce(new EmailDeliveryError(
+        ['caechma@gmail.com'],
+        ['berg@lippelift.de'],
+        'SMTP rejected recipient caechma@gmail.com',
+      ))
+      .mockResolvedValueOnce(undefined);
+    const leadData = {
+      priorContact: 'unknown' as const,
+      customerSegment: 'privatperson' as const,
+      firstName: 'Partial', lastName: 'Delivery', email: 'partial@example.de',
+      street: 'Musterstrasse 1', postalCode: '32657', city: 'Lemgo', availability: '08:00 - 12:00' as const,
+    };
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'lead' as const, leadData };
+          yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: leadData } };
+        },
+      },
+      pipedrive: {
+        ...createMockPipedrive(), isConfigured: () => true,
+        createLead: vi.fn().mockResolvedValue({ outcome: 'created', personId: 321, dealId: 654 }),
+      },
+      email: { ...createMockEmail(), sendCompletedChatSummary },
+      notificationEmailTo: '', serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'partial-email-delivery', message: 'Absenden', history: [] }),
+    })).text();
+
+    expect(sendCompletedChatSummary.mock.calls.map(([recipient]) => recipient)).toEqual([
+      'sales@lippelift.de,berg@lippelift.de,caechma@gmail.com',
+      'caechma@gmail.com',
+    ]);
+    expect(text).toContain('"type":"done"');
   });
 
   it('does not report a completed opportunity when SMTP is not configured', async () => {
@@ -458,7 +507,7 @@ describe('POST /api/chat', () => {
     expect(tracker.recordEvent).toHaveBeenCalledWith({
       sessionId: 'completed-email-unconfigured',
       eventType: 'completed_summary_email_failed',
-      payload: expect.objectContaining({ recipient: 'berg@lippelift.de', error: 'Email not configured' }),
+      payload: expect.objectContaining({ recipient: 'sales@lippelift.de,berg@lippelift.de,caechma@gmail.com', error: 'Email not configured' }),
     });
     expect(text).toContain('"type":"error"');
     expect(text).not.toContain('"type":"done"');
@@ -955,7 +1004,7 @@ describe('POST /api/chat', () => {
     expect(text).not.toContain('"personId"');
     expect(text).not.toContain('"dealId"');
     expect(text).not.toContain('reused');
-    expect(sendCompletedChatSummary).toHaveBeenCalledWith('team@example.com', expect.objectContaining({
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('sales@lippelift.de,team@example.com,berg@lippelift.de,caechma@gmail.com', expect.objectContaining({
       kind: 'opportunity',
       leadData,
       leadContext: { outcome: 'reused', personId: 321, dealId: 654 },
@@ -1019,7 +1068,7 @@ describe('POST /api/chat', () => {
     expect(text).toContain('"status":"accepted"');
     expect(text).not.toContain(crmResult.outcome);
     expect(text).not.toContain('"personId"');
-    expect(sendCompletedChatSummary).toHaveBeenCalledWith('team@example.com', expect.objectContaining({
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('sales@lippelift.de,team@example.com,berg@lippelift.de,caechma@gmail.com', expect.objectContaining({
       kind: 'opportunity', leadData, leadContext: crmResult,
     }));
     expect(tracker.recordEvent).toHaveBeenCalledWith({
@@ -1080,7 +1129,7 @@ describe('POST /api/chat', () => {
     const text = await res.text();
     expect(text).toContain('"status":"accepted"');
     expect(text).not.toContain('Pipedrive unavailable');
-    expect(sendCompletedChatSummary).toHaveBeenCalledWith('team@example.com', expect.objectContaining({
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('sales@lippelift.de,team@example.com,berg@lippelift.de,caechma@gmail.com', expect.objectContaining({
       kind: 'opportunity',
       leadData,
       leadContext: { outcome: 'failed', reason: 'Pipedrive unavailable' },
@@ -1447,7 +1496,7 @@ describe('POST /api/chat', () => {
     expect(resolveSupportPerson).toHaveBeenCalledWith(supportData);
     expect(createSupportNote).not.toHaveBeenCalled();
     expect(createServiceActivity).not.toHaveBeenCalled();
-    expect(sendCompletedChatSummary).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('technik@lippelift.de,caechma@gmail.com,berg@lippelift.de', expect.objectContaining({
       kind: 'case',
       supportData,
       supportContext: expect.objectContaining({
@@ -1516,7 +1565,7 @@ describe('POST /api/chat', () => {
       matchState: 'unique', personId: 501, candidateCount: 1,
     });
     expect(createSupportNote).not.toHaveBeenCalled();
-    expect(sendCompletedChatSummary).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('technik@lippelift.de,caechma@gmail.com,berg@lippelift.de', expect.objectContaining({
       kind: 'case', supportData,
     }));
     expect(text).toContain('"status":"accepted"');
@@ -1637,7 +1686,7 @@ describe('POST /api/chat', () => {
       expect.stringContaining('Vollständiges Sarah-Chatprotokoll'),
     );
     expect(createServiceActivity).not.toHaveBeenCalled();
-    expect(sendCompletedChatSummary).toHaveBeenCalledWith('caechma@gmail.com', expect.objectContaining({
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('finance@lippelift.de,caechma@gmail.com,berg@lippelift.de', expect.objectContaining({
       kind: 'case',
       supportData,
       supportContext: expect.objectContaining({
@@ -1699,7 +1748,7 @@ describe('POST /api/chat', () => {
       'support-ambiguous-review', 702, 802, expect.any(String),
     );
     expect(sendCompletedChatSummary).toHaveBeenCalledWith(
-      'berg@lippelift.de,caechma@gmail.com',
+      'technik@lippelift.de,berg@lippelift.de,caechma@gmail.com',
       expect.objectContaining({
         kind: 'case',
         supportContext: expect.objectContaining({
@@ -1754,7 +1803,7 @@ describe('POST /api/chat', () => {
     })).text();
 
     expect(createSupportNote).not.toHaveBeenCalled();
-    expect(sendCompletedChatSummary).toHaveBeenCalledWith('berg@lippelift.de', expect.objectContaining({
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('lossau@lippelift.de,berg@lippelift.de,caechma@gmail.com', expect.objectContaining({
       kind: 'case',
       supportContext: expect.objectContaining({
         matchState: 'unresolved', noteStatus: 'failed', noteError: 'Pipedrive API error: 503 Service Unavailable',
@@ -2229,7 +2278,7 @@ describe('POST /api/chat', () => {
         dealId: 7006,
         createdPerson: false,
         intendedInbox: 'technik@lippelift.de',
-        emailRecipient: 'berg@lippelift.de',
+        emailRecipient: 'technik@lippelift.de,berg@lippelift.de,caechma@gmail.com',
         noteStatus: 'created',
         noteError: undefined,
       },
@@ -2292,7 +2341,7 @@ describe('POST /api/chat', () => {
       sessionId: 'tracked-support-email-fail',
       eventType: 'completed_summary_email_failed',
       payload: expect.objectContaining({
-        recipient: 'technik@example.test', kind: 'case', error: 'SMTP unavailable',
+        recipient: 'technik@lippelift.de,technik@example.test,berg@lippelift.de,caechma@gmail.com', kind: 'case', error: 'SMTP unavailable',
       }),
     });
     expect(errorSpy).toHaveBeenCalledWith('Chat stream error:', expect.any(Error));
@@ -2404,7 +2453,7 @@ describe('POST /api/chat/abandoned', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ status: 'sent' });
-    expect(sendAbandonedChatSummary).toHaveBeenCalledWith('support@lippelift.de', expect.objectContaining({
+    expect(sendAbandonedChatSummary).toHaveBeenCalledWith('support@lippelift.de,berg@lippelift.de,caechma@gmail.com', expect.objectContaining({
       sessionId: 'idle-session-1',
       reason: 'no_answer_after_inactivity_prompt',
       transcript: expect.stringContaining('Mein Lift macht komische Geraeusche.'),
@@ -2412,7 +2461,76 @@ describe('POST /api/chat/abandoned', () => {
     expect(tracker.recordEvent).toHaveBeenCalledWith({
       sessionId: 'idle-session-1',
       eventType: 'abandoned_summary_sent',
-      payload: expect.objectContaining({ emailRecipient: 'support@lippelift.de' }),
+      payload: expect.objectContaining({ emailRecipient: 'support@lippelift.de,berg@lippelift.de,caechma@gmail.com' }),
     });
+  });
+
+  it('resumes only the failed abandoned-summary recipient on request retry', async () => {
+    const sendAbandonedChatSummary = vi.fn()
+      .mockRejectedValueOnce(new EmailDeliveryError(
+        ['caechma@gmail.com'],
+        ['berg@lippelift.de'],
+        'SMTP rejected recipient caechma@gmail.com',
+      ))
+      .mockResolvedValueOnce(undefined);
+    const chatRoute = createChatRoute({
+      gemini: createMockGemini(),
+      pipedrive: createMockPipedrive(),
+      email: { ...createMockEmail(), sendAbandonedChatSummary },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const body = JSON.stringify({
+      sessionId: 'idle-partial-delivery',
+      reason: 'no_answer_after_inactivity_prompt',
+      history: [{ role: 'user', content: 'Test', timestamp: 2000 }],
+    });
+
+    expect((await testApp.request('/api/chat/abandoned', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+    })).status).toBe(502);
+    expect((await testApp.request('/api/chat/abandoned', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+    })).status).toBe(200);
+
+    expect(sendAbandonedChatSummary.mock.calls.map(([recipient]) => recipient)).toEqual([
+      'berg@lippelift.de,caechma@gmail.com',
+      'caechma@gmail.com',
+    ]);
+  });
+
+  it('shares one in-flight abandoned-summary delivery for concurrent duplicate requests', async () => {
+    let releaseSend!: () => void;
+    const sendGate = new Promise<void>((resolve) => { releaseSend = resolve; });
+    const sendAbandonedChatSummary = vi.fn(() => sendGate);
+    const chatRoute = createChatRoute({
+      gemini: createMockGemini(),
+      pipedrive: createMockPipedrive(),
+      email: { ...createMockEmail(), sendAbandonedChatSummary },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const request = () => testApp.request('/api/chat/abandoned', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'idle-concurrent-delivery',
+        reason: 'no_answer_after_inactivity_prompt',
+        history: [{ role: 'user', content: 'Test', timestamp: 2000 }],
+      }),
+    });
+
+    const first = request();
+    const second = request();
+    await vi.waitFor(() => expect(sendAbandonedChatSummary).toHaveBeenCalledOnce());
+    releaseSend();
+    const responses = await Promise.all([first, second]);
+
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(sendAbandonedChatSummary).toHaveBeenCalledOnce();
   });
 });

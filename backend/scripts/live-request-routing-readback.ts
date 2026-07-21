@@ -4,9 +4,44 @@ import { resolve } from 'node:path';
 type Json = Record<string, unknown>;
 const runId = process.env.LIVE_E2E_RUN_ID;
 const apiKey = process.env.PIPEDRIVE_API_KEY;
-if (!runId || !apiKey) throw new Error('LIVE_E2E_RUN_ID and PIPEDRIVE_API_KEY are required');
+const supabaseUrl = process.env.SUPABASE_URL?.replace(/\/$/, '');
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+if (!runId || !apiKey || !supabaseUrl || !supabaseKey) {
+  throw new Error('LIVE_E2E_RUN_ID, PIPEDRIVE_API_KEY, SUPABASE_URL, and SUPABASE_SERVICE_ROLE_KEY are required');
+}
 const outputDir = resolve(process.cwd(), 'output', `request-routing-${runId}`);
 const chat = JSON.parse(await readFile(resolve(outputDir, 'chat-results.json'), 'utf8')) as { results: Array<Json>; fixtures: Json };
+
+type RequestCheckpointEvent = {
+  requestId: string;
+  step: string;
+  result: Json;
+  createdAt?: string;
+};
+
+async function requestCheckpoints(sessionId: string, requestId: string): Promise<RequestCheckpointEvent[]> {
+  const params = new URLSearchParams({
+    session_id: `eq.${sessionId}`,
+    event_type: 'eq.request_checkpoint',
+    select: 'payload,created_at',
+    order: 'created_at.asc',
+  });
+  const response = await fetch(`${supabaseUrl}/rest/v1/conversation_events?${params.toString()}`, {
+    headers: { apikey: supabaseKey!, Authorization: `Bearer ${supabaseKey!}` },
+  });
+  if (!response.ok) throw new Error(`Supabase checkpoints: ${response.status} ${await response.text()}`);
+  const rows = await response.json() as Array<{ payload?: Json; created_at?: string }>;
+  return rows.flatMap((row) => {
+    const payload = row.payload;
+    if (!payload || payload.requestId !== requestId || typeof payload.step !== 'string') return [];
+    return [{
+      requestId,
+      step: payload.step,
+      result: payload.result && typeof payload.result === 'object' ? payload.result as Json : {},
+      createdAt: row.created_at,
+    }];
+  });
+}
 
 async function pd<T>(path: string): Promise<T> {
   const join = path.includes('?') ? '&' : '?';
@@ -23,7 +58,8 @@ function id(value: unknown): number | undefined {
 }
 
 const notes = await pd<Array<Json>>('/notes?limit=500');
-const peopleSearch = await pd<{ items?: Array<{ item?: Json }> }>(`/persons/search?term=${encodeURIComponent(`Eetwo`)}&fields=name&exact_match=false&limit=100`);
+const suffix = runId.slice(-8);
+const peopleSearch = await pd<{ items?: Array<{ item?: Json }> }>(`/persons/search?term=${encodeURIComponent(suffix)}&fields=name&exact_match=false&limit=100`);
 const people = (peopleSearch.items || []).map((entry) => entry.item).filter(Boolean) as Json[];
 const personDetails = await Promise.all(people.map(async (person) => {
   const personId = id(person.id)!;
@@ -35,7 +71,7 @@ const allDeals = personDetails.flatMap((person) => person.deals);
 const dealNotes = (await Promise.all(allDeals.map(async (deal) => {
   const dealId = id(deal.id)!;
   const rows = (await pd<Array<Json> | null>(`/notes?deal_id=${dealId}`)) ?? [];
-  return rows.map((note) => ({ ...note, deal_id: dealId }));
+  return rows.map((note) => ({ ...note, deal_id: dealId } as Json));
 }))).flat();
 
 function serviceDealFormatIsExact(deal: Json): boolean {
@@ -49,7 +85,6 @@ function serviceDealFormatIsExact(deal: Json): boolean {
     && deal.status === 'open';
 }
 
-const suffix = runId.slice(-8);
 function dealsFor(name: string): Json[] {
   return personDetails.filter((person) => person.name === name).flatMap((person) => person.deals);
 }
@@ -78,8 +113,27 @@ function opportunityShapeMatches(useCase: string): boolean {
   return true;
 }
 
+const checkpointsByRequest = new Map<string, RequestCheckpointEvent[]>();
+await Promise.all(chat.results.map(async (result) => {
+  const requestId = String(result.requestId);
+  if (checkpointsByRequest.has(requestId)) return;
+  checkpointsByRequest.set(requestId, await requestCheckpoints(String(result.sessionId), requestId));
+}));
+
 const evidence = chat.results.map((result) => {
   const requestId = String(result.requestId);
+  const checkpoints = checkpointsByRequest.get(requestId) ?? [];
+  const expectedRecipients = Array.isArray(result.expectedRecipients)
+    ? result.expectedRecipients.map(String)
+    : result.recipient === 'none'
+      ? []
+      : [String(result.recipient)];
+  const smtpRecipients = checkpoints
+    .filter((checkpoint) => checkpoint.step.startsWith('email_recipient:'))
+    .map((checkpoint) => checkpoint.step.slice('email_recipient:'.length));
+  const canonicalExpected = [...new Set(expectedRecipients.map((recipient) => recipient.toLowerCase()))].sort();
+  const canonicalActual = [...new Set(smtpRecipients.map((recipient) => recipient.toLowerCase()))].sort();
+  const smtpSendCompletedWithoutReportedRejection = JSON.stringify(canonicalActual) === JSON.stringify(canonicalExpected);
   const markerNotes = [...notes, ...dealNotes].filter((note) => typeof note.content === 'string' && note.content.includes(`[LIPPEBOT REQUEST:${requestId}]`));
   const uniqueMarkerNotes = [...new Map(markerNotes.map((note) => [id(note.id), note])).values()];
   const markerDeals = uniqueMarkerNotes.map((note) => {
@@ -99,14 +153,15 @@ const evidence = chat.results.map((result) => {
   );
   const opportunityMatches = opportunityShapeMatches(String(result.useCase));
   const pass = result.useCase === 'UC-17'
-    ? emergencyMatches
-    : Boolean(result.completed && crmShapeMatches && opportunityMatches);
+    ? emergencyMatches && smtpSendCompletedWithoutReportedRejection
+    : Boolean(result.completed && crmShapeMatches && opportunityMatches && smtpSendCompletedWithoutReportedRejection);
   return {
     useCase: result.useCase,
     subject: result.subject,
     requestId,
     expected: result.expected,
-    recipient: result.recipient,
+    primaryRecipient: result.primaryRecipient ?? result.recipient,
+    expectedRecipients,
     chatCompleted: result.completed,
     markerNoteIds: uniqueMarkerNotes.map((note) => id(note.id)),
     serviceDeals: markerDeals.map((deal) => ({
@@ -114,15 +169,72 @@ const evidence = chat.results.map((result) => {
       stageId: id(deal.stage_id), ownerId: id(deal.user_id), value: deal.value, currency: deal.currency, status: deal.status,
       url: `https://lippelift.pipedrive.com/deal/${id(deal.id)}`,
     })),
-    recipientVerification: result.recipient === 'none' ? 'not_applicable' : 'pending_gmail_readback',
+    smtpRecipientCheckpoints: canonicalActual,
+    smtpSendCompletedWithoutReportedRejection,
+    inboxDelivery: expectedRecipients.length === 0 ? 'not_applicable' : 'not_verified_by_harness',
+    checkpoints,
     crmShapeMatches,
     opportunityMatches,
     pass,
   };
 });
 
-const artifact = { runId, readAt: new Date().toISOString(), fixtures: chat.fixtures, evidence, people: personDetails };
+const uniqueRequestEvidence = [...new Map(evidence.map((row) => [row.requestId, row])).values()];
+const checkpointTotals = [...checkpointsByRequest.values()].flat().reduce((totals, checkpoint) => {
+  if (checkpoint.step.startsWith('email_recipient:')) {
+    const recipient = checkpoint.step.slice('email_recipient:'.length);
+    totals.recipient[recipient] = (totals.recipient[recipient] ?? 0) + 1;
+  }
+  if (checkpoint.step === 'email') totals.email += 1;
+  if (checkpoint.step === 'completed') totals.completed += 1;
+  if (checkpoint.step === 'crm') totals.crm += 1;
+  return totals;
+}, { recipient: {} as Record<string, number>, email: 0, completed: 0, crm: 0 });
+const expectedTotals = {
+  uniqueRequests: 18,
+  emailBearingRequests: 17,
+  recipient: {
+    'berg@lippelift.de': 17,
+    'caechma@gmail.com': 17,
+    'sales@lippelift.de': 7,
+    'technik@lippelift.de': 8,
+    'finance@lippelift.de': 1,
+    'lossau@lippelift.de': 1,
+  },
+  email: 17,
+  completed: 17,
+  crm: 14,
+};
+const observedTotals = {
+  uniqueRequests: uniqueRequestEvidence.length,
+  emailBearingRequests: uniqueRequestEvidence.filter((row) => row.expectedRecipients.length > 0).length,
+  ...checkpointTotals,
+};
+const expectedRecipientEntries = Object.entries(expectedTotals.recipient);
+const checkpointTotalsMatch = observedTotals.uniqueRequests === expectedTotals.uniqueRequests
+  && observedTotals.emailBearingRequests === expectedTotals.emailBearingRequests
+  && observedTotals.email === expectedTotals.email
+  && observedTotals.completed === expectedTotals.completed
+  && observedTotals.crm === expectedTotals.crm
+  && Object.keys(observedTotals.recipient).length === expectedRecipientEntries.length
+  && expectedRecipientEntries.every(([recipient, count]) => observedTotals.recipient[recipient] === count);
+
+const artifact = {
+  runId,
+  readAt: new Date().toISOString(),
+  fixtures: chat.fixtures,
+  evidence,
+  checkpointTotals: { expected: expectedTotals, observed: observedTotals, pass: checkpointTotalsMatch },
+  people: personDetails,
+};
 await writeFile(resolve(outputDir, 'pipedrive-readback.json'), `${JSON.stringify(artifact, null, 2)}\n`);
 const failures = evidence.filter((row) => !row.pass);
-console.log(JSON.stringify({ runId, outputDir, evidenceRows: evidence.length, serviceDeals: evidence.flatMap((row) => row.serviceDeals).length, failures: failures.map((row) => row.subject) }, null, 2));
-if (failures.length) process.exitCode = 1;
+console.log(JSON.stringify({
+  runId,
+  outputDir,
+  evidenceRows: evidence.length,
+  serviceDeals: evidence.flatMap((row) => row.serviceDeals).length,
+  checkpointTotals: { expected: expectedTotals, observed: observedTotals, pass: checkpointTotalsMatch },
+  failures: failures.map((row) => row.subject),
+}, null, 2));
+if (failures.length || !checkpointTotalsMatch) process.exitCode = 1;

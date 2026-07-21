@@ -17,6 +17,18 @@ export function createRequestJournal(tracker: ConversationTracker) {
     return `${input.sessionId}\u0000${input.requestId}\u0000${input.step}`;
   }
 
+  async function getStep<T extends Record<string, unknown>>(input: RunStepKey): Promise<T | undefined> {
+    const key = cacheKey(input);
+    const local = localResults.get(key);
+    if (local) return local as T;
+
+    const checkpoints = await tracker.getRequestEvents(input.sessionId, input.requestId);
+    const persisted = [...checkpoints].reverse().find((checkpoint) => checkpoint.step === input.step);
+    if (!persisted) return undefined;
+    localResults.set(key, persisted.payload);
+    return persisted.payload as T;
+  }
+
   async function runStep<T extends Record<string, unknown>>(
     input: RunStepKey,
     operation: () => Promise<T>,
@@ -28,11 +40,9 @@ export function createRequestJournal(tracker: ConversationTracker) {
     if (running) return await running as T;
 
     const promise = (async (): Promise<Record<string, unknown>> => {
-      const checkpoints = await tracker.getRequestEvents(input.sessionId, input.requestId);
-      const persisted = [...checkpoints].reverse().find((checkpoint) => checkpoint.step === input.step);
+      const persisted = await getStep<Record<string, unknown>>(input);
       if (persisted) {
-        localResults.set(key, persisted.payload);
-        return persisted.payload;
+        return persisted;
       }
 
       try {
@@ -62,7 +72,7 @@ export function createRequestJournal(tracker: ConversationTracker) {
     }
   }
 
-  return { runStep };
+  return { getStep, runStep };
 }
 
 export type RequestJournal = ReturnType<typeof createRequestJournal>;

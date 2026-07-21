@@ -9,6 +9,7 @@ import { createConversationTracker } from './services/conversation-tracking.js';
 import { createChatRoute } from './routes/chat.js';
 import { createRequestJournal } from './request/request-journal.js';
 import { createRequestOrchestrator } from './request/request-orchestrator.js';
+import { resolveInternalEmailRecipients } from './email/recipients.js';
 
 const config = loadConfig();
 
@@ -41,6 +42,8 @@ const requestOrchestrator = createRequestOrchestrator({
   email,
   journal: requestJournal,
   opportunityRecipient: 'sales@lippelift.de',
+  opportunityCopyRecipients: resolveInternalEmailRecipients(config.notificationEmailTo),
+  serviceCopyRecipients: resolveInternalEmailRecipients(config.serviceEmailTo),
 });
 
 const app = new Hono();

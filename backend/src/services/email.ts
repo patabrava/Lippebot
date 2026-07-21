@@ -2,6 +2,7 @@ import nodemailer from 'nodemailer';
 import { buildPipedriveDealUrl } from '../crm/pipedrive-links.js';
 import { buildSupportEmailHtml, buildSupportEmailSubject } from '../support/support-routing.js';
 import { extractE2ESubject } from '../request/e2e-marker.js';
+import { parseEmailRecipients } from '../email/recipients.js';
 import type {
   LeadData,
   LeadCrmOutcome,
@@ -37,6 +38,23 @@ interface MailOptions {
 }
 
 type SendFn = (options: MailOptions) => Promise<unknown>;
+
+export class EmailDeliveryError extends Error {
+  constructor(
+    readonly failedRecipients: string[],
+    readonly deliveredRecipients: string[],
+    details?: string,
+  ) {
+    super(`Email delivery failed for ${failedRecipients.join(', ')}${details ? `: ${details}` : ''}`);
+    this.name = 'EmailDeliveryError';
+  }
+}
+
+function smtpRejectedRecipients(result: unknown): unknown[] {
+  if (!result || typeof result !== 'object' || !('rejected' in result)) return [];
+  const rejected = (result as { rejected?: unknown }).rejected;
+  return Array.isArray(rejected) ? rejected : [];
+}
 
 export interface AbandonedChatSummary {
   sessionId: string;
@@ -104,6 +122,26 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
 
   const from = smtp.user || 'sarah@lippelift.de';
 
+  async function sendToRecipients(options: MailOptions): Promise<void> {
+    const recipients = parseEmailRecipients(options.to);
+    if (recipients.length === 0) throw new Error('No email recipient configured');
+
+    const outcomes = await Promise.allSettled(recipients.map(async (recipient) => {
+      const result = await sendFn({ ...options, to: recipient });
+      if (smtpRejectedRecipients(result).length > 0) {
+        throw new Error(`SMTP rejected recipient ${recipient}`);
+      }
+    }));
+    const failedRecipients = recipients.filter((_, index) => outcomes[index]?.status === 'rejected');
+    if (failedRecipients.length > 0) {
+      const deliveredRecipients = recipients.filter((_, index) => outcomes[index]?.status === 'fulfilled');
+      const details = outcomes.flatMap((outcome) => outcome.status === 'rejected' ? [outcome.reason] : [])
+        .map((failure) => failure instanceof Error ? failure.message : String(failure))
+        .join('; ');
+      throw new EmailDeliveryError(failedRecipients, deliveredRecipients, details);
+    }
+  }
+
   async function sendLeadNotification(
     to: string,
     data: LeadData,
@@ -160,7 +198,7 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
     const normalSubject = crmContext?.requestId
       ? `Sarah [opportunity] [${crmContext.requestId.replace(/[\r\n]+/g, ' ').trim()}]: ${data.firstName} ${data.lastName}`
       : `Sarah Lead: ${data.firstName} ${data.lastName}`;
-    await sendFn({ from, to, subject: e2eSubject ?? normalSubject, html });
+    await sendToRecipients({ from, to, subject: e2eSubject ?? normalSubject, html });
   }
 
   async function sendServiceNotification(to: string, data: ServiceData): Promise<void> {
@@ -177,7 +215,7 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
       </table>
     `;
 
-    await sendFn({ from, to, subject: `Service-Anfrage: ${data.customerName}`, html });
+    await sendToRecipients({ from, to, subject: `Service-Anfrage: ${data.customerName}`, html });
   }
 
   async function sendSupportNotification(to: string, input: {
@@ -194,7 +232,7 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
   }): Promise<void> {
     if (!configured && !sendOverride) return;
 
-    await sendFn({
+    await sendToRecipients({
       from,
       to,
       subject: buildSupportEmailSubject(input.data, input.requestId),
@@ -223,7 +261,7 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
       <pre style="white-space:pre-wrap;font-family:Arial,sans-serif;border:1px solid #ddd;padding:12px;border-radius:8px;">${escapeHtml(input.transcript)}</pre>
     `;
 
-    await sendFn({
+    await sendToRecipients({
       from,
       to,
       subject: `Sarah Chat-Zusammenfassung: ${input.sessionId}`,
@@ -302,7 +340,7 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
       <pre style="white-space:pre-wrap;font-family:Arial,sans-serif;border:1px solid #ddd;padding:12px;border-radius:8px;">${escapeHtml(input.transcript)}</pre>
     `;
 
-    await sendFn({
+    await sendToRecipients({
       from,
       to,
       subject: `Sarah ${kindLabel}-Zusammenfassung: ${input.sessionId}`,

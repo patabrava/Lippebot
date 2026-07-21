@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { parseEmailRecipients } from '../src/email/recipients.js';
 
 type Json = Record<string, unknown>;
 type CaseResult = {
@@ -8,7 +9,8 @@ type CaseResult = {
   requestId: string;
   sessionId: string;
   expected: string;
-  recipient: string;
+  primaryRecipient: string;
+  expectedRecipients: string[];
   events: Json[];
   completed: boolean;
 };
@@ -22,6 +24,20 @@ const baseUrl = (process.env.LIVE_E2E_BASE_URL || 'http://187.124.16.6:8085').re
 const runId = process.env.LIVE_E2E_RUN_ID || new Date().toISOString().replace(/\D/g, '').slice(0, 14);
 const outputDir = resolve(process.cwd(), 'output', `request-routing-${runId}`);
 const pdBase = 'https://api.pipedrive.com/v1';
+const internalRecipients = ['berg@lippelift.de', 'caechma@gmail.com'];
+
+async function assertHealthy(): Promise<void> {
+  const response = await fetch(`${baseUrl}/api/health`);
+  const health = await response.json() as {
+    status?: string;
+    pipedrive?: boolean;
+    email?: boolean;
+    conversationTracking?: boolean;
+  };
+  if (!response.ok || health.status !== 'ok' || !health.pipedrive || !health.email || !health.conversationTracking) {
+    throw new Error(`Live health preflight failed: ${JSON.stringify(health)}`);
+  }
+}
 
 async function pd<T>(path: string, init?: RequestInit): Promise<T> {
   const join = path.includes('?') ? '&' : '?';
@@ -112,7 +128,7 @@ function serviceMessage(useCase: string, label: string, input: {
   ].filter(Boolean).join(' ');
 }
 
-async function chat(useCase: string, label: string, message: string, expected: string, recipient: string, options: { sessionId?: string; requestId?: string } = {}): Promise<CaseResult> {
+async function chat(useCase: string, label: string, message: string, expected: string, primaryRecipient: string, options: { sessionId?: string; requestId?: string } = {}): Promise<CaseResult> {
   const requestId = options.requestId || `e2e-${useCase}-${runId}-${label.replace(/[^A-Za-z0-9]/g, '').slice(0, 16)}`;
   const sessionId = options.sessionId || `e2e-session-${useCase}-${runId}`;
   const response = await fetch(`${baseUrl}/api/chat`, {
@@ -124,10 +140,14 @@ async function chat(useCase: string, label: string, message: string, expected: s
   if (!response.ok) throw new Error(`${useCase} HTTP ${response.status}: ${raw}`);
   const events = raw.split(/\r?\n/).filter((line) => line.startsWith('data: ')).map((line) => JSON.parse(line.slice(6)) as Json);
   const completed = events.some((event) => event.type === 'action' && event.action === 'request_completed');
-  return { useCase, subject: subject(useCase, label), requestId, sessionId, expected, recipient, events, completed };
+  const expectedRecipients = primaryRecipient === 'none'
+    ? []
+    : parseEmailRecipients(primaryRecipient, ...internalRecipients);
+  return { useCase, subject: subject(useCase, label), requestId, sessionId, expected, primaryRecipient, expectedRecipients, events, completed };
 }
 
 async function main(): Promise<void> {
+  await assertHealthy();
   await mkdir(outputDir, { recursive: true });
   const field = await factoryFieldKey();
   const suffix = runId.slice(-8);

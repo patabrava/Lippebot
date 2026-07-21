@@ -3,7 +3,7 @@ import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
 import type { GeminiService } from '../services/gemini.js';
 import type { PipedriveService } from '../services/pipedrive.js';
-import type { CompletedChatSummary, EmailService } from '../services/email.js';
+import { EmailDeliveryError, type CompletedChatSummary, type EmailService } from '../services/email.js';
 import type { ConversationTracker } from '../services/conversation-tracking.js';
 import type {
   ChatMessage,
@@ -20,8 +20,19 @@ import { buildPipedriveTranscriptNote } from '../chat/transcript.js';
 import { formatBerlinDateTime } from '../time/berlin.js';
 import { detectEmergency } from '../request/request-policy.js';
 import type { RequestOrchestrator } from '../request/request-orchestrator.js';
+import {
+  parseEmailRecipients,
+  resolveInternalEmailRecipients,
+} from '../email/recipients.js';
 
-const DEFAULT_INTERNAL_EMAIL_TO = 'berg@lippelift.de';
+const OPPORTUNITY_EMAIL_TO = 'sales@lippelift.de';
+
+function routedEmailRecipients(primaryRecipient: string, configuredInternalRecipients: string): string {
+  return parseEmailRecipients(
+    primaryRecipient,
+    resolveInternalEmailRecipients(configuredInternalRecipients),
+  ).join(',');
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -248,7 +259,10 @@ export function createChatRoute(deps: ChatDeps): Hono {
   const inFlightTranscriptNotes = new Map<string, Promise<number>>();
   const completedSummaryEmails = new Set<string>();
   const inFlightSummaryEmails = new Map<string, Promise<void>>();
+  const pendingSummaryEmailRecipients = new Map<string, string[]>();
   const completedAbandonedSummaries = new Set<string>();
+  const inFlightAbandonedSummaries = new Map<string, Promise<void>>();
+  const pendingAbandonedSummaryRecipients = new Map<string, string[]>();
   const factoryHelpShownRequests = new Set<string>();
 
   async function runRequestScopedFlow(
@@ -462,7 +476,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
     const category = resolveSupportCategory(supportData);
     const normalizedSupportData = { ...supportData, category };
     const intendedInbox = getSupportInbox(category);
-    const emailRecipient = deps.serviceEmailTo || DEFAULT_INTERNAL_EMAIL_TO;
+    const emailRecipient = routedEmailRecipients(intendedInbox, deps.serviceEmailTo);
 
     let matchState: SupportHandoffResult['matchState'] = 'unresolved';
     let personId: number | undefined;
@@ -617,10 +631,12 @@ export function createChatRoute(deps: ChatDeps): Hono {
       }
 
       let lastError: unknown;
+      let pendingRecipients = pendingSummaryEmailRecipients.get(sessionId) ?? parseEmailRecipients(recipient);
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         try {
-          await deps.email.sendCompletedChatSummary(recipient, input);
+          await deps.email.sendCompletedChatSummary(pendingRecipients.join(','), input);
           completedSummaryEmails.add(sessionId);
+          pendingSummaryEmailRecipients.delete(sessionId);
           if (tracker?.isEnabled()) {
             await track(() => tracker.recordEvent({
               sessionId,
@@ -631,6 +647,10 @@ export function createChatRoute(deps: ChatDeps): Hono {
           return;
         } catch (err) {
           lastError = err;
+          if (err instanceof EmailDeliveryError && err.failedRecipients.length > 0) {
+            pendingRecipients = err.failedRecipients;
+            pendingSummaryEmailRecipients.set(sessionId, pendingRecipients);
+          }
         }
       }
 
@@ -807,7 +827,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
         if (leadResult && leadDataForEmail) {
           await persistCompletedSummaryEmail(
             sessionId,
-            deps.notificationEmailTo || DEFAULT_INTERNAL_EMAIL_TO,
+            routedEmailRecipients(OPPORTUNITY_EMAIL_TO, deps.notificationEmailTo),
             {
               sessionId,
               mode: lastMode,
@@ -822,7 +842,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
         } else if (supportResult && supportDataForEmail) {
           await persistCompletedSummaryEmail(
             sessionId,
-            deps.serviceEmailTo || DEFAULT_INTERNAL_EMAIL_TO,
+            supportResult.emailRecipient,
             {
               sessionId,
               mode: lastMode,
@@ -894,7 +914,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
     }
 
     const { sessionId, reason, history } = parsed.data;
-    const emailRecipient = deps.serviceEmailTo || DEFAULT_INTERNAL_EMAIL_TO;
+    const emailRecipient = resolveInternalEmailRecipients(deps.serviceEmailTo);
 
     if (completedAbandonedSummaries.has(sessionId)) {
       return c.json({ status: 'duplicate' });
@@ -920,9 +940,21 @@ export function createChatRoute(deps: ChatDeps): Hono {
       submittedAt: new Date().toISOString(),
     };
 
-    try {
-      await deps.email.sendAbandonedChatSummary(emailRecipient, summary);
+    const existingWrite = inFlightAbandonedSummaries.get(sessionId);
+    if (existingWrite) {
+      try {
+        await existingWrite;
+        return c.json({ status: 'duplicate' });
+      } catch {
+        return c.json({ status: 'failed' }, 502);
+      }
+    }
+
+    const write = (async () => {
+      const pendingRecipients = pendingAbandonedSummaryRecipients.get(sessionId) ?? parseEmailRecipients(emailRecipient);
+      await deps.email.sendAbandonedChatSummary(pendingRecipients.join(','), summary);
       completedAbandonedSummaries.add(sessionId);
+      pendingAbandonedSummaryRecipients.delete(sessionId);
       if (tracker?.isEnabled()) {
         void track(() => tracker.recordEvent({
           sessionId,
@@ -934,8 +966,16 @@ export function createChatRoute(deps: ChatDeps): Hono {
           },
         }));
       }
+    })();
+    inFlightAbandonedSummaries.set(sessionId, write);
+
+    try {
+      await write;
       return c.json({ status: 'sent' });
     } catch (err) {
+      if (err instanceof EmailDeliveryError && err.failedRecipients.length > 0) {
+        pendingAbandonedSummaryRecipients.set(sessionId, err.failedRecipients);
+      }
       const emailError = err instanceof Error ? err.message : String(err);
       console.error('Abandoned chat summary email error:', err);
       if (tracker?.isEnabled()) {
@@ -946,6 +986,10 @@ export function createChatRoute(deps: ChatDeps): Hono {
         }));
       }
       return c.json({ status: 'failed' }, 502);
+    } finally {
+      if (inFlightAbandonedSummaries.get(sessionId) === write) {
+        inFlightAbandonedSummaries.delete(sessionId);
+      }
     }
   });
 

@@ -24,6 +24,8 @@ describe('loadConfig', () => {
     process.env.VERTEX_AI_LOCATION = 'us-central1';
     process.env.VERTEX_AI_ENABLED = 'True';
     delete process.env.PIPEDRIVE_WEB_BASE_URL;
+    delete process.env.NOTIFICATION_EMAIL_TO;
+    delete process.env.SERVICE_EMAIL_TO;
     const config = loadConfig();
     expect(config.vertexAiProjectId).toBe('test-project');
     expect(config.vertexAiLocation).toBe('us-central1');
@@ -35,6 +37,8 @@ describe('loadConfig', () => {
     expect(config.pipedriveServicePipelineId).toBe(1);
     expect(config.pipedriveServiceStageId).toBe(2);
     expect(config.pipedriveServiceOwnerId).toBe(24093328);
+    expect(config.notificationEmailTo).toBe('berg@lippelift.de,caechma@gmail.com');
+    expect(config.serviceEmailTo).toBe('berg@lippelift.de,caechma@gmail.com');
   });
 
   it('loads a configured Pipedrive web base URL', () => {

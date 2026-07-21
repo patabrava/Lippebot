@@ -18,7 +18,12 @@ export type ConversationEventType =
   | 'request_checkpoint'
   | 'tracking_error';
 
-export type RequestCheckpointStep = 'crm' | 'email' | 'completed' | 'failed';
+export type RequestCheckpointStep =
+  | 'crm'
+  | 'email'
+  | `email_recipient:${string}`
+  | 'completed'
+  | 'failed';
 
 export interface RequestCheckpoint {
   sessionId?: string;

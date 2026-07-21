@@ -45,7 +45,7 @@ describe('createRequestJournal', () => {
     const journal = createRequestJournal(tracker);
     const first = journal.runStep({ sessionId: 's1', requestId: 'r1', step: 'email' }, operation);
     const second = journal.runStep({ sessionId: 's1', requestId: 'r1', step: 'email' }, operation);
-    await Promise.resolve();
+    await vi.waitFor(() => expect(operation).toHaveBeenCalledOnce());
     resolveOperation({ messageId: 'm1' });
 
     await expect(Promise.all([first, second])).resolves.toEqual([{ messageId: 'm1' }, { messageId: 'm1' }]);

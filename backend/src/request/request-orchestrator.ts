@@ -10,12 +10,15 @@ import type {
 } from '../types/index.js';
 import { classifyRequestPolicy } from './request-policy.js';
 import type { RequestJournal } from './request-journal.js';
+import { emailRecipientCheckpointStep, parseEmailRecipients } from '../email/recipients.js';
 
 interface RequestOrchestratorDependencies {
   pipedrive: Pick<PipedriveService, 'createLead' | 'resolveFactoryCase' | 'createServiceRequest'>;
   email: Pick<EmailService, 'sendLeadNotification' | 'sendSupportNotification'>;
   journal: RequestJournal;
   opportunityRecipient: string;
+  opportunityCopyRecipients?: string;
+  serviceCopyRecipients?: string;
 }
 
 export interface RequestExecutionInput {
@@ -37,7 +40,34 @@ export interface RequestExecutionResult {
 }
 
 export function createRequestOrchestrator(dependencies: RequestOrchestratorDependencies) {
-  const { pipedrive, email, journal, opportunityRecipient } = dependencies;
+  const {
+    pipedrive,
+    email,
+    journal,
+    opportunityRecipient,
+    opportunityCopyRecipients,
+    serviceCopyRecipients,
+  } = dependencies;
+
+  async function sendToRecipients(
+    input: RequestExecutionInput,
+    recipients: string[],
+    send: (recipient: string) => Promise<void>,
+  ): Promise<void> {
+    const outcomes = await Promise.allSettled(recipients.map((recipient) => journal.runStep(
+      {
+        sessionId: input.sessionId,
+        requestId: input.requestId,
+        step: emailRecipientCheckpointStep(recipient),
+      },
+      async () => {
+        await send(recipient);
+        return { sent: true, recipient };
+      },
+    )));
+    const failure = outcomes.find((outcome) => outcome.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
+  }
 
   async function executeOpportunity(input: RequestExecutionInput): Promise<RequestExecutionResult> {
     if (!input.leadData) throw new Error('Opportunity request is missing leadData');
@@ -46,15 +76,29 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
       { sessionId: input.sessionId, requestId: input.requestId, step: 'crm' },
       async () => ({ ...await pipedrive.createLead(leadData) }),
     ) as LeadCrmResult;
-    await journal.runStep(
-      { sessionId: input.sessionId, requestId: input.requestId, step: 'email' },
-      async () => {
-        await email.sendLeadNotification(opportunityRecipient, leadData, {
+    const emailStep = { sessionId: input.sessionId, requestId: input.requestId, step: 'email' as const };
+    const previousEmail = await journal.getStep<{ recipient?: string; recipients?: string[] }>(emailStep);
+    const previouslySent = parseEmailRecipients(
+      previousEmail?.recipient,
+      ...(previousEmail?.recipients ?? []),
+    );
+    const previouslySentSet = new Set(previouslySent.map((recipient) => recipient.toLowerCase()));
+    const recipients = parseEmailRecipients(opportunityRecipient, opportunityCopyRecipients);
+    await sendToRecipients(
+      input,
+      recipients.filter((recipient) => !previouslySentSet.has(recipient.toLowerCase())),
+      async (recipient) => {
+        await email.sendLeadNotification(recipient, leadData, {
           ...crm as LeadNotificationContext,
           requestId: input.requestId,
           transcript: input.transcript,
         });
-        return { sent: true, recipient: opportunityRecipient };
+      },
+    );
+    await journal.runStep(
+      emailStep,
+      async () => {
+        return { sent: true, recipient: opportunityRecipient, recipients };
       },
     );
     await journal.runStep(
@@ -100,12 +144,21 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
       crm = crmCheckpoint.crm as ServiceRequestCrmResult | undefined;
     }
 
-    await journal.runStep(
-      { sessionId: input.sessionId, requestId: input.requestId, step: 'email' },
-      async () => {
-        const matchState = sourceCase?.matchState ?? 'unresolved';
-        const dealId = crm?.dealId ?? (sourceCase?.matchState === 'unique' ? sourceCase.dealId : undefined);
-        await email.sendSupportNotification(policy.recipient!, {
+    const emailStep = { sessionId: input.sessionId, requestId: input.requestId, step: 'email' as const };
+    const previousEmail = await journal.getStep<{ recipient?: string; recipients?: string[] }>(emailStep);
+    const previouslySent = parseEmailRecipients(
+      previousEmail?.recipient,
+      ...(previousEmail?.recipients ?? []),
+    );
+    const previouslySentSet = new Set(previouslySent.map((recipient) => recipient.toLowerCase()));
+    const matchState = sourceCase?.matchState ?? 'unresolved';
+    const dealId = crm?.dealId ?? (sourceCase?.matchState === 'unique' ? sourceCase.dealId : undefined);
+    const recipients = parseEmailRecipients(policy.recipient, serviceCopyRecipients);
+    await sendToRecipients(
+      input,
+      recipients.filter((recipient) => !previouslySentSet.has(recipient.toLowerCase())),
+      async (recipient) => {
+        await email.sendSupportNotification(recipient, {
           requestId: input.requestId,
           data: supportData,
           intendedInbox: policy.recipient!,
@@ -116,7 +169,12 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
           serviceDealUrl: crm?.serviceDealUrl,
           transcript: input.transcript,
         });
-        return { sent: true, recipient: policy.recipient! };
+      },
+    );
+    await journal.runStep(
+      emailStep,
+      async () => {
+        return { sent: true, recipient: policy.recipient!, recipients };
       },
     );
     await journal.runStep(
