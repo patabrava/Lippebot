@@ -7,6 +7,8 @@ import { createPipedriveService } from './services/pipedrive.js';
 import { createEmailService } from './services/email.js';
 import { createConversationTracker } from './services/conversation-tracking.js';
 import { createChatRoute } from './routes/chat.js';
+import { createRequestJournal } from './request/request-journal.js';
+import { createRequestOrchestrator } from './request/request-orchestrator.js';
 
 const config = loadConfig();
 
@@ -33,6 +35,13 @@ const conversationTracker = createConversationTracker({
   supabaseUrl: config.supabaseUrl,
   serviceRoleKey: config.supabaseServiceRoleKey,
 });
+const requestJournal = createRequestJournal(conversationTracker);
+const requestOrchestrator = createRequestOrchestrator({
+  pipedrive,
+  email,
+  journal: requestJournal,
+  opportunityRecipient: 'sales@lippelift.de',
+});
 
 const app = new Hono();
 
@@ -55,6 +64,7 @@ const chatRoute = createChatRoute({
   conversationTracker,
   notificationEmailTo: config.notificationEmailTo,
   serviceEmailTo: config.serviceEmailTo,
+  requestOrchestrator,
 });
 
 app.route('/', chatRoute);

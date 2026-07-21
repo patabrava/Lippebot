@@ -6,6 +6,7 @@ export interface ChatMessage {
 
 export interface ChatRequest {
   sessionId: string;
+  requestId?: string;
   message: string;
   history: ChatMessage[];
 }

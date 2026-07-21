@@ -18,6 +18,8 @@ import { hasContactMethod } from '../contact/contact-method.js';
 import { hasPriorContactStatus } from '../contact/prior-contact.js';
 import { buildPipedriveTranscriptNote } from '../chat/transcript.js';
 import { formatBerlinDateTime } from '../time/berlin.js';
+import { detectEmergency } from '../request/request-policy.js';
+import type { RequestOrchestrator } from '../request/request-orchestrator.js';
 
 const DEFAULT_INTERNAL_EMAIL_TO = 'berg@lippelift.de';
 
@@ -75,6 +77,7 @@ function hasSupportDisambiguator(data: SupportData): boolean {
 
 const chatRequestSchema = z.object({
   sessionId: z.string().min(1),
+  requestId: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/).optional(),
   message: z.string().min(1),
   history: z.array(z.object({
     role: z.enum(['user', 'assistant']),
@@ -100,6 +103,7 @@ interface ChatDeps {
   conversationTracker?: ConversationTracker;
   notificationEmailTo: string;
   serviceEmailTo: string;
+  requestOrchestrator?: RequestOrchestrator;
 }
 
 type LeadInternalResult = LeadCrmResult | {
@@ -245,6 +249,100 @@ export function createChatRoute(deps: ChatDeps): Hono {
   const completedSummaryEmails = new Set<string>();
   const inFlightSummaryEmails = new Map<string, Promise<void>>();
   const completedAbandonedSummaries = new Set<string>();
+  const factoryHelpShownRequests = new Set<string>();
+
+  async function runRequestScopedFlow(
+    stream: Parameters<Parameters<typeof streamSSE>[1]>[0],
+    input: {
+      sessionId: string;
+      requestId: string;
+      message: string;
+      history: ChatMessage[];
+    },
+  ): Promise<void> {
+    const { sessionId, requestId, message, history } = input;
+    const emergency = detectEmergency(message);
+    if (emergency.emergency) {
+      const content = 'Bei Verletzung oder unmittelbarer Gefahr rufen Sie bitte sofort 112. Fuer dringenden LIPPE Lift Service erreichen Sie uns unter +49 (0)5261 9666-0.';
+      await stream.writeSSE({ data: JSON.stringify({ type: 'token', content }) });
+      await stream.writeSSE({ data: JSON.stringify({ type: 'done', mode: 'service', collectedData: {} }) });
+      return;
+    }
+
+    const currentUserTimestamp = Date.now();
+    let lastMode: 'berater' | 'anfrage' | 'service' | 'undetermined' = 'undetermined';
+    let lastCollectedData: Record<string, unknown> = {};
+    let leadData: LeadData | undefined;
+    let supportData: SupportData | undefined;
+    let assistantText = '';
+    const gen = deps.gemini.streamChat(sessionId, message, history);
+
+    for await (const event of gen) {
+      if (event.type === 'token' && event.content) {
+        assistantText += event.content;
+        await stream.writeSSE({ data: JSON.stringify({ type: 'token', content: event.content }) });
+      }
+      if (event.type === 'state' && event.state) {
+        lastMode = event.state.mode;
+        lastCollectedData = event.state.collectedData as Record<string, unknown>;
+        if (!factoryHelpShownRequests.has(requestId)
+          && lastCollectedData.ownsLift === 'yes'
+          && lastCollectedData.liftManufacturer === 'lippe'
+          && (!lastCollectedData.factoryNumberStatus || lastCollectedData.factoryNumberStatus === 'unknown')) {
+          factoryHelpShownRequests.add(requestId);
+          await stream.writeSSE({
+            data: JSON.stringify({
+              type: 'action',
+              action: 'show_factory_number_help',
+              data: { requestId },
+            }),
+          });
+        }
+      }
+      if (event.type === 'lead' && event.leadData) leadData = event.leadData;
+      if (event.type === 'service' && event.serviceData) {
+        supportData = { ...event.serviceData, category: resolveSupportCategory(event.serviceData) };
+      }
+    }
+
+    if (!leadData && lastMode === 'anfrage' && hasRequiredLeadFields(lastCollectedData)
+      && lastCollectedData.ownsLift === 'no' && hasPriorContactStatus(lastCollectedData)) {
+      leadData = lastCollectedData as LeadData;
+    }
+    if (!supportData && lastMode === 'service' && hasRequiredServiceFields(lastCollectedData)
+      && lastCollectedData.ownsLift === 'yes'
+      && ['lippe', 'other'].includes(String(lastCollectedData.liftManufacturer))
+      && typeof lastCollectedData.serviceRequestType === 'string') {
+      supportData = { ...(lastCollectedData as SupportData), category: resolveSupportCategory(lastCollectedData as SupportData) };
+    }
+
+    if (!leadData && !supportData) {
+      await stream.writeSSE({ data: JSON.stringify({ type: 'done', mode: lastMode, collectedData: lastCollectedData }) });
+      return;
+    }
+
+    const assistantTimestamp = Date.now();
+    const transcript = buildCompletedTranscript({
+      history,
+      currentMessage: message,
+      assistantText,
+      currentUserTimestamp,
+      assistantTimestamp,
+    });
+    const result = await deps.requestOrchestrator!.execute({
+      sessionId,
+      requestId,
+      mode: leadData ? 'anfrage' : 'service',
+      transcript,
+      ...(leadData ? { leadData } : { supportData }),
+    });
+    await stream.writeSSE({
+      data: JSON.stringify({ type: 'action', action: 'request_completed', data: { requestId, kind: result.kind } }),
+    });
+    const completion = 'Danke. Ihr Anliegen wurde an das zuständige Team weitergegeben. Haben Sie noch ein weiteres Anliegen?';
+    await stream.writeSSE({ data: JSON.stringify({ type: 'token', content: completion }) });
+    await stream.writeSSE({ data: JSON.stringify({ type: 'done', mode: lastMode, collectedData: lastCollectedData }) });
+  }
 
   async function emitLeadAction(
     stream: Parameters<Parameters<typeof streamSSE>[1]>[0],
@@ -565,10 +663,14 @@ export function createChatRoute(deps: ChatDeps): Hono {
       return c.json({ error: 'Invalid request', details: parsed.error.flatten() }, 400);
     }
 
-    const { sessionId, message, history } = parsed.data;
+    const { sessionId, requestId, message, history } = parsed.data;
 
     return streamSSE(c, async (stream) => {
       try {
+        if (requestId && deps.requestOrchestrator) {
+          await runRequestScopedFlow(stream, { sessionId, requestId, message, history });
+          return;
+        }
         const currentUserTimestamp = Date.now();
         if (tracker?.isEnabled()) {
           void track(async () => {

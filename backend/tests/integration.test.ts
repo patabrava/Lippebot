@@ -101,6 +101,122 @@ describe('POST /api/chat', () => {
     expect(text).toContain('"mode":"berater"');
   });
 
+  it('rejects an unsafe requestId before streaming', async () => {
+    const res = await app.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'test-123', requestId: 'bad request id!', message: 'Hallo', history: [] }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('interrupts an emergency immediately without Gemini or side effects', async () => {
+    const streamChat = vi.fn();
+    const execute = vi.fn();
+    const chatRoute = createChatRoute({
+      gemini: { streamChat } as unknown as GeminiService,
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      requestOrchestrator: { execute },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'emergency', requestId: 'req-emergency', message: 'Eine Person steckt im Lift fest und ist verletzt.', history: [] }),
+    })).text();
+
+    expect(text).toContain('112');
+    expect(text).toContain('+49 (0)5261 9666-0');
+    expect(text).not.toContain('24-Stunden-Hotline');
+    expect(streamChat).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('emits factory help then completes only after the request orchestrator succeeds', async () => {
+    const supportData = {
+      ownsLift: 'yes' as const, liftManufacturer: 'lippe' as const, factoryNumber: 'FN-42', factoryNumberStatus: 'provided' as const,
+      serviceRequestType: 'technical' as const, customerName: 'Erika Muster', email: 'erika@example.de', category: 'technik' as const, issueDescription: 'Fehler',
+    };
+    const execute = vi.fn().mockResolvedValue({ requestId: 'req-service', kind: 'service', completed: true, recipient: 'technik@lippelift.de' });
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'state' as const, state: { sessionId, mode: 'service' as const, collectedData: { ownsLift: 'yes', liftManufacturer: 'lippe', factoryNumberStatus: 'unknown' } } };
+          yield { type: 'service' as const, serviceData: supportData };
+          yield { type: 'state' as const, state: { sessionId, mode: 'service' as const, collectedData: supportData } };
+        },
+      },
+      pipedrive: createMockPipedrive(), email: createMockEmail(), requestOrchestrator: { execute }, notificationEmailTo: '', serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'service-session', requestId: 'req-service', message: 'Technisches Anliegen', history: [] }),
+    })).text();
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(text).toContain('"action":"show_factory_number_help"');
+    expect(text).toContain('"action":"request_completed"');
+    expect(text).toContain('Haben Sie noch ein weiteres Anliegen?');
+    expect(text).toContain('"type":"done"');
+  });
+
+  it('emits an error and no completion or done when a required side effect fails', async () => {
+    const leadData = {
+      ownsLift: 'no' as const, priorContact: 'no' as const, customerSegment: 'privatperson' as const,
+      firstName: 'Max', lastName: 'Muster', email: 'max@example.de', street: 'Test 1', postalCode: '32657', city: 'Lemgo', availability: '08:00 - 12:00' as const,
+    };
+    const execute = vi.fn().mockRejectedValue(new Error('smtp unavailable'));
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'lead' as const, leadData };
+          yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: leadData } };
+        },
+      },
+      pipedrive: createMockPipedrive(), email: createMockEmail(), requestOrchestrator: { execute }, notificationEmailTo: '', serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'lead-session', requestId: 'req-lead', message: 'Neue Anfrage', history: [] }),
+    })).text();
+
+    expect(text).toContain('"type":"error"');
+    expect(text).not.toContain('"action":"request_completed"');
+    expect(text).not.toContain('"type":"done"');
+  });
+
+  it('keeps two request IDs in one visible session independent', async () => {
+    const leadData = {
+      ownsLift: 'no' as const, priorContact: 'no' as const, customerSegment: 'privatperson' as const,
+      firstName: 'Max', lastName: 'Muster', email: 'max@example.de', street: 'Test 1', postalCode: '32657', city: 'Lemgo', availability: '08:00 - 12:00' as const,
+    };
+    const execute = vi.fn(async (input) => ({ requestId: input.requestId, kind: 'opportunity', completed: true, recipient: 'sales@lippelift.de' }));
+    const chatRoute = createChatRoute({
+      gemini: { async *streamChat(sessionId: string) { yield { type: 'lead' as const, leadData }; yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: leadData } }; } },
+      pipedrive: createMockPipedrive(), email: createMockEmail(), requestOrchestrator: { execute }, notificationEmailTo: '', serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    for (const requestId of ['req-1', 'req-2']) {
+      const text = await (await testApp.request('/api/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: 'same-session', requestId, message: 'Anfrage', history: [] }),
+      })).text();
+      expect(text).toContain(`"requestId":"${requestId}"`);
+    }
+    expect(execute.mock.calls.map(([input]) => input.requestId)).toEqual(['req-1', 'req-2']);
+  });
+
   it('does not mistake an ordinary response turn for the end of a general conversation', async () => {
     const sequence: string[] = [];
     const sendCompletedChatSummary = vi.fn().mockImplementation(async () => {
