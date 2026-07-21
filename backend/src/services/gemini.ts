@@ -9,6 +9,33 @@ const priorContactProperty = {
   enum: ['yes', 'no', 'unknown'],
 };
 
+const ownsLiftProperty = {
+  type: FunctionDeclarationSchemaType.STRING,
+  enum: ['yes', 'no', 'unknown'],
+};
+
+const liftManufacturerProperty = {
+  type: FunctionDeclarationSchemaType.STRING,
+  enum: ['lippe', 'other', 'unknown'],
+};
+
+const factoryNumberStatusProperty = {
+  type: FunctionDeclarationSchemaType.STRING,
+  enum: ['provided', 'unavailable', 'unknown'],
+};
+
+const serviceRequestTypeProperty = {
+  type: FunctionDeclarationSchemaType.STRING,
+  enum: [
+    'maintenance',
+    'repair',
+    'technical',
+    'invoice_payment',
+    'sales_contract_order',
+    'spare_parts_installation_warranty',
+  ],
+};
+
 const reportStateFn: FunctionDeclaration = {
   name: 'report_state',
   description: 'Report the current conversation mode and any collected data after every response.',
@@ -24,6 +51,11 @@ const reportStateFn: FunctionDeclaration = {
         type: FunctionDeclarationSchemaType.OBJECT,
         description: 'Any lead or service data collected so far',
         properties: {
+          ownsLift: ownsLiftProperty,
+          liftManufacturer: liftManufacturerProperty,
+          factoryNumber: { type: FunctionDeclarationSchemaType.STRING },
+          factoryNumberStatus: factoryNumberStatusProperty,
+          serviceRequestType: serviceRequestTypeProperty,
           priorContact: priorContactProperty,
           priorContactReference: { type: FunctionDeclarationSchemaType.STRING },
           customerSegment: { type: FunctionDeclarationSchemaType.STRING },
@@ -69,10 +101,11 @@ const reportStateFn: FunctionDeclaration = {
 
 const submitLeadFn: FunctionDeclaration = {
   name: 'submit_lead',
-  description: 'Submit a qualified lead only when all required information and at least one contact method (phone or email) have been collected. After calling this, generate a warm confirmation message.',
+  description: 'Submit a qualified new-lift opportunity only when ownsLift is no, all required information, prior-contact status, and at least one contact method (phone or email) have been collected. Do not confirm completion; the backend owns the final confirmation.',
   parameters: {
     type: FunctionDeclarationSchemaType.OBJECT,
     properties: {
+      ownsLift: ownsLiftProperty,
       priorContact: priorContactProperty,
       priorContactReference: { type: FunctionDeclarationSchemaType.STRING },
       customerSegment: { type: FunctionDeclarationSchemaType.STRING },
@@ -91,16 +124,21 @@ const submitLeadFn: FunctionDeclaration = {
       message: { type: FunctionDeclarationSchemaType.STRING },
       newsletter: { type: FunctionDeclarationSchemaType.STRING },
     },
-    required: ['customerSegment', 'firstName', 'lastName', 'street', 'postalCode', 'city', 'availability', 'priorContact'],
+    required: ['ownsLift', 'customerSegment', 'firstName', 'lastName', 'street', 'postalCode', 'city', 'availability', 'priorContact'],
   },
 };
 
 const submitServiceRequestFn: FunctionDeclaration = {
   name: 'submit_service_request',
-  description: 'Submit an existing-customer support request only after Sarah has the customer name, one primary support category, a usable short issue summary, and at least one contact method (phone or email). After calling this, generate a warm generic confirmation without mentioning CRM, Pipedrive, inboxes, or backend status.',
+  description: 'Submit an owned-lift service request only after Sarah has ownership, manufacturer, service type, customer name, one primary category, a short issue summary, and at least one contact method (phone or email). A LIPPE lift also needs a provided factory number or explicit unavailability. Do not confirm completion; the backend owns the final confirmation.',
   parameters: {
     type: FunctionDeclarationSchemaType.OBJECT,
     properties: {
+      ownsLift: ownsLiftProperty,
+      liftManufacturer: liftManufacturerProperty,
+      factoryNumber: { type: FunctionDeclarationSchemaType.STRING },
+      factoryNumberStatus: factoryNumberStatusProperty,
+      serviceRequestType: serviceRequestTypeProperty,
       priorContact: priorContactProperty,
       priorContactReference: { type: FunctionDeclarationSchemaType.STRING },
       customerName: { type: FunctionDeclarationSchemaType.STRING },
@@ -125,11 +163,30 @@ const submitServiceRequestFn: FunctionDeclaration = {
       installationContext: { type: FunctionDeclarationSchemaType.STRING },
       defectContext: { type: FunctionDeclarationSchemaType.STRING },
     },
-    required: ['customerName', 'category', 'issueDescription', 'priorContact'],
+    required: ['ownsLift', 'liftManufacturer', 'serviceRequestType', 'customerName', 'category', 'issueDescription'],
   },
 };
 
 const allFunctionDeclarations = [reportStateFn, submitLeadFn, submitServiceRequestFn];
+
+function isValidLeadSubmission(args: Record<string, unknown>): boolean {
+  return args.ownsLift === 'no' && hasPriorContactStatus(args) && hasContactMethod(args);
+}
+
+function isValidServiceSubmission(args: Record<string, unknown>): boolean {
+  if (args.ownsLift !== 'yes' || !['lippe', 'other'].includes(String(args.liftManufacturer))) {
+    return false;
+  }
+  if (!serviceRequestTypeProperty.enum?.includes(String(args.serviceRequestType))) {
+    return false;
+  }
+  if (!hasContactMethod(args)) return false;
+  if (args.liftManufacturer === 'other') return true;
+  if (args.factoryNumberStatus === 'unavailable') return true;
+  return args.factoryNumberStatus === 'provided'
+    && typeof args.factoryNumber === 'string'
+    && args.factoryNumber.trim().length > 0;
+}
 
 interface VertexChatConfig {
   projectId: string;
@@ -202,8 +259,8 @@ export function createGeminiService(config: VertexChatConfig) {
     const responseParts = response.candidates?.[0]?.content?.parts || [];
     const functionCalls = extractFunctionCalls(responseParts);
     const hasInvalidSubmission = functionCalls.some((call) => (
-      (call.name === 'submit_lead' || call.name === 'submit_service_request')
-      && (!hasPriorContactStatus(call.args) || !hasContactMethod(call.args))
+      (call.name === 'submit_lead' && !isValidLeadSubmission(call.args))
+      || (call.name === 'submit_service_request' && !isValidServiceSubmission(call.args))
     ));
 
     if (!hasInvalidSubmission) {
@@ -230,6 +287,19 @@ export function createGeminiService(config: VertexChatConfig) {
         });
       } else if (call.name === 'submit_lead') {
         hasActionCalls = true;
+        if (call.args.ownsLift !== 'no') {
+          functionResponses.push({
+            functionResponse: {
+              name: 'submit_lead',
+              response: {
+                success: false,
+                needsOwnership: true,
+                message: 'Kläre zuerst, ob die Person bereits einen Lift besitzt. submit_lead ist nur bei ownsLift=no erlaubt.',
+              },
+            },
+          });
+          continue;
+        }
         if (!hasPriorContactStatus(call.args)) {
           functionResponses.push({
             functionResponse: {
@@ -260,19 +330,19 @@ export function createGeminiService(config: VertexChatConfig) {
         functionResponses.push({
           functionResponse: {
             name: 'submit_lead',
-            response: { success: true, message: 'Lead wurde erfolgreich erstellt. Bitte bestätige dem Kunden warmherzig.' },
+            response: { success: true, message: 'Daten sind vollständig. Warte auf die Backend-Bestätigung und bestätige die Übergabe noch nicht.' },
           },
         });
       } else if (call.name === 'submit_service_request') {
         hasActionCalls = true;
-        if (!hasPriorContactStatus(call.args)) {
+        if (call.args.ownsLift !== 'yes' || !['lippe', 'other'].includes(String(call.args.liftManufacturer))) {
           functionResponses.push({
             functionResponse: {
               name: 'submit_service_request',
               response: {
                 success: false,
-                needsPriorContact: true,
-                message: 'Kläre zuerst mit genau einer natürlichen Frage, ob die Person wegen dieses Anliegens schon Kontakt mit uns hatte. Wenn sie es nicht weiß oder nicht sagen möchte, verwende unknown.',
+                needsOwnership: true,
+                message: 'Kläre zuerst, ob ein Lift vorhanden ist und ob er von LIPPE Lift stammt.',
               },
             },
           });
@@ -291,11 +361,42 @@ export function createGeminiService(config: VertexChatConfig) {
           });
           continue;
         }
+        if (!serviceRequestTypeProperty.enum?.includes(String(call.args.serviceRequestType))) {
+          functionResponses.push({
+            functionResponse: {
+              name: 'submit_service_request',
+              response: {
+                success: false,
+                needsServiceType: true,
+                message: 'Ordne das Anliegen genau einem Service-Typ zu und bestätige noch keine Übergabe.',
+              },
+            },
+          });
+          continue;
+        }
+        const hasFactoryDecision = call.args.liftManufacturer === 'other'
+          || call.args.factoryNumberStatus === 'unavailable'
+          || (call.args.factoryNumberStatus === 'provided'
+            && typeof call.args.factoryNumber === 'string'
+            && call.args.factoryNumber.trim().length > 0);
+        if (!hasFactoryDecision) {
+          functionResponses.push({
+            functionResponse: {
+              name: 'submit_service_request',
+              response: {
+                success: false,
+                needsFactoryNumber: true,
+                message: 'Bitte die Fabriknummer abfragen oder ausdrücklich als nicht verfügbar markieren.',
+              },
+            },
+          });
+          continue;
+        }
         yield { type: 'service', serviceData: call.args as ServiceData };
         functionResponses.push({
           functionResponse: {
             name: 'submit_service_request',
-            response: { success: true, message: 'Service-Anfrage wurde erfolgreich erstellt. Bitte bestätige dem Kunden.' },
+            response: { success: true, message: 'Daten sind vollständig. Warte auf die Backend-Bestätigung und bestätige die Übergabe noch nicht.' },
           },
         });
       }

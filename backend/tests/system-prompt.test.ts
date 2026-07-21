@@ -136,6 +136,47 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('Der Anfrage-Modus bleibt fuer neue Beratungs- und Angebotsanfragen unveraendert');
   });
 
+  it('starts actionable handoffs with the approved lift-ownership decision', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Besitzt die Person bereits einen installierten Lift?');
+    expect(prompt).toContain('ownsLift = no');
+    expect(prompt).toContain('ownsLift = yes');
+    expect(prompt).toContain('Allgemeine Informationsfragen beantwortest du direkt');
+    expect(prompt).toContain('ob der Lift von LIPPE Lift stammt');
+  });
+
+  it('requires the LIPPE factory-number step and permits explicit unavailability', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Fabriknummer');
+    expect(prompt).toContain('factoryNumberStatus = provided');
+    expect(prompt).toContain('factoryNumberStatus = unavailable');
+    expect(prompt).toContain('Foto-Upload');
+    expect(prompt).toContain('abschreiben');
+  });
+
+  it('distinguishes maintenance and repair from other service requests', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('maintenance');
+    expect(prompt).toContain('repair');
+    expect(prompt).toContain('technical');
+    expect(prompt).toContain('invoice_payment');
+    expect(prompt).toContain('sales_contract_order');
+    expect(prompt).toContain('spare_parts_installation_warranty');
+  });
+
+  it('requires immediate emergency instructions without calling the company number a hotline', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('112');
+    expect(prompt).toContain('+49 (0)5261 9666-0');
+    expect(prompt).toContain('24-Stunden-Hotline');
+  });
+
+  it('does not let the model confirm backend completion', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Bestaetige niemals selbst, dass die Uebergabe erfolgreich war');
+    expect(prompt).toContain('Backend');
+  });
+
   it('requires one-inbox support routing with precedence rules', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('Waehle genau eine primaere Kategorie');

@@ -49,7 +49,14 @@ describe('createGeminiService', () => {
     expect(serviceDeclaration.parameters.properties.offerNumber).toBeDefined();
     expect(serviceDeclaration.parameters.properties.leadId).toBeDefined();
     expect(serviceDeclaration.parameters.properties.sparePartReference).toBeDefined();
-    expect(serviceDeclaration.parameters.required).toEqual(['customerName', 'category', 'issueDescription', 'priorContact']);
+    expect(serviceDeclaration.parameters.required).toEqual([
+      'ownsLift',
+      'liftManufacturer',
+      'serviceRequestType',
+      'customerName',
+      'category',
+      'issueDescription',
+    ]);
   });
 
   it('registers prior-contact status and reference on state and both submission tools', async () => {
@@ -68,7 +75,7 @@ describe('createGeminiService', () => {
     expect(leadDeclaration.parameters.required).toContain('priorContact');
     expect(serviceDeclaration.parameters.properties.priorContact.enum).toEqual(['yes', 'no', 'unknown']);
     expect(serviceDeclaration.parameters.properties.priorContactReference).toBeDefined();
-    expect(serviceDeclaration.parameters.required).toContain('priorContact');
+    expect(serviceDeclaration.parameters.required).not.toContain('priorContact');
   });
 
   it('registers phone-or-email submission contracts without requiring phone specifically', async () => {
@@ -87,14 +94,59 @@ describe('createGeminiService', () => {
     expect(serviceDeclaration.description).toContain('at least one contact method (phone or email)');
   });
 
+  it('registers ownership, manufacturer, factory-number, and service-type contracts', async () => {
+    const { createGeminiService } = await import('../src/services/gemini.js');
+    createGeminiService({ projectId: 'test-project', location: 'us-central1' });
+
+    const declarations = getGenerativeModelMock.mock.calls[0][0].tools[0].functionDeclarations;
+    const stateProperties = declarations
+      .find((declaration: { name: string }) => declaration.name === 'report_state')
+      .parameters.properties.collectedData.properties;
+    const leadDeclaration = declarations.find((declaration: { name: string }) => declaration.name === 'submit_lead');
+    const serviceDeclaration = declarations.find((declaration: { name: string }) => declaration.name === 'submit_service_request');
+
+    expect(stateProperties.ownsLift.enum).toEqual(['yes', 'no', 'unknown']);
+    expect(stateProperties.liftManufacturer.enum).toEqual(['lippe', 'other', 'unknown']);
+    expect(stateProperties.factoryNumberStatus.enum).toEqual(['provided', 'unavailable', 'unknown']);
+    expect(stateProperties.factoryNumber).toBeDefined();
+    expect(stateProperties.serviceRequestType.enum).toEqual([
+      'maintenance',
+      'repair',
+      'technical',
+      'invoice_payment',
+      'sales_contract_order',
+      'spare_parts_installation_warranty',
+    ]);
+    expect(leadDeclaration.parameters.properties.ownsLift.enum).toEqual(['yes', 'no', 'unknown']);
+    expect(leadDeclaration.parameters.required).toContain('ownsLift');
+    expect(serviceDeclaration.parameters.properties.ownsLift.enum).toEqual(['yes', 'no', 'unknown']);
+    expect(serviceDeclaration.parameters.properties.liftManufacturer.enum).toEqual(['lippe', 'other', 'unknown']);
+    expect(serviceDeclaration.parameters.properties.factoryNumber).toBeDefined();
+    expect(serviceDeclaration.parameters.properties.factoryNumberStatus.enum).toEqual(['provided', 'unavailable', 'unknown']);
+    expect(serviceDeclaration.parameters.properties.serviceRequestType.enum).toEqual(stateProperties.serviceRequestType.enum);
+    expect(serviceDeclaration.parameters.required).toEqual(expect.arrayContaining([
+      'ownsLift',
+      'liftManufacturer',
+      'serviceRequestType',
+    ]));
+  });
+
   it.each([
-    { functionName: 'submit_lead', eventType: 'lead' },
-    { functionName: 'submit_service_request', eventType: 'service' },
-  ])('rejects $functionName without a usable contact before reporting success', async ({ functionName, eventType }) => {
+    { functionName: 'submit_lead', eventType: 'lead', args: { ownsLift: 'no', priorContact: 'unknown' } },
+    {
+      functionName: 'submit_service_request',
+      eventType: 'service',
+      args: {
+        ownsLift: 'yes',
+        liftManufacturer: 'other',
+        serviceRequestType: 'technical',
+      },
+    },
+  ])('rejects $functionName without a usable contact before reporting success', async ({ functionName, eventType, args }) => {
     const initialResponse = {
       candidates: [{
         content: {
-          parts: [{ functionCall: { name: functionName, args: { customerName: 'Maria Schmidt', priorContact: 'unknown' } } }],
+          parts: [{ functionCall: { name: functionName, args: { customerName: 'Maria Schmidt', ...args } } }],
         },
       }],
     };
@@ -133,14 +185,13 @@ describe('createGeminiService', () => {
     }));
   });
 
-  it.each([
-    { functionName: 'submit_lead', eventType: 'lead' },
-    { functionName: 'submit_service_request', eventType: 'service' },
-  ])('rejects $functionName without prior-contact status before reporting success', async ({ functionName, eventType }) => {
+  it('rejects submit_lead without prior-contact status before reporting success', async () => {
+    const functionName = 'submit_lead';
+    const eventType = 'lead';
     const initialResponse = {
       candidates: [{
         content: {
-          parts: [{ functionCall: { name: functionName, args: { customerName: 'Maria Schmidt', email: 'maria@example.de' } } }],
+          parts: [{ functionCall: { name: functionName, args: { ownsLift: 'no', customerName: 'Maria Schmidt', email: 'maria@example.de' } } }],
         },
       }],
     };
