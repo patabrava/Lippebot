@@ -284,12 +284,14 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
   type DealSearchItem = {
     id: number;
     status?: string;
+    pipeline_id?: number;
     person?: { id?: number; name?: string } | null;
   };
 
   type PersonDeal = {
     id: number;
     status?: string;
+    pipeline_id?: number;
     person_id?: { value?: number } | number;
   };
 
@@ -305,6 +307,10 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
 
   function isOpenDeal(deal: DealSearchItem | PersonDeal): boolean {
     return !deal.status || deal.status === 'open';
+  }
+
+  function isOpenSalesDeal(deal: DealSearchItem | PersonDeal): boolean {
+    return isOpenDeal(deal) && (deal.pipeline_id === undefined || deal.pipeline_id === pipelineId);
   }
 
   function uniqueCandidate<T>(items: T[]): T | undefined {
@@ -325,7 +331,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
 
   async function getOpenPersonDeals(personId: number): Promise<PersonDeal[]> {
     const deals = await apiGet<PersonDeal[]>(`/persons/${personId}/deals`, { status: 'open' });
-    return (deals ?? []).filter(isOpenDeal);
+    return (deals ?? []).filter(isOpenSalesDeal);
   }
 
   function supportIdentifiers(data: SupportData): string[] {
@@ -365,7 +371,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     }
 
     const openDeals = [...new Map(matches.map((deal) => [deal.id, deal])).values()]
-      .filter(isOpenDeal);
+      .filter(isOpenSalesDeal);
     if (openDeals.length === 0) return { status: 'none' };
     if (openDeals.length > 1) {
       return {
@@ -463,11 +469,14 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     return addressTokens.length >= 2 && addressTokens.every((token) => stored.includes(token));
   }
 
-  async function resolveLeadNameFallback(data: LeadData): Promise<LeadIdentityResolution> {
+  async function resolveLeadNameFallback(
+    data: LeadData,
+    existingSearchItems?: PersonSearchItem[],
+  ): Promise<LeadIdentityResolution> {
     const submittedName = [data.firstName, data.lastName].filter(Boolean).join(' ').trim();
     if (normalizeNameTokens(submittedName).length < 2) return { status: 'none' };
 
-    const searchItems = await searchPersonItems(submittedName, 'name', false);
+    const searchItems = existingSearchItems ?? await searchPersonItems(submittedName, 'name', false);
     const nameCandidates = searchItems.filter((item) => nameTokensMatch(item.name, submittedName));
     if (nameCandidates.length === 0) return { status: 'none' };
 
@@ -494,16 +503,22 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
   }
 
   async function resolveLeadIdentity(data: LeadData): Promise<LeadIdentityResolution> {
+    const submittedName = [data.firstName, data.lastName].filter(Boolean).join(' ').trim();
+    if (normalizeNameTokens(submittedName).length < 2) return { status: 'none' };
+
+    const nameItems = await searchPersonItems(submittedName, 'name', false);
+    const cachedNameId = recentlyResolvedPersonIds.get(`name:${normalizeFullName(submittedName)}`);
+    const nameCandidateIds = [...new Set([
+      ...nameItems
+      .filter((item) => item.name === undefined || nameTokensMatch(item.name, submittedName))
+      .map((item) => item.id),
+      ...(cachedNameId ? [cachedNameId] : []),
+    ])];
+    const nameCandidateSet = new Set(nameCandidateIds);
     const email = normalizeEmail(data.email);
     const phoneKey = normalizeGermanPhoneKey(data.phone);
     const phoneSearchValue = normalizePhoneNumber(data.phone);
     const matchSets: number[][] = [];
-
-    if (email) {
-      const matches = await searchPeople(email, 'email');
-      const cached = cachedPersonId('email', email);
-      matchSets.push([...new Set(matches.length > 0 ? matches : cached ? [cached] : [])]);
-    }
 
     if (phoneKey && phoneSearchValue) {
       const matches = await searchPeople(phoneSearchValue, 'phone');
@@ -511,14 +526,33 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
       matchSets.push([...new Set(matches.length > 0 ? matches : cached ? [cached] : [])]);
     }
 
-    const nonEmptySets = matchSets.filter((matches) => matches.length > 0);
-    if (nonEmptySets.length === 0) {
-      return resolveLeadNameFallback(data);
+    if (email) {
+      const matches = await searchPeople(email, 'email');
+      const cached = cachedPersonId('email', email);
+      matchSets.push([...new Set(matches.length > 0 ? matches : cached ? [cached] : [])]);
     }
 
-    const intersection = nonEmptySets.slice(1).reduce(
+    const matchedContactIds = [...new Set(matchSets.flat())];
+    const outsideNameCandidates = matchedContactIds.filter((id) => !nameCandidateSet.has(id));
+    if (outsideNameCandidates.length > 0) {
+      return {
+        status: 'ambiguous',
+        candidateCount: new Set([...nameCandidateIds, ...matchedContactIds]).size,
+        reason: 'conflicting_contact_identifiers',
+      };
+    }
+
+    if (nameCandidateIds.length === 0) return { status: 'none' };
+    if (matchSets.length === 0) return resolveLeadNameFallback(data, nameItems);
+
+    const nonEmptySets = matchSets.filter((matches) => matches.length > 0);
+    if (nonEmptySets.length === 0) {
+      return resolveLeadNameFallback(data, nameItems);
+    }
+
+    const intersection = nonEmptySets.reduce(
       (candidateIds, matches) => new Set([...candidateIds].filter((id) => matches.includes(id))),
-      new Set(nonEmptySets[0]),
+      new Set(nameCandidateIds),
     );
     if (intersection.size === 1) {
       return { status: 'unique', personId: [...intersection][0] };
@@ -531,7 +565,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
       };
     }
 
-    const candidates = new Set(nonEmptySets.flat());
+    const candidates = new Set(nameCandidateIds);
     if (nonEmptySets.length > 1) {
       return {
         status: 'ambiguous',
@@ -609,7 +643,16 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     return { matchState: 'unresolved', candidateCount: nameMatches.length };
   }
 
-  function cachePersonId(personId: number, email: string | undefined, phone: string | undefined): void {
+  function cachePersonId(
+    personId: number,
+    email: string | undefined,
+    phone: string | undefined,
+    name?: string,
+  ): void {
+    const normalizedName = normalizeFullName(name);
+    if (normalizedName) {
+      recentlyResolvedPersonIds.set(`name:${normalizedName}`, personId);
+    }
     if (email) {
       recentlyResolvedPersonIds.set(`email:${email}`, personId);
     }
@@ -679,7 +722,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
       }
 
       await updatePerson(reference.personId, data, firstName, lastName, phone, email, street, postalCode, city);
-      cachePersonId(reference.personId, email, phone);
+      cachePersonId(reference.personId, email, phone, `${firstName} ${lastName}`);
       return {
         outcome: 'reused',
         personId: reference.personId,
@@ -688,9 +731,17 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
       };
     }
 
+    if (data.priorContact === 'yes' && identity.status !== 'unique') {
+      return {
+        outcome: 'identity_review',
+        candidateCount: identity.status === 'ambiguous' ? identity.candidateCount : 0,
+        reason: 'prior_contact_case_not_found',
+      };
+    }
+
     const existingPersonId = identity.status === 'unique' ? identity.personId : undefined;
     const personId = existingPersonId ?? (await createPerson(data, firstName, lastName, phone, email, street, postalCode, city)).id;
-    cachePersonId(personId, email, phone);
+    cachePersonId(personId, email, phone, `${firstName} ${lastName}`);
 
     if (existingPersonId) {
       const openDeals = await getOpenPersonDeals(existingPersonId);
@@ -701,6 +752,14 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
           createdPerson: false,
           candidateCount: openDeals.length,
           reason: 'multiple_open_deals',
+        };
+      }
+
+      if (data.priorContact === 'yes' && openDeals.length === 0) {
+        return {
+          outcome: 'identity_review',
+          candidateCount: 0,
+          reason: 'prior_contact_case_not_found',
         };
       }
 

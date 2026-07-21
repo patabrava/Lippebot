@@ -20,6 +20,12 @@ describe('createPipedriveService', () => {
   it('createLead reuses the same single open deal in a separate service instance', async () => {
     const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(String(input));
+      if (url.pathname.endsWith('/persons/search') && url.searchParams.get('fields') === 'name') {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { items: [{ item: { id: 321, name: 'Max Mustermann' } }] } }),
+        };
+      }
       if (url.pathname.endsWith('/persons/search') && url.searchParams.get('fields') === 'email') {
         return {
           ok: true,
@@ -220,7 +226,7 @@ describe('createPipedriveService', () => {
       candidateCount: 2,
       reason: 'reference_contact_conflict',
     });
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
   });
 
   it('createLead sends multiple exact open reference deals to review without mutation', async () => {
@@ -264,7 +270,7 @@ describe('createPipedriveService', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
-  it('createLead ignores a closed reference deal and never reopens it', async () => {
+  it('createLead with prior contact ignores a closed reference and creates nothing', async () => {
     const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith('/deals/search')) {
@@ -310,7 +316,14 @@ describe('createPipedriveService', () => {
       availability: '08:00 - 12:00',
     });
 
-    expect(result).toEqual({ outcome: 'created', personId: 321, dealId: 789, createdPerson: false });
+    expect(result).toEqual({
+      outcome: 'identity_review',
+      candidateCount: 0,
+      reason: 'prior_contact_case_not_found',
+    });
+    expect(mockFetch.mock.calls.some(([url, init]) => (
+      new URL(String(url)).pathname.endsWith('/deals') && init?.method === 'POST'
+    ))).toBe(false);
     expect(mockFetch.mock.calls.some(([url, init]) => (
       new URL(String(url)).pathname.endsWith('/deals/456') && init?.method === 'PUT'
     ))).toBe(false);
@@ -372,10 +385,10 @@ describe('createPipedriveService', () => {
       candidateCount: 2,
       reason: 'conflicting_contact_identifiers',
     });
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
   });
 
-  it('createLead lets a unique phone match disambiguate duplicate email matches', async () => {
+  it('createLead rejects a shared email that points outside the name candidates even with a unique phone', async () => {
     const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith('/persons/search')) {
@@ -412,7 +425,11 @@ describe('createPipedriveService', () => {
       availability: '08:00 - 12:00',
     });
 
-    expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456, createdPerson: false });
+    expect(result).toEqual({
+      outcome: 'identity_review',
+      candidateCount: 2,
+      reason: 'conflicting_contact_identifiers',
+    });
   });
 
   it('createLead never creates a person or deal when identity search fails', async () => {
@@ -717,14 +734,19 @@ describe('createPipedriveService', () => {
     });
 
     expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456, createdPerson: false });
-    expect(searchTerms).toEqual(['0049526196660']);
+    expect(searchTerms).toEqual(['Max Mustermann', '0049526196660']);
   });
 
   it('createLead creates a deal for an email-matched person with no open deal', async () => {
     const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith('/persons/search')) {
-        const items = url.searchParams.get('fields') === 'email' ? [{ item: { id: 321 } }] : [];
+        const fields = url.searchParams.get('fields');
+        const items = fields === 'name'
+          ? [{ item: { id: 321, name: 'Max Mustermann' } }]
+          : fields === 'email'
+            ? [{ item: { id: 321 } }]
+            : [];
         return { ok: true, json: () => Promise.resolve({ success: true, data: { items } }) };
       }
       if (url.pathname.endsWith('/persons/321/deals')) {
@@ -757,9 +779,11 @@ describe('createPipedriveService', () => {
     expect(result).toEqual({ outcome: 'created', personId: 321, dealId: 456, createdPerson: false });
 
     expect(mockFetch.mock.calls[0][0]).toContain('/persons/search');
-    expect(mockFetch.mock.calls[0][0]).toContain('term=max%40example.de');
-    expect(mockFetch.mock.calls[0][0]).toContain('fields=email');
-    expect(mockFetch.mock.calls[0][0]).toContain('exact_match=true');
+    expect(mockFetch.mock.calls[0][0]).toContain('term=Max+Mustermann');
+    expect(mockFetch.mock.calls[0][0]).toContain('fields=name');
+    expect(mockFetch.mock.calls[1][0]).toContain('fields=phone');
+    expect(mockFetch.mock.calls[2][0]).toContain('term=max%40example.de');
+    expect(mockFetch.mock.calls[2][0]).toContain('fields=email');
 
     const personUpdate = mockFetch.mock.calls.find(([url, init]) => (
       new URL(String(url)).pathname.endsWith('/persons/321') && init?.method === 'PUT'
@@ -864,8 +888,10 @@ describe('createPipedriveService', () => {
 
     expect(result).toEqual({ outcome: 'created', personId: 654, dealId: 456, createdPerson: false });
     expect(mockFetch.mock.calls[0][0]).toContain('/persons/search');
-    expect(mockFetch.mock.calls[0][0]).toContain('term=0049526196660');
-    expect(mockFetch.mock.calls[0][0]).toContain('fields=phone');
+    expect(mockFetch.mock.calls[0][0]).toContain('term=Max+Mustermann');
+    expect(mockFetch.mock.calls[0][0]).toContain('fields=name');
+    expect(mockFetch.mock.calls[1][0]).toContain('term=0049526196660');
+    expect(mockFetch.mock.calls[1][0]).toContain('fields=phone');
 
     const dealCall = mockFetch.mock.calls.find(([url, init]) => (
       new URL(String(url)).pathname.endsWith('/deals') && init?.method === 'POST'
@@ -879,6 +905,12 @@ describe('createPipedriveService', () => {
     const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       const pathname = new URL(url).pathname;
+      if (url.includes('/persons/search') && url.includes('fields=name')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { items: [] } }),
+        };
+      }
       if (url.includes('/persons/search') && url.includes('fields=email')) {
         return {
           ok: true,
@@ -921,7 +953,8 @@ describe('createPipedriveService', () => {
     });
 
     expect(result).toEqual({ outcome: 'created', personId: 123, dealId: 456, createdPerson: true });
-    expect(mockFetch.mock.calls[0][0]).toContain('fields=email');
+    expect(mockFetch.mock.calls[0][0]).toContain('fields=name');
+    expect(mockFetch.mock.calls[1][0]).toContain('fields=email');
     expect(mockFetch.mock.calls.some(([url]) => String(url).includes('fields=phone'))).toBe(false);
     const personCall = mockFetch.mock.calls.find(([url]) => new URL(String(url)).pathname.endsWith('/persons'));
     expect(personCall).toBeDefined();
@@ -971,9 +1004,9 @@ describe('createPipedriveService', () => {
     });
 
     expect(result).toEqual({ outcome: 'created', personId: 123, dealId: 456, createdPerson: true });
-    expect(mockFetch.mock.calls[0][0]).toContain('fields=email');
+    expect(mockFetch.mock.calls[0][0]).toContain('fields=name');
     expect(mockFetch.mock.calls[1][0]).toContain('fields=phone');
-    expect(mockFetch.mock.calls[2][0]).toContain('fields=name');
+    expect(mockFetch.mock.calls[2][0]).toContain('fields=email');
     expect(mockFetch.mock.calls[3][0]).toContain('/persons');
     expect(mockFetch.mock.calls[4][0]).toContain('/deals');
 
@@ -1034,7 +1067,7 @@ describe('createPipedriveService', () => {
     expect(second).toEqual({ outcome: 'reused', personId: 123, dealId: 456, createdPerson: false });
 
     const searchCalls = mockFetch.mock.calls.filter(([url]) => String(url).includes('/persons/search'));
-    expect(searchCalls).toHaveLength(5);
+    expect(searchCalls).toHaveLength(6);
     const dealPosts = mockFetch.mock.calls.filter(([url, init]) => (
       new URL(String(url)).pathname.endsWith('/deals') && init?.method === 'POST'
     ));
@@ -1934,5 +1967,149 @@ describe('createPipedriveService', () => {
 
     const personPosts = mockFetch.mock.calls.filter(([url]) => new URL(String(url)).pathname.endsWith('/persons'));
     expect(personPosts).toHaveLength(1);
+  });
+
+  it('createLead establishes full-name candidates before using email to corroborate them', async () => {
+    const requestedFields: string[] = [];
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/persons/search')) {
+        const fields = url.searchParams.get('fields')!;
+        requestedFields.push(fields);
+        const items = fields === 'name'
+          ? [{ item: { id: 321, name: 'Max Mustermann' } }, { item: { id: 654, name: 'Max Mustermann' } }]
+          : [{ item: { id: 321 } }];
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { items } }) };
+      }
+      if (url.pathname.endsWith('/persons/321/deals')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: [{ id: 456, status: 'open', pipeline_id: 2 }] }) };
+      }
+      if (url.pathname.endsWith('/persons/321') && init?.method === 'PUT') {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 321 } }) };
+      }
+      throw new Error(`Unexpected request: ${init?.method ?? 'GET'} ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await createPipedriveService('test-key', 2, 3).createLead({
+      ownsLift: 'no',
+      priorContact: 'no',
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      email: 'max@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '12345',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00',
+    });
+
+    expect(requestedFields.slice(0, 2)).toEqual(['name', 'email']);
+    expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456, createdPerson: false });
+  });
+
+  it('createLead never links a contact identifier outside the submitted-name candidates', async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/persons/search')) {
+        const fields = url.searchParams.get('fields');
+        const items = fields === 'name'
+          ? [{ item: { id: 321, name: 'Max Mustermann' } }]
+          : [{ item: { id: 654 } }];
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { items } }) };
+      }
+      throw new Error(`Unexpected mutation: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await createPipedriveService('test-key', 2, 3).createLead({
+      ownsLift: 'no',
+      priorContact: 'no',
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      email: 'other@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '12345',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00',
+    });
+
+    expect(result).toEqual({
+      outcome: 'identity_review',
+      candidateCount: 2,
+      reason: 'conflicting_contact_identifiers',
+    });
+  });
+
+  it('createLead with prior contact creates nothing when no exact person or sales opportunity is found', async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/persons/search')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { items: [] } }) };
+      }
+      throw new Error(`Unexpected mutation: ${init?.method ?? 'GET'} ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await createPipedriveService('test-key', 2, 3).createLead({
+      ownsLift: 'no',
+      priorContact: 'yes',
+      firstName: 'Unbekannt',
+      lastName: 'Zurueckkehrend',
+      email: 'unknown@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '12345',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00',
+    });
+
+    expect(result).toEqual({
+      outcome: 'identity_review',
+      candidateCount: 0,
+      reason: 'prior_contact_case_not_found',
+    });
+  });
+
+  it('createLead ignores service deals and reuses only the configured sales-pipeline opportunity', async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/persons/search')) {
+        const fields = url.searchParams.get('fields');
+        const items = fields === 'name'
+          ? [{ item: { id: 321, name: 'Max Mustermann' } }]
+          : [{ item: { id: 321 } }];
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { items } }) };
+      }
+      if (url.pathname.endsWith('/persons/321/deals')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({
+            success: true,
+            data: [
+              { id: 700, status: 'open', pipeline_id: 1 },
+              { id: 456, status: 'open', pipeline_id: 2 },
+            ],
+          }),
+        };
+      }
+      if (url.pathname.endsWith('/persons/321') && init?.method === 'PUT') {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 321 } }) };
+      }
+      throw new Error(`Unexpected request: ${init?.method ?? 'GET'} ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const result = await createPipedriveService('test-key', 2, 3).createLead({
+      ownsLift: 'no',
+      priorContact: 'no',
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      email: 'max@example.de',
+      street: 'Musterstrasse 1',
+      postalCode: '12345',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00',
+    });
+
+    expect(result).toEqual({ outcome: 'reused', personId: 321, dealId: 456, createdPerson: false });
   });
 });
