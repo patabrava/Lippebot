@@ -314,6 +314,21 @@ class SarahWidget {
     this.messagesEl!.appendChild(container);
   }
 
+  private renderFactoryNumberHelp(): void {
+    if (this.messagesEl?.querySelector('.sarah-factory-help')) return;
+    const card = document.createElement('div');
+    card.className = 'sarah-factory-help';
+    const image = document.createElement('img');
+    image.src = `${new URL(this.apiUrl, window.location.href).origin}/fabriknummer-hinweis.png`;
+    image.alt = 'Beispiel: Hier finden Sie die Fabriknummer auf dem Lift-Etikett';
+    const caption = document.createElement('p');
+    caption.textContent = 'Die Fabriknummer steht auf dem Etikett Ihres Lifts. Bitte schreiben Sie sie ab.';
+    card.appendChild(image);
+    card.appendChild(caption);
+    this.messagesEl?.appendChild(card);
+    requestAnimationFrame(() => this.scrollElementIntoView(card, 'end'));
+  }
+
   private async handleSend(): Promise<void> {
     const text = this.inputEl!.value.trim();
     if (!text || this.isStreaming) return;
@@ -351,7 +366,14 @@ class SarahWidget {
           }
           this.scheduleInactivityFollowUp();
         },
-        onAction: () => {},
+        onAction: (action, data) => {
+          if (action === 'show_factory_number_help') {
+            this.renderFactoryNumberHelp();
+          }
+          if (action === 'request_completed' && typeof data.requestId === 'string') {
+            this.history.completeRequest(data.requestId);
+          }
+        },
         onError: (error) => {
           if (typingEl.parentNode) typingEl.remove();
           this.addBotMessage(error);
@@ -359,6 +381,7 @@ class SarahWidget {
         },
       },
       this.history.getSessionId(),
+      this.history.getRequestId(),
       text,
       this.history.getMessages().slice(0, -1),
     );

@@ -114,4 +114,38 @@ describe('SarahWidget inactivity handling', () => {
       ]),
     }));
   });
+
+  it('renders fixed factory-number help and rotates the completed request ID', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response([
+      'data: {"type":"action","action":"show_factory_number_help","data":{"requestId":"placeholder"}}',
+      'data: {"type":"token","content":"Bitte schreibe die Fabriknummer ab."}',
+      'data: {"type":"action","action":"request_completed","data":{"requestId":"placeholder"}}',
+      'data: {"type":"done","mode":"service","collectedData":{}}',
+      '',
+    ].join('\n')));
+    vi.stubGlobal('fetch', fetchMock);
+    new SarahWidget('https://api.example.test', { delay: 999_999 } as never);
+    document.querySelector<HTMLButtonElement>('.sarah-bubble')!.click();
+    const initialRequestId = JSON.parse(localStorage.getItem('sarah-chat-history-v2-du-flow')!).activeRequestId;
+    fetchMock.mockResolvedValueOnce(new Response([
+      `data: {"type":"action","action":"show_factory_number_help","data":{"requestId":"${initialRequestId}"}}`,
+      'data: {"type":"token","content":"Bitte schreibe die Fabriknummer ab."}',
+      `data: {"type":"action","action":"request_completed","data":{"requestId":"${initialRequestId}"}}`,
+      'data: {"type":"done","mode":"service","collectedData":{}}',
+      '',
+    ].join('\n')));
+    const input = document.querySelector<HTMLInputElement>('.sarah-input')!;
+    input.value = 'Ich habe einen LIPPE Lift.';
+    document.querySelector<HTMLButtonElement>('.sarah-send')!.click();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(document.querySelector('.sarah-factory-help img')).not.toBeNull());
+
+    const image = document.querySelector<HTMLImageElement>('.sarah-factory-help img')!;
+    expect(image).not.toBeNull();
+    expect(image.src).toBe('https://api.example.test/fabriknummer-hinweis.png');
+    expect(image.alt).toContain('Fabriknummer');
+    const stored = JSON.parse(localStorage.getItem('sarah-chat-history-v2-du-flow')!);
+    expect(stored.activeRequestId).not.toBe(initialRequestId);
+    expect(stored.messages.some((message: { content: string }) => message.content.includes('Fabriknummer'))).toBe(true);
+  });
 });

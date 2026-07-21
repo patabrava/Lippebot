@@ -70,4 +70,20 @@ describe('ChatHistory', () => {
     expect(id1).toBe(id2);
     expect(id1.length).toBeGreaterThan(0);
   });
+
+  it('persists one active request ID across history instances', () => {
+    const requestId = history.getRequestId();
+    expect(new ChatHistory().getRequestId()).toBe(requestId);
+    expect(requestId).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  it('rotates only the matching completed request while retaining messages', () => {
+    history.addMessage('user', 'Erstes Anliegen');
+    const first = history.getRequestId();
+    expect(history.completeRequest('different-request')).toBe(false);
+    expect(history.getRequestId()).toBe(first);
+    expect(history.completeRequest(first)).toBe(true);
+    expect(history.getRequestId()).not.toBe(first);
+    expect(history.getMessages()).toHaveLength(1);
+  });
 });

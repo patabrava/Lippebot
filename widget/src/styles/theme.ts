@@ -325,6 +325,29 @@ const CSS = `
   border-color: ${COLORS.lippeBlau};
 }
 
+.sarah-factory-help {
+  margin: 0 0 14px 36px;
+  border: 1px solid ${COLORS.lippeHellblau};
+  border-radius: 14px;
+  overflow: hidden;
+  background: ${COLORS.white};
+  box-shadow: 0 4px 14px rgba(28, 39, 64, 0.08);
+}
+.sarah-factory-help img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 220px;
+  object-fit: cover;
+}
+.sarah-factory-help p {
+  margin: 0;
+  padding: 10px 12px 12px;
+  color: ${COLORS.tiefblau};
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
 /* Input area */
 .sarah-input-area {
   padding: 12px 16px;

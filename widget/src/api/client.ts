@@ -62,13 +62,14 @@ export interface AbandonedChatOptions {
 export async function sendMessage(
   options: ChatClientOptions,
   sessionId: string,
+  requestId: string,
   message: string,
   history: ChatMessage[],
 ): Promise<void> {
   const response = await fetch(`${options.apiUrl}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, message, history }),
+    body: JSON.stringify({ sessionId, requestId, message, history }),
   });
 
   if (!response.ok || !response.body) {
