@@ -15,7 +15,12 @@ const gemini = createGeminiService({
   location: config.vertexAiLocation,
   enabled: config.vertexAiEnabled,
 });
-const pipedrive = createPipedriveService(config.pipedriveApiKey, config.pipedrivePipelineId, config.pipedriveStageId);
+const pipedrive = createPipedriveService(config.pipedriveApiKey, config.pipedrivePipelineId, config.pipedriveStageId, {
+  webBaseUrl: config.pipedriveWebBaseUrl,
+  servicePipelineId: config.pipedriveServicePipelineId,
+  serviceStageId: config.pipedriveServiceStageId,
+  serviceOwnerId: config.pipedriveServiceOwnerId,
+});
 const email = createEmailService({
   host: config.smtpHost,
   port: config.smtpPort,

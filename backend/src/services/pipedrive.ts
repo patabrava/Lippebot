@@ -1,7 +1,8 @@
 import { resolveSupportCategory } from '../support/support-routing.js';
 import { buildPipedriveTranscriptMarker } from '../chat/transcript.js';
+import { buildPipedriveDealUrl } from '../crm/pipedrive-links.js';
 import { formatBerlinDate } from '../time/berlin.js';
-import type { FactoryCaseResult, LeadCrmResult, LeadData, ServiceData, SupportData, SupportMatchResult } from '../types/index.js';
+import type { FactoryCaseResult, LeadCrmResult, LeadData, ServiceData, ServiceRequestCrmResult, SupportData, SupportMatchResult } from '../types/index.js';
 
 const PIPEDRIVE_API_BASE = 'https://api.pipedrive.com/v1';
 const STEPHANIE_KREUZBUSCH_USER_ID = 24093350;
@@ -220,10 +221,27 @@ function buildDealCustomFields(data: LeadData): Record<string, number> {
   return customFields;
 }
 
-export function createPipedriveService(apiKey: string, pipelineId: number, stageId: number) {
+interface PipedriveServiceOptions {
+  webBaseUrl?: string;
+  servicePipelineId?: number;
+  serviceStageId?: number;
+  serviceOwnerId?: number;
+}
+
+export function createPipedriveService(
+  apiKey: string,
+  pipelineId: number,
+  stageId: number,
+  options: PipedriveServiceOptions = {},
+) {
   const configured = apiKey.length > 0;
   const recentlyResolvedPersonIds = new Map<string, number>();
   let factoryNumberFieldKey: string | undefined;
+  let serviceMetadataVerification: Promise<void> | undefined;
+  const webBaseUrl = options.webBaseUrl ?? 'https://lippelift.pipedrive.com';
+  const servicePipelineId = options.servicePipelineId ?? 1;
+  const serviceStageId = options.serviceStageId ?? 2;
+  const serviceOwnerId = options.serviceOwnerId ?? 24093328;
 
   async function apiCall(endpoint: string, body: Record<string, unknown>, method = 'POST'): Promise<{ id: number }> {
     const response = await fetch(`${PIPEDRIVE_API_BASE}${endpoint}?api_token=${apiKey}`, {
@@ -371,6 +389,156 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
       personId,
       dealId: exactDeals[0].id,
       factoryNumber: factoryNumber.trim(),
+    };
+  }
+
+  function numericId(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isSafeInteger(value)) return value;
+    if (value && typeof value === 'object') {
+      const record = value as Record<string, unknown>;
+      return numericId(record.id ?? record.value);
+    }
+    return undefined;
+  }
+
+  async function verifyServiceDestination(): Promise<void> {
+    if (!serviceMetadataVerification) {
+      serviceMetadataVerification = (async () => {
+        const [pipeline, stage, owner] = await Promise.all([
+          apiGet<{ id?: number; name?: string }>(`/pipelines/${servicePipelineId}`),
+          apiGet<{ id?: number; name?: string; pipeline_id?: number }>(`/stages/${serviceStageId}`),
+          apiGet<{ id?: number; name?: string }>(`/users/${serviceOwnerId}`),
+        ]);
+        if (pipeline.id !== servicePipelineId || pipeline.name !== 'Akquise') {
+          throw new Error('Service destination mismatch: pipeline must be Akquise');
+        }
+        if (stage.id !== serviceStageId || stage.name !== 'Kontaktieren' || stage.pipeline_id !== servicePipelineId) {
+          throw new Error('Service destination mismatch: stage must be Kontaktieren in Akquise');
+        }
+        if (owner.id !== serviceOwnerId || owner.name !== 'Marco Lossau') {
+          throw new Error('Service destination mismatch: owner must be Marco Lossau');
+        }
+      })().catch((error) => {
+        serviceMetadataVerification = undefined;
+        throw error;
+      });
+    }
+    await serviceMetadataVerification;
+  }
+
+  function serviceRequestMarker(requestId: string): string {
+    return `[LIPPEBOT REQUEST:${requestId}]`;
+  }
+
+  function validateServiceDealReadback(
+    deal: Record<string, unknown>,
+    expected: { dealId: number; personId: number; customerName: string },
+  ): void {
+    const checks: Array<[string, boolean]> = [
+      ['id', numericId(deal.id) === expected.dealId],
+      ['title', deal.title === `Serviceanfrage - ${expected.customerName}`],
+      ['person_id', numericId(deal.person_id) === expected.personId],
+      ['pipeline_id', numericId(deal.pipeline_id) === servicePipelineId],
+      ['stage_id', numericId(deal.stage_id) === serviceStageId],
+      ['user_id', numericId(deal.user_id) === serviceOwnerId],
+      ['value', Number(deal.value) === 0],
+      ['currency', deal.currency === 'EUR'],
+      ['status', deal.status === 'open'],
+    ];
+    const mismatch = checks.find(([, matches]) => !matches);
+    if (mismatch) throw new Error(`Serviceanfrage readback mismatch: ${mismatch[0]}`);
+  }
+
+  function buildServiceRequestNote(input: {
+    requestId: string;
+    data: SupportData;
+    sourceCase: Extract<FactoryCaseResult, { matchState: 'unique' }>;
+    transcript: string;
+  }): string {
+    const sourceDealUrl = buildPipedriveDealUrl(webBaseUrl, input.sourceCase.dealId);
+    const contact = input.data.email?.trim() || input.data.phone?.trim() || 'nicht angegeben';
+    return [
+      serviceRequestMarker(input.requestId),
+      `Anfrage-ID: ${input.requestId}`,
+      `Anliegen: ${input.data.issueDescription ?? 'nicht angegeben'}`,
+      `Kontakt: ${contact}`,
+      `Hersteller: ${input.data.liftManufacturer ?? 'lippe'}`,
+      `Fabriknummer: ${input.data.factoryNumber ?? input.sourceCase.factoryNumber}`,
+      `Originaler Vorgang: ${input.sourceCase.dealId}`,
+      `Originaler Vorgang URL: ${sourceDealUrl ?? 'nicht verfuegbar'}`,
+      '',
+      'Vollstaendiger Anfrage-Transkript:',
+      input.transcript,
+    ].join('\n');
+  }
+
+  async function createServiceRequest(input: {
+    requestId: string;
+    data: SupportData;
+    sourceCase: Extract<FactoryCaseResult, { matchState: 'unique' }>;
+    transcript: string;
+  }): Promise<ServiceRequestCrmResult> {
+    if (!configured) throw new Error('Pipedrive not configured');
+    const marker = serviceRequestMarker(input.requestId);
+    const customerName = input.data.customerName?.trim() || 'Unbekannter Kunde';
+    const existingNotes = (await apiGet<Array<Record<string, unknown>> | null>('/notes', { limit: 500 })) ?? [];
+    const markerNotes = existingNotes.filter((note) => typeof note.content === 'string' && note.content.includes(marker));
+    if (markerNotes.length > 1) throw new Error('Serviceanfrage request marker is ambiguous');
+
+    let dealId: number;
+    let noteId: number;
+    let personId: number;
+    let reused = false;
+    if (markerNotes.length === 1) {
+      dealId = numericId(markerNotes[0].deal_id) ?? 0;
+      noteId = numericId(markerNotes[0].id) ?? 0;
+      personId = numericId(markerNotes[0].person_id) ?? input.sourceCase.personId;
+      if (!dealId || !noteId) throw new Error('Serviceanfrage request marker is incomplete');
+      reused = true;
+    } else {
+      await verifyServiceDestination();
+      personId = input.sourceCase.personId;
+      const deal = await apiCall('/deals', {
+        title: `Serviceanfrage - ${customerName}`,
+        person_id: personId,
+        pipeline_id: servicePipelineId,
+        stage_id: serviceStageId,
+        user_id: serviceOwnerId,
+        value: 0,
+        currency: 'EUR',
+        status: 'open',
+        visible_to: 3,
+      });
+      dealId = deal.id;
+      const note = await apiCall('/notes', {
+        person_id: personId,
+        deal_id: dealId,
+        pinned_to_deal_flag: 1,
+        pinned_to_person_flag: 1,
+        content: buildServiceRequestNote(input),
+      });
+      noteId = note.id;
+    }
+
+    const [dealReadback, noteReadback] = await Promise.all([
+      apiGet<Record<string, unknown>>(`/deals/${dealId}`),
+      apiGet<Record<string, unknown>>(`/notes/${noteId}`),
+    ]);
+    validateServiceDealReadback(dealReadback, { dealId, personId, customerName });
+    if (numericId(noteReadback.deal_id) !== dealId
+      || typeof noteReadback.content !== 'string'
+      || !noteReadback.content.includes(marker)) {
+      throw new Error('Serviceanfrage readback mismatch: note');
+    }
+
+    return {
+      personId,
+      dealId,
+      noteId,
+      sourceDealId: input.sourceCase.dealId,
+      sourceDealUrl: buildPipedriveDealUrl(webBaseUrl, input.sourceCase.dealId),
+      serviceDealUrl: buildPipedriveDealUrl(webBaseUrl, dealId),
+      reused,
     };
   }
 
@@ -927,6 +1095,7 @@ export function createPipedriveService(apiKey: string, pipelineId: number, stage
     createLead,
     createServiceActivity,
     createSupportCase,
+    createServiceRequest,
     resolveFactoryCase,
     resolveSupportPerson,
     createChatTranscriptNote,

@@ -39,6 +39,16 @@ export type FactoryCaseResult =
   | { matchState: 'unresolved'; candidateCount: 0 }
   | { matchState: 'ambiguous'; candidateCount: number };
 
+export interface ServiceRequestCrmResult {
+  personId: number;
+  dealId: number;
+  noteId: number;
+  sourceDealId: number;
+  sourceDealUrl?: string;
+  serviceDealUrl?: string;
+  reused: boolean;
+}
+
 export type SupportCategory = 'technik' | 'finance' | 'sales' | 'lossau';
 export type SupportMatchState = 'unique' | 'ambiguous' | 'unresolved';
 export type SupportNoteStatus = 'created' | 'failed' | 'skipped';

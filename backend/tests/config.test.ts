@@ -32,6 +32,9 @@ describe('loadConfig', () => {
     expect(config.corsOrigin).toBe('http://localhost:5173');
     expect(config.pipedriveApiKey).toBe('');
     expect(config.pipedriveWebBaseUrl).toBe('https://lippelift.pipedrive.com');
+    expect(config.pipedriveServicePipelineId).toBe(1);
+    expect(config.pipedriveServiceStageId).toBe(2);
+    expect(config.pipedriveServiceOwnerId).toBe(24093328);
   });
 
   it('loads a configured Pipedrive web base URL', () => {
@@ -39,6 +42,18 @@ describe('loadConfig', () => {
     process.env.PIPEDRIVE_WEB_BASE_URL = 'https://example.pipedrive.com';
 
     expect(loadConfig().pipedriveWebBaseUrl).toBe('https://example.pipedrive.com');
+  });
+
+  it('loads configured Serviceanfrage destination IDs', () => {
+    process.env.VERTEX_AI_PROJECT_ID = 'test-project';
+    process.env.PIPEDRIVE_SERVICE_PIPELINE_ID = '11';
+    process.env.PIPEDRIVE_SERVICE_STAGE_ID = '22';
+    process.env.PIPEDRIVE_SERVICE_OWNER_ID = '33';
+
+    const config = loadConfig();
+    expect(config.pipedriveServicePipelineId).toBe(11);
+    expect(config.pipedriveServiceStageId).toBe(22);
+    expect(config.pipedriveServiceOwnerId).toBe(33);
   });
 
   it('defaults conversation tracking to disabled', () => {
