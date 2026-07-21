@@ -13,7 +13,13 @@ import type { RequestJournal } from './request-journal.js';
 import { emailRecipientCheckpointStep, parseEmailRecipients } from '../email/recipients.js';
 
 interface RequestOrchestratorDependencies {
-  pipedrive: Pick<PipedriveService, 'createLead' | 'resolveFactoryCase' | 'createServiceRequest'>;
+  pipedrive: Pick<PipedriveService,
+    'createLead'
+    | 'resolveFactoryCase'
+    | 'resolveSupportReferenceCase'
+    | 'resolveSupportFollowUpCase'
+    | 'createServiceRequest'
+    | 'appendServiceRequestToExistingCase'>;
   email: Pick<EmailService, 'sendLeadNotification' | 'sendSupportNotification'>;
   journal: RequestJournal;
   opportunityRecipient: string;
@@ -131,6 +137,46 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
           if (policy.crm !== 'create_service_request' || resolvedCase.matchState !== 'unique') {
             return { sourceCase: resolvedCase };
           }
+
+          if (supportData.priorContact === 'yes') {
+            const referenceCase = await pipedrive.resolveSupportReferenceCase(supportData);
+            const targetCase = referenceCase.matchState === 'unresolved'
+              ? await pipedrive.resolveSupportFollowUpCase(supportData, resolvedCase)
+              : referenceCase;
+            if (targetCase.matchState === 'ambiguous') {
+              return {
+                sourceCase: { matchState: 'ambiguous' as const, candidateCount: targetCase.candidateCount },
+                referenceCase,
+                targetCase,
+              };
+            }
+            if (targetCase.matchState === 'unresolved') {
+              return { sourceCase: targetCase, referenceCase, targetCase };
+            }
+            if (targetCase.personId !== resolvedCase.personId) {
+              return {
+                sourceCase: { matchState: 'ambiguous' as const, candidateCount: 2 },
+                referenceCase,
+                targetCase,
+              };
+            }
+            if (targetCase.dealId === resolvedCase.dealId) {
+              return {
+                sourceCase: { matchState: 'ambiguous' as const, candidateCount: 1 },
+                referenceCase,
+                targetCase,
+              };
+            }
+            const reused = await pipedrive.appendServiceRequestToExistingCase({
+              requestId: input.requestId,
+              data: supportData,
+              sourceCase: resolvedCase,
+              targetCase,
+              transcript: input.transcript,
+            });
+            return { sourceCase: resolvedCase, referenceCase, targetCase, crm: reused };
+          }
+
           const created = await pipedrive.createServiceRequest({
             requestId: input.requestId,
             data: supportData,

@@ -130,7 +130,7 @@ const submitLeadFn: FunctionDeclaration = {
 
 const submitServiceRequestFn: FunctionDeclaration = {
   name: 'submit_service_request',
-  description: 'Submit an owned-lift service request only after Sarah has ownership, manufacturer, service type, customer name, one primary category, a short issue summary, and at least one contact method (phone or email). A LIPPE lift also needs a provided factory number or explicit unavailability. Do not confirm completion; the backend owns the final confirmation.',
+  description: 'Submit an owned-lift service request only after Sarah has ownership, manufacturer, service type, customer name, one primary category, a short issue summary, prior-contact status, and at least one contact method (phone or email). A LIPPE lift also needs a provided factory number or explicit unavailability. Do not confirm completion; the backend owns the final confirmation.',
   parameters: {
     type: FunctionDeclarationSchemaType.OBJECT,
     properties: {
@@ -163,7 +163,7 @@ const submitServiceRequestFn: FunctionDeclaration = {
       installationContext: { type: FunctionDeclarationSchemaType.STRING },
       defectContext: { type: FunctionDeclarationSchemaType.STRING },
     },
-    required: ['ownsLift', 'liftManufacturer', 'serviceRequestType', 'customerName', 'category', 'issueDescription'],
+    required: ['ownsLift', 'liftManufacturer', 'serviceRequestType', 'customerName', 'category', 'issueDescription', 'priorContact'],
   },
 };
 
@@ -180,6 +180,7 @@ function isValidServiceSubmission(args: Record<string, unknown>): boolean {
   if (!serviceRequestTypeProperty.enum?.includes(String(args.serviceRequestType))) {
     return false;
   }
+  if (!hasPriorContactStatus(args)) return false;
   if (!hasContactMethod(args)) return false;
   if (args.liftManufacturer === 'other') return true;
   if (args.factoryNumberStatus === 'unavailable') return true;
@@ -343,6 +344,19 @@ export function createGeminiService(config: VertexChatConfig) {
                 success: false,
                 needsOwnership: true,
                 message: 'Kläre zuerst, ob ein Lift vorhanden ist und ob er von LIPPE Lift stammt.',
+              },
+            },
+          });
+          continue;
+        }
+        if (!hasPriorContactStatus(call.args)) {
+          functionResponses.push({
+            functionResponse: {
+              name: 'submit_service_request',
+              response: {
+                success: false,
+                needsPriorContact: true,
+                message: 'Kläre zuerst mit genau einer natürlichen Frage, ob die Person wegen dieses Anliegens schon Kontakt mit uns hatte. Wenn sie es nicht weiß oder nicht sagen möchte, verwende unknown.',
               },
             },
           });

@@ -23,8 +23,13 @@ function baseDependencies() {
     pipedrive: {
       createLead: vi.fn().mockResolvedValue({ outcome: 'created', personId: 11, dealId: 22, createdPerson: true }),
       resolveFactoryCase: vi.fn().mockResolvedValue({ matchState: 'unique', personId: 31, dealId: 41, factoryNumber: 'FN-42' }),
+      resolveSupportReferenceCase: vi.fn().mockResolvedValue({ matchState: 'unique', personId: 31, dealId: 45, candidateCount: 1 }),
+      resolveSupportFollowUpCase: vi.fn().mockResolvedValue({ matchState: 'unresolved', candidateCount: 0 }),
       createServiceRequest: vi.fn().mockResolvedValue({
         personId: 31, dealId: 51, noteId: 61, sourceDealId: 41, sourceDealUrl: 'https://pipedrive.test/deal/41', serviceDealUrl: 'https://pipedrive.test/deal/51', reused: false,
+      }),
+      appendServiceRequestToExistingCase: vi.fn().mockResolvedValue({
+        personId: 31, dealId: 45, noteId: 62, sourceDealId: 41, sourceDealUrl: 'https://pipedrive.test/deal/41', serviceDealUrl: 'https://pipedrive.test/deal/45', reused: true,
       }),
     },
     email: {
@@ -135,6 +140,194 @@ describe('createRequestOrchestrator', () => {
     expect(maintenance.crm).toBeUndefined();
     expect(maintenance.sourceCase).toMatchObject({ dealId: 41 });
     expect(technical.crm).toMatchObject({ dealId: 51 });
+  });
+
+  it('routes separate-session prior-contact follow-ups to the same exact support case', async () => {
+    const deps = baseDependencies();
+    const { journal } = durableJournal();
+    const orchestrator = createRequestOrchestrator({ ...deps, journal, opportunityRecipient: 'sales@lippelift.de' });
+    const supportData = {
+      ownsLift: 'yes' as const,
+      liftManufacturer: 'lippe' as const,
+      factoryNumber: 'FN-42',
+      factoryNumberStatus: 'provided' as const,
+      serviceRequestType: 'technical' as const,
+      priorContact: 'yes' as const,
+      priorContactReference: 'CASE-45',
+      customerName: 'Erika Muster',
+      email: 'erika@example.de',
+      category: 'technik' as const,
+      issueDescription: 'Folgefrage zum vorhandenen Vorgang.',
+    };
+
+    const first = await orchestrator.execute({
+      sessionId: 'closed-session-one', requestId: 'follow-up-one', mode: 'service', transcript: 'erste Folgefrage', supportData,
+    });
+    const second = await orchestrator.execute({
+      sessionId: 'new-session-two', requestId: 'follow-up-two', mode: 'service', transcript: 'zweite Folgefrage', supportData,
+    });
+
+    expect(deps.pipedrive.resolveFactoryCase).toHaveBeenCalledTimes(2);
+    expect(deps.pipedrive.resolveSupportReferenceCase).toHaveBeenCalledTimes(2);
+    expect(deps.pipedrive.appendServiceRequestToExistingCase).toHaveBeenCalledTimes(2);
+    expect(deps.pipedrive.appendServiceRequestToExistingCase).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      requestId: 'follow-up-one',
+      targetCase: { matchState: 'unique', personId: 31, dealId: 45, candidateCount: 1 },
+    }));
+    expect(deps.pipedrive.appendServiceRequestToExistingCase).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      requestId: 'follow-up-two',
+      targetCase: { matchState: 'unique', personId: 31, dealId: 45, candidateCount: 1 },
+    }));
+    expect(deps.pipedrive.createServiceRequest).not.toHaveBeenCalled();
+    expect(first.crm).toMatchObject({ dealId: 45, reused: true });
+    expect(second.crm).toMatchObject({ dealId: 45, reused: true });
+  });
+
+  it('creates one support case then reuses it from a completely new session when the exact reference is not indexed', async () => {
+    const deps = baseDependencies();
+    deps.pipedrive.resolveSupportReferenceCase.mockResolvedValue({ matchState: 'unresolved', candidateCount: 0 });
+    deps.pipedrive.resolveSupportFollowUpCase.mockResolvedValue({ matchState: 'unique', personId: 31, dealId: 51, candidateCount: 1 });
+    deps.pipedrive.appendServiceRequestToExistingCase.mockImplementation(async ({ sourceCase, targetCase }) => ({
+      personId: targetCase.personId,
+      dealId: targetCase.dealId,
+      noteId: 62,
+      sourceDealId: sourceCase.dealId,
+      sourceDealUrl: `https://pipedrive.test/deal/${sourceCase.dealId}`,
+      serviceDealUrl: `https://pipedrive.test/deal/${targetCase.dealId}`,
+      reused: true,
+    }));
+    const { journal } = durableJournal();
+    const orchestrator = createRequestOrchestrator({ ...deps, journal, opportunityRecipient: 'sales@lippelift.de' });
+    const base = {
+      ownsLift: 'yes' as const,
+      liftManufacturer: 'lippe' as const,
+      factoryNumber: 'FN-42',
+      factoryNumberStatus: 'provided' as const,
+      serviceRequestType: 'technical' as const,
+      customerName: 'Erika Muster',
+      email: 'erika@example.de',
+      category: 'technik' as const,
+      issueDescription: 'Lift bleibt stehen.',
+    };
+
+    const first = await orchestrator.execute({
+      sessionId: 'closed-initial-session', requestId: 'initial-support-request', mode: 'service', transcript: 'Erstanfrage',
+      supportData: { ...base, priorContact: 'no' },
+    });
+    const second = await orchestrator.execute({
+      sessionId: 'brand-new-follow-up-session', requestId: 'follow-up-support-request', mode: 'service', transcript: 'Folgeanfrage',
+      supportData: { ...base, priorContact: 'yes', priorContactReference: 'NOT-YET-INDEXED' },
+    });
+
+    expect(deps.pipedrive.createServiceRequest).toHaveBeenCalledTimes(1);
+    expect(deps.pipedrive.resolveSupportFollowUpCase).toHaveBeenCalledWith(
+      expect.objectContaining({ email: 'erika@example.de', priorContact: 'yes' }),
+      { matchState: 'unique', personId: 31, dealId: 41, factoryNumber: 'FN-42' },
+    );
+    expect(deps.pipedrive.appendServiceRequestToExistingCase).toHaveBeenCalledTimes(1);
+    expect(deps.pipedrive.appendServiceRequestToExistingCase).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: 'follow-up-support-request',
+      targetCase: { matchState: 'unique', personId: 31, dealId: 51, candidateCount: 1 },
+    }));
+    expect(first.crm).toMatchObject({ dealId: 51, reused: false });
+    expect(second.crm).toMatchObject({ dealId: 51, reused: true });
+  });
+
+  it('does not mutate support CRM when fallback identity or existing cases are ambiguous', async () => {
+    const deps = baseDependencies();
+    deps.pipedrive.resolveSupportReferenceCase.mockResolvedValue({ matchState: 'unresolved', candidateCount: 0 });
+    deps.pipedrive.resolveSupportFollowUpCase.mockResolvedValue({ matchState: 'ambiguous', candidateCount: 2 });
+    const { journal } = durableJournal();
+    const orchestrator = createRequestOrchestrator({ ...deps, journal, opportunityRecipient: 'sales@lippelift.de' });
+
+    const result = await orchestrator.execute({
+      sessionId: 'ambiguous-follow-up-session', requestId: 'ambiguous-follow-up-request', mode: 'service', transcript: 'Folgeanfrage',
+      supportData: {
+        ownsLift: 'yes', liftManufacturer: 'lippe', factoryNumber: 'FN-42', factoryNumberStatus: 'provided',
+        serviceRequestType: 'technical', priorContact: 'yes', customerName: 'Erika Muster',
+        email: 'erika@example.de', category: 'technik', issueDescription: 'Lift bleibt stehen.',
+      },
+    });
+
+    expect(deps.pipedrive.createServiceRequest).not.toHaveBeenCalled();
+    expect(deps.pipedrive.appendServiceRequestToExistingCase).not.toHaveBeenCalled();
+    expect(result.crm).toBeUndefined();
+    expect(result.sourceCase).toEqual({ matchState: 'ambiguous', candidateCount: 2 });
+  });
+
+  it('does not create a duplicate support case when prior contact is yes but no existing case resolves', async () => {
+    const deps = baseDependencies();
+    deps.pipedrive.resolveSupportReferenceCase.mockResolvedValue({ matchState: 'unresolved', candidateCount: 0 });
+    deps.pipedrive.resolveSupportFollowUpCase.mockResolvedValue({ matchState: 'unresolved', candidateCount: 0 });
+    const { journal } = durableJournal();
+    const orchestrator = createRequestOrchestrator({ ...deps, journal, opportunityRecipient: 'sales@lippelift.de' });
+
+    const result = await orchestrator.execute({
+      sessionId: 'missing-follow-up-session', requestId: 'missing-follow-up-request', mode: 'service', transcript: 'Folgeanfrage',
+      supportData: {
+        ownsLift: 'yes', liftManufacturer: 'lippe', factoryNumber: 'FN-42', factoryNumberStatus: 'provided',
+        serviceRequestType: 'technical', priorContact: 'yes', priorContactReference: 'UNKNOWN-CASE',
+        customerName: 'Erika Muster', email: 'erika@example.de', category: 'technik', issueDescription: 'Lift bleibt stehen.',
+      },
+    });
+
+    expect(deps.pipedrive.createServiceRequest).not.toHaveBeenCalled();
+    expect(deps.pipedrive.appendServiceRequestToExistingCase).not.toHaveBeenCalled();
+    expect(result.crm).toBeUndefined();
+    expect(result.sourceCase).toEqual({ matchState: 'unresolved', candidateCount: 0 });
+  });
+
+  it('does not mutate CRM when prior-contact and factory identities conflict', async () => {
+    const deps = baseDependencies();
+    deps.pipedrive.resolveSupportReferenceCase.mockResolvedValue({ matchState: 'unique', personId: 99, dealId: 45, candidateCount: 1 });
+    const { journal } = durableJournal();
+    const orchestrator = createRequestOrchestrator({ ...deps, journal, opportunityRecipient: 'sales@lippelift.de' });
+
+    const result = await orchestrator.execute({
+      sessionId: 'conflict-session', requestId: 'conflict-request', mode: 'service', transcript: 'Konflikt',
+      supportData: {
+        ownsLift: 'yes', liftManufacturer: 'lippe', factoryNumber: 'FN-42', factoryNumberStatus: 'provided',
+        serviceRequestType: 'technical', priorContact: 'yes', priorContactReference: 'CASE-45',
+        customerName: 'Andere Person', email: 'andere@example.de', category: 'technik', issueDescription: 'Test',
+      },
+    });
+
+    expect(deps.pipedrive.appendServiceRequestToExistingCase).not.toHaveBeenCalled();
+    expect(deps.pipedrive.createServiceRequest).not.toHaveBeenCalled();
+    expect(result.crm).toBeUndefined();
+    expect(result.sourceCase).toEqual({ matchState: 'ambiguous', candidateCount: 2 });
+    expect(deps.email.sendSupportNotification).toHaveBeenCalledWith(
+      'technik@lippelift.de',
+      expect.objectContaining({ matchState: 'ambiguous', dealId: undefined }),
+    );
+  });
+
+  it('does not repeat an existing-case append when SMTP resumes after a process restart', async () => {
+    const deps = baseDependencies();
+    deps.email.sendSupportNotification
+      .mockRejectedValueOnce(new Error('smtp unavailable'))
+      .mockResolvedValue(undefined);
+    const { journal, store } = durableJournal();
+    const input = {
+      sessionId: 'support-restart-one', requestId: 'support-restart-request', mode: 'service' as const, transcript: 'Folgefrage',
+      supportData: {
+        ownsLift: 'yes' as const, liftManufacturer: 'lippe' as const, factoryNumber: 'FN-42', factoryNumberStatus: 'provided' as const,
+        serviceRequestType: 'technical' as const, priorContact: 'yes' as const, priorContactReference: 'CASE-45',
+        customerName: 'Erika Muster', email: 'erika@example.de', category: 'technik' as const, issueDescription: 'Test',
+      },
+    };
+    const dependencies = { ...deps, opportunityRecipient: 'sales@lippelift.de' };
+
+    await expect(createRequestOrchestrator({ ...dependencies, journal }).execute(input)).rejects.toThrow('smtp unavailable');
+    await expect(createRequestOrchestrator({
+      ...dependencies,
+      journal: durableJournal(store).journal,
+    }).execute(input)).resolves.toMatchObject({ completed: true, crm: { dealId: 45, reused: true } });
+
+    expect(deps.pipedrive.resolveFactoryCase).toHaveBeenCalledTimes(1);
+    expect(deps.pipedrive.resolveSupportReferenceCase).toHaveBeenCalledTimes(1);
+    expect(deps.pipedrive.appendServiceRequestToExistingCase).toHaveBeenCalledTimes(1);
+    expect(deps.email.sendSupportNotification).toHaveBeenCalledTimes(2);
   });
 
   it('retries only email after SMTP failure and never duplicates the Serviceanfrage', async () => {

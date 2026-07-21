@@ -56,6 +56,7 @@ describe('createGeminiService', () => {
       'customerName',
       'category',
       'issueDescription',
+      'priorContact',
     ]);
   });
 
@@ -75,7 +76,7 @@ describe('createGeminiService', () => {
     expect(leadDeclaration.parameters.required).toContain('priorContact');
     expect(serviceDeclaration.parameters.properties.priorContact.enum).toEqual(['yes', 'no', 'unknown']);
     expect(serviceDeclaration.parameters.properties.priorContactReference).toBeDefined();
-    expect(serviceDeclaration.parameters.required).not.toContain('priorContact');
+    expect(serviceDeclaration.parameters.required).toContain('priorContact');
   });
 
   it('registers phone-or-email submission contracts without requiring phone specifically', async () => {
@@ -140,6 +141,7 @@ describe('createGeminiService', () => {
         ownsLift: 'yes',
         liftManufacturer: 'other',
         serviceRequestType: 'technical',
+        priorContact: 'unknown',
       },
     },
   ])('rejects $functionName without a usable contact before reporting success', async ({ functionName, eventType, args }) => {
@@ -185,13 +187,30 @@ describe('createGeminiService', () => {
     }));
   });
 
-  it('rejects submit_lead without prior-contact status before reporting success', async () => {
-    const functionName = 'submit_lead';
-    const eventType = 'lead';
+  it.each([
+    {
+      functionName: 'submit_lead',
+      eventType: 'lead',
+      args: { ownsLift: 'no', customerName: 'Maria Schmidt', email: 'maria@example.de' },
+    },
+    {
+      functionName: 'submit_service_request',
+      eventType: 'service',
+      args: {
+        ownsLift: 'yes',
+        liftManufacturer: 'other',
+        serviceRequestType: 'technical',
+        customerName: 'Maria Schmidt',
+        category: 'technik',
+        issueDescription: 'Lift bleibt stehen.',
+        email: 'maria@example.de',
+      },
+    },
+  ])('rejects $functionName without prior-contact status before reporting success', async ({ functionName, eventType, args }) => {
     const initialResponse = {
       candidates: [{
         content: {
-          parts: [{ functionCall: { name: functionName, args: { ownsLift: 'no', customerName: 'Maria Schmidt', email: 'maria@example.de' } } }],
+          parts: [{ functionCall: { name: functionName, args } }],
         },
       }],
     };

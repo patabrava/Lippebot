@@ -314,7 +314,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
         }
       }
       if (event.type === 'lead' && event.leadData) leadData = event.leadData;
-      if (event.type === 'service' && event.serviceData) {
+      if (event.type === 'service' && event.serviceData && hasPriorContactStatus(event.serviceData)) {
         supportData = { ...event.serviceData, category: resolveSupportCategory(event.serviceData) };
       }
     }
@@ -326,7 +326,8 @@ export function createChatRoute(deps: ChatDeps): Hono {
     if (!supportData && lastMode === 'service' && hasRequiredServiceFields(lastCollectedData)
       && lastCollectedData.ownsLift === 'yes'
       && ['lippe', 'other'].includes(String(lastCollectedData.liftManufacturer))
-      && typeof lastCollectedData.serviceRequestType === 'string') {
+      && typeof lastCollectedData.serviceRequestType === 'string'
+      && hasPriorContactStatus(lastCollectedData)) {
       supportData = { ...(lastCollectedData as SupportData), category: resolveSupportCategory(lastCollectedData as SupportData) };
     }
 

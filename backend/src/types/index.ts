@@ -121,6 +121,11 @@ export interface SupportMatchResult {
   candidateCount: number;
 }
 
+export type SupportReferenceCaseResult =
+  | { matchState: 'unique'; personId: number; dealId: number; candidateCount: 1 }
+  | { matchState: 'unresolved'; candidateCount: 0 }
+  | { matchState: 'ambiguous'; candidateCount: number };
+
 export interface SupportHandoffResult {
   matchState: SupportMatchState;
   personId?: number;

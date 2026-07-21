@@ -1,5 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { opportunityCheckpointMatches } from './live-request-routing-helpers.js';
 
 type Json = Record<string, unknown>;
 const runId = process.env.LIVE_E2E_RUN_ID;
@@ -152,9 +153,18 @@ const evidence = chat.results.map((result) => {
     && result.events.some((event: Json) => String(event.content ?? '').includes('112') && String(event.content ?? '').includes('+49 (0)5261 9666-0'))
   );
   const opportunityMatches = opportunityShapeMatches(String(result.useCase));
+  const opportunityCheckpointMatchesExpected = opportunityCheckpointMatches(
+    String(result.useCase),
+    checkpoints,
+    chat.fixtures as { people?: number[]; deals?: number[] },
+  );
   const pass = result.useCase === 'UC-17'
     ? emergencyMatches && smtpSendCompletedWithoutReportedRejection
-    : Boolean(result.completed && crmShapeMatches && opportunityMatches && smtpSendCompletedWithoutReportedRejection);
+    : Boolean(result.completed
+      && crmShapeMatches
+      && opportunityMatches
+      && opportunityCheckpointMatchesExpected
+      && smtpSendCompletedWithoutReportedRejection);
   return {
     useCase: result.useCase,
     subject: result.subject,
@@ -175,6 +185,7 @@ const evidence = chat.results.map((result) => {
     checkpoints,
     crmShapeMatches,
     opportunityMatches,
+    opportunityCheckpointMatches: opportunityCheckpointMatchesExpected,
     pass,
   };
 });

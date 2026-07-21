@@ -2278,6 +2278,8 @@ describe('createPipedriveService', () => {
         expect(body.deal_id).toBe(801);
         expect(body.content).toContain(`[LIPPEBOT REQUEST:${requestId}]`);
         expect(body.content).toContain('Originaler Vorgang: 701');
+        expect(body.content).toContain('Vorheriger Kontakt: ja');
+        expect(body.content).toContain('Referenz: KEEP-CASE-42');
         expect(body.content).toContain('https://lippelift.pipedrive.com/deal/701');
         expect(body.content).toContain('Vollstaendiger Anfrage-Transkript');
         return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 901 } }) };
@@ -2327,6 +2329,8 @@ describe('createPipedriveService', () => {
         factoryNumber: 'FN-42',
         factoryNumberStatus: 'provided',
         serviceRequestType: 'technical',
+        priorContact: 'yes',
+        priorContactReference: 'KEEP-CASE-42',
         category: 'technik',
       },
       sourceCase: { matchState: 'unique', personId: 321, dealId: 701, factoryNumber: 'FN-42' },
@@ -2398,5 +2402,209 @@ describe('createPipedriveService', () => {
       transcript: 'Test',
     })).resolves.toMatchObject({ personId: 321, dealId: 801, noteId: 901, reused: true });
     expect(mockFetch.mock.calls.every(([, init]) => !init?.method)).toBe(true);
+  });
+
+  it('appendServiceRequestToExistingCase pins one request-marked note and reads the existing deal back', async () => {
+    const requestId = 'follow-up-request-42';
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/notes') && !init?.method) {
+        expect(url.searchParams.get('deal_id')).toBe('801');
+        return { ok: true, json: () => Promise.resolve({ success: true, data: [] }) };
+      }
+      if (url.pathname.endsWith('/notes') && init?.method === 'POST') {
+        const body = JSON.parse(init.body as string);
+        expect(body).toEqual(expect.objectContaining({ person_id: 321, deal_id: 801 }));
+        expect(body.content).toContain(`[LIPPEBOT REQUEST:${requestId}]`);
+        expect(body.content).toContain('Originaler Vorgang: 701');
+        expect(body.content).toContain('Vollstaendiger Anfrage-Transkript');
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 902 } }) };
+      }
+      if (url.pathname.endsWith('/deals/801')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 801, person_id: { value: 321 }, status: 'open' } }) };
+      }
+      if (url.pathname.endsWith('/notes/902')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 902, deal_id: 801, person_id: 321, content: `[LIPPEBOT REQUEST:${requestId}]` } }) };
+      }
+      throw new Error(`Unexpected request: ${init?.method ?? 'GET'} ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+    const service = createPipedriveService('test-key', 9, 10, { webBaseUrl: 'https://lippelift.pipedrive.com' });
+
+    await expect(service.appendServiceRequestToExistingCase({
+      requestId,
+      data: {
+        customerName: 'Erika Muster', email: 'erika@example.de', issueDescription: 'Folgefrage',
+        liftManufacturer: 'lippe', factoryNumber: 'FN-42', factoryNumberStatus: 'provided', serviceRequestType: 'technical',
+      },
+      sourceCase: { matchState: 'unique', personId: 321, dealId: 701, factoryNumber: 'FN-42' },
+      targetCase: { matchState: 'unique', personId: 321, dealId: 801, candidateCount: 1 },
+      transcript: 'Kunde: Noch eine Frage.\nSarah: Danke.',
+    })).resolves.toEqual({
+      personId: 321,
+      dealId: 801,
+      noteId: 902,
+      sourceDealId: 701,
+      sourceDealUrl: 'https://lippelift.pipedrive.com/deal/701',
+      serviceDealUrl: 'https://lippelift.pipedrive.com/deal/801',
+      reused: true,
+    });
+    expect(mockFetch.mock.calls.some(([url, init]) => new URL(String(url)).pathname.endsWith('/deals') && init?.method === 'POST')).toBe(false);
+  });
+
+  it('resolveSupportReferenceCase deduplicates one exact open referenced deal', async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      expect(url.pathname).toMatch(/\/deals\/search$/);
+      expect(url.searchParams.get('term')).toBe('CASE-KEEP-42');
+      expect(url.searchParams.get('fields')).toBe('custom_fields');
+      return {
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          data: { items: [
+            { item: { id: 801, status: 'open', person: { id: 321 } } },
+            { item: { id: 801, status: 'open', person: { id: 321 } } },
+          ] },
+        }),
+      };
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await expect(createPipedriveService('test-key', 9, 10).resolveSupportReferenceCase({
+      priorContactReference: 'CASE-KEEP-42',
+    })).resolves.toEqual({ matchState: 'unique', personId: 321, dealId: 801, candidateCount: 1 });
+  });
+
+  it('appendServiceRequestToExistingCase reuses its exact marker without another mutation', async () => {
+    const marker = '[LIPPEBOT REQUEST:follow-up-existing]';
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (init?.method) throw new Error(`Unexpected mutation: ${init.method} ${url.pathname}`);
+      if (url.pathname.endsWith('/notes')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: [{ id: 902, deal_id: 801, person_id: 321, content: marker }] }) };
+      }
+      if (url.pathname.endsWith('/deals/801')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 801, person_id: { value: 321 }, status: 'open' } }) };
+      }
+      if (url.pathname.endsWith('/notes/902')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { id: 902, deal_id: 801, person_id: 321, content: marker } }) };
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await expect(createPipedriveService('test-key', 9, 10, { webBaseUrl: 'https://lippelift.pipedrive.com' })
+      .appendServiceRequestToExistingCase({
+        requestId: 'follow-up-existing',
+        data: { customerName: 'Erika Muster', issueDescription: 'Test' },
+        sourceCase: { matchState: 'unique', personId: 321, dealId: 701, factoryNumber: 'FN-42' },
+        targetCase: { matchState: 'unique', personId: 321, dealId: 801, candidateCount: 1 },
+        transcript: 'Test',
+      })).resolves.toMatchObject({ dealId: 801, noteId: 902, reused: true });
+    expect(mockFetch.mock.calls.every(([, init]) => !init?.method)).toBe(true);
+  });
+
+  it('resolveSupportFollowUpCase reuses the one open Serviceanfrage for the exact factory person', async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/persons/search')) {
+        expect(url.searchParams.get('fields')).toBe('email');
+        expect(url.searchParams.get('exact_match')).toBe('true');
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { items: [{ item: { id: 321, name: 'Erika Muster' } }] } }) };
+      }
+      if (url.pathname.endsWith('/persons/321/deals')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: [
+          { id: 701, title: 'LIPPEBOT QA KEEP source', status: 'open', person_id: { value: 321 } },
+          { id: 801, title: 'Serviceanfrage - Erika Muster', status: 'open', person_id: { value: 321 } },
+          { id: 901, title: 'Neue Verkaufschance', status: 'open', person_id: { value: 321 } },
+        ] }) };
+      }
+      if (url.pathname.endsWith('/notes')) {
+        expect(url.searchParams.get('deal_id')).toBe('801');
+        return { ok: true, json: () => Promise.resolve({ success: true, data: [
+          { id: 991, deal_id: 801, content: '<div>Originaler Vorgang: 701</div><div>LIPPEBOT QA KEEP</div>' },
+        ] }) };
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await expect(createPipedriveService('test-key', 9, 10).resolveSupportFollowUpCase(
+      { email: 'erika@example.de', priorContact: 'yes' },
+      { matchState: 'unique', personId: 321, dealId: 701, factoryNumber: 'FN-42' },
+    )).resolves.toEqual({ matchState: 'unique', personId: 321, dealId: 801, candidateCount: 1 });
+  });
+
+  it('resolveSupportFollowUpCase refuses an exact contact that points to another person', async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/persons/search')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { items: [{ item: { id: 999 } }] } }) };
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await expect(createPipedriveService('test-key', 9, 10).resolveSupportFollowUpCase(
+      { email: 'wrong@example.de', priorContact: 'yes' },
+      { matchState: 'unique', personId: 321, dealId: 701, factoryNumber: 'FN-42' },
+    )).resolves.toEqual({ matchState: 'ambiguous', candidateCount: 1 });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolveSupportFollowUpCase refuses multiple open Serviceanfragen', async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/persons/search')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { items: [] } }) };
+      }
+      if (url.pathname.endsWith('/persons/321/deals')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: [
+          { id: 701, title: 'Source', status: 'open', person_id: { value: 321 } },
+          { id: 801, title: 'Serviceanfrage - Erika Muster', status: 'open', person_id: { value: 321 } },
+          { id: 802, title: 'Serviceanfrage - Erika Muster', status: 'open', person_id: { value: 321 } },
+        ] }) };
+      }
+      if (url.pathname.endsWith('/notes')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: [
+          { id: Number(url.searchParams.get('deal_id')) + 100, content: 'Originaler Vorgang: 701' },
+        ] }) };
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await expect(createPipedriveService('test-key', 9, 10).resolveSupportFollowUpCase(
+      { email: 'new@example.de', priorContact: 'yes' },
+      { matchState: 'unique', personId: 321, dealId: 701, factoryNumber: 'FN-42' },
+    )).resolves.toEqual({ matchState: 'ambiguous', candidateCount: 2 });
+  });
+
+  it('resolveSupportFollowUpCase ignores a service case linked to another factory source deal', async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/persons/search')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: { items: [{ item: { id: 321 } }] } }) };
+      }
+      if (url.pathname.endsWith('/persons/321/deals')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: [
+          { id: 701, title: 'Source Lift A', status: 'open', person_id: { value: 321 } },
+          { id: 801, title: 'Serviceanfrage - Erika Muster', status: 'open', person_id: { value: 321 } },
+        ] }) };
+      }
+      if (url.pathname.endsWith('/notes')) {
+        return { ok: true, json: () => Promise.resolve({ success: true, data: [
+          { id: 991, deal_id: 801, content: 'Originaler Vorgang: 777' },
+        ] }) };
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    await expect(createPipedriveService('test-key', 9, 10).resolveSupportFollowUpCase(
+      { email: 'erika@example.de', priorContact: 'yes' },
+      { matchState: 'unique', personId: 321, dealId: 701, factoryNumber: 'FN-A' },
+    )).resolves.toEqual({ matchState: 'unresolved', candidateCount: 0 });
   });
 });

@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e:live:routing": "tsx scripts/live-request-routing-e2e.ts",
-    "e2e:live:readback": "tsx scripts/live-request-routing-readback.ts"
+    "e2e:live:readback": "tsx scripts/live-request-routing-readback.ts",
+    "e2e:live:prior-contact-reuse": "tsx scripts/live-prior-contact-reuse-e2e.ts"
   },
   "dependencies": {
     "@google-cloud/vertexai": "^1.12.0",

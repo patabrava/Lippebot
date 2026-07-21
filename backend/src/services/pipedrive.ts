@@ -2,7 +2,7 @@ import { resolveSupportCategory } from '../support/support-routing.js';
 import { buildPipedriveTranscriptMarker } from '../chat/transcript.js';
 import { buildPipedriveDealUrl } from '../crm/pipedrive-links.js';
 import { formatBerlinDate } from '../time/berlin.js';
-import type { FactoryCaseResult, LeadCrmResult, LeadData, ServiceData, ServiceRequestCrmResult, SupportData, SupportMatchResult } from '../types/index.js';
+import type { FactoryCaseResult, LeadCrmResult, LeadData, ServiceData, ServiceRequestCrmResult, SupportData, SupportMatchResult, SupportReferenceCaseResult } from '../types/index.js';
 
 const PIPEDRIVE_API_BASE = 'https://api.pipedrive.com/v1';
 const STEPHANIE_KREUZBUSCH_USER_ID = 24093350;
@@ -309,6 +309,7 @@ export function createPipedriveService(
 
   type PersonDeal = {
     id: number;
+    title?: string;
     status?: string;
     pipeline_id?: number;
     person_id?: { value?: number } | number;
@@ -457,11 +458,18 @@ export function createPipedriveService(
   }): string {
     const sourceDealUrl = buildPipedriveDealUrl(webBaseUrl, input.sourceCase.dealId);
     const contact = input.data.email?.trim() || input.data.phone?.trim() || 'nicht angegeben';
+    const priorContact = input.data.priorContact === 'yes'
+      ? 'ja'
+      : input.data.priorContact === 'no'
+        ? 'nein'
+        : 'unbekannt';
     return [
       serviceRequestMarker(input.requestId),
       `Anfrage-ID: ${input.requestId}`,
       `Anliegen: ${input.data.issueDescription ?? 'nicht angegeben'}`,
       `Kontakt: ${contact}`,
+      `Vorheriger Kontakt: ${priorContact}`,
+      input.data.priorContactReference?.trim() ? `Referenz: ${input.data.priorContactReference.trim()}` : undefined,
       `Hersteller: ${input.data.liftManufacturer ?? 'lippe'}`,
       `Fabriknummer: ${input.data.factoryNumber ?? input.sourceCase.factoryNumber}`,
       `Originaler Vorgang: ${input.sourceCase.dealId}`,
@@ -469,7 +477,7 @@ export function createPipedriveService(
       '',
       'Vollstaendiger Anfrage-Transkript:',
       input.transcript,
-    ].join('\n');
+    ].filter((line): line is string => line !== undefined).join('\n');
   }
 
   async function createServiceRequest(input: {
@@ -542,9 +550,124 @@ export function createPipedriveService(
     };
   }
 
+  async function appendServiceRequestToExistingCase(input: {
+    requestId: string;
+    data: SupportData;
+    sourceCase: Extract<FactoryCaseResult, { matchState: 'unique' }>;
+    targetCase: Extract<SupportReferenceCaseResult, { matchState: 'unique' }>;
+    transcript: string;
+  }): Promise<ServiceRequestCrmResult> {
+    if (!configured) throw new Error('Pipedrive not configured');
+    if (input.sourceCase.personId !== input.targetCase.personId) {
+      throw new Error('Prior-contact case does not belong to the factory-matched person');
+    }
+    if (input.sourceCase.dealId === input.targetCase.dealId) {
+      throw new Error('Prior-contact case cannot be the protected factory source deal');
+    }
+
+    const marker = serviceRequestMarker(input.requestId);
+    const existingNotes = (await apiGet<Array<Record<string, unknown>> | null>('/notes', {
+      deal_id: input.targetCase.dealId,
+      limit: 500,
+    })) ?? [];
+    const markerNotes = existingNotes.filter((note) => typeof note.content === 'string' && note.content.includes(marker));
+    if (markerNotes.length > 1) throw new Error('Existing-case request marker is ambiguous');
+
+    const noteId = markerNotes.length === 1
+      ? numericId(markerNotes[0].id) ?? 0
+      : numericId((await apiCall('/notes', {
+        person_id: input.targetCase.personId,
+        deal_id: input.targetCase.dealId,
+        pinned_to_deal_flag: 1,
+        pinned_to_person_flag: 1,
+        content: buildServiceRequestNote(input),
+      })).id) ?? 0;
+    if (!noteId) throw new Error('Existing-case request note is missing an ID');
+
+    const [dealReadback, noteReadback] = await Promise.all([
+      apiGet<Record<string, unknown>>(`/deals/${input.targetCase.dealId}`),
+      apiGet<Record<string, unknown>>(`/notes/${noteId}`),
+    ]);
+    if (numericId(dealReadback.id) !== input.targetCase.dealId
+      || numericId(dealReadback.person_id) !== input.targetCase.personId
+      || dealReadback.status !== 'open') {
+      throw new Error('Existing-case readback mismatch: deal');
+    }
+    if (numericId(noteReadback.id) !== noteId
+      || numericId(noteReadback.deal_id) !== input.targetCase.dealId
+      || (numericId(noteReadback.person_id) !== undefined && numericId(noteReadback.person_id) !== input.targetCase.personId)
+      || typeof noteReadback.content !== 'string'
+      || !noteReadback.content.includes(marker)) {
+      throw new Error('Existing-case readback mismatch: note');
+    }
+
+    return {
+      personId: input.targetCase.personId,
+      dealId: input.targetCase.dealId,
+      noteId,
+      sourceDealId: input.sourceCase.dealId,
+      sourceDealUrl: buildPipedriveDealUrl(webBaseUrl, input.sourceCase.dealId),
+      serviceDealUrl: buildPipedriveDealUrl(webBaseUrl, input.targetCase.dealId),
+      reused: true,
+    };
+  }
+
   async function getOpenPersonDeals(personId: number): Promise<PersonDeal[]> {
     const deals = await apiGet<PersonDeal[]>(`/persons/${personId}/deals`, { status: 'open' });
     return (deals ?? []).filter(isOpenSalesDeal);
+  }
+
+  async function resolveSupportFollowUpCase(
+    data: SupportData,
+    sourceCase: Extract<FactoryCaseResult, { matchState: 'unique' }>,
+  ): Promise<SupportReferenceCaseResult> {
+    if (!configured) throw new Error('Pipedrive not configured');
+
+    const contactMatches: number[][] = [];
+    const email = normalizeEmail(data.email);
+    if (email) contactMatches.push(await searchPeople(email, 'email'));
+    const phone = normalizePhoneNumber(data.phone);
+    if (phone) contactMatches.push(await searchPeople(phone, 'phone'));
+
+    for (const matches of contactMatches) {
+      const uniqueMatches = [...new Set(matches)];
+      if (uniqueMatches.some((personId) => personId !== sourceCase.personId)) {
+        return { matchState: 'ambiguous', candidateCount: uniqueMatches.length };
+      }
+    }
+
+    const deals = (await apiGet<PersonDeal[] | null>(`/persons/${sourceCase.personId}/deals`, { status: 'open' })) ?? [];
+    const serviceDeals = [...new Map(deals
+      .filter((deal) => isOpenDeal(deal)
+        && deal.id !== sourceCase.dealId
+        && typeof deal.title === 'string'
+        && deal.title.startsWith('Serviceanfrage - '))
+      .map((deal) => [deal.id, deal])).values()];
+    const sourceMarker = `Originaler Vorgang: ${sourceCase.dealId}`;
+    const linkedServiceDeals = (await Promise.all(serviceDeals.map(async (deal) => {
+      const notes = (await apiGet<Array<Record<string, unknown>> | null>('/notes', {
+        deal_id: deal.id,
+        limit: 500,
+      })) ?? [];
+      const linked = notes.some((note) => {
+        if (typeof note.content !== 'string') return false;
+        const normalizedContent = note.content
+          .replace(/<br\s*\/?>/gi, '\n')
+          .replace(/<\/(?:div|p|li)>/gi, '\n')
+          .replace(/<[^>]+>/g, '');
+        return normalizedContent.split(/\r?\n/).some((line) => line.trim() === sourceMarker);
+      });
+      return linked ? deal : undefined;
+    }))).filter((deal): deal is PersonDeal => deal !== undefined);
+
+    if (linkedServiceDeals.length === 0) return { matchState: 'unresolved', candidateCount: 0 };
+    if (linkedServiceDeals.length > 1) return { matchState: 'ambiguous', candidateCount: linkedServiceDeals.length };
+    return {
+      matchState: 'unique',
+      personId: sourceCase.personId,
+      dealId: linkedServiceDeals[0].id,
+      candidateCount: 1,
+    };
   }
 
   function supportIdentifiers(data: SupportData): string[] {
@@ -605,15 +728,7 @@ export function createPipedriveService(
     return { status: 'unique', personId, dealId: openDeals[0].id };
   }
 
-  function matchFromDeal(deal: DealSearchItem): SupportMatchResult {
-    const personId = getDealPersonId(deal);
-    return personId
-      ? { matchState: 'unique', personId, dealId: deal.id, candidateCount: 1 }
-      : { matchState: 'unresolved', dealId: deal.id, candidateCount: 1 };
-  }
-
-  async function resolveSupportDeal(data: SupportData, candidatePersonIds: number[] = []): Promise<SupportMatchResult | undefined> {
-    const candidateSet = new Set(candidatePersonIds);
+  async function resolveSupportReferenceCase(data: SupportData): Promise<SupportReferenceCaseResult> {
     const identifierDealMatches: DealSearchItem[] = [];
     for (const identifier of supportIdentifiers(data)) {
       identifierDealMatches.push(...await searchDeals(identifier, 'custom_fields'));
@@ -621,17 +736,32 @@ export function createPipedriveService(
 
     const openIdentifierDeals = [...new Map(identifierDealMatches.map((deal) => [deal.id, deal])).values()]
       .filter(isOpenDeal);
+    if (openIdentifierDeals.length === 0) {
+      return { matchState: 'unresolved', candidateCount: 0 };
+    }
     if (openIdentifierDeals.length > 1) {
       return { matchState: 'ambiguous', candidateCount: openIdentifierDeals.length };
     }
-    if (openIdentifierDeals.length === 1) {
-      const deal = openIdentifierDeals[0];
-      const personId = getDealPersonId(deal);
-      if (!personId) return { matchState: 'ambiguous', candidateCount: 1 };
-      if (candidateSet.size > 0 && !candidateSet.has(personId)) {
+
+    const personId = getDealPersonId(openIdentifierDeals[0]);
+    if (!personId) return { matchState: 'ambiguous', candidateCount: 1 };
+    return {
+      matchState: 'unique',
+      personId,
+      dealId: openIdentifierDeals[0].id,
+      candidateCount: 1,
+    };
+  }
+
+  async function resolveSupportDeal(data: SupportData, candidatePersonIds: number[] = []): Promise<SupportMatchResult | undefined> {
+    const candidateSet = new Set(candidatePersonIds);
+    const referenceCase = await resolveSupportReferenceCase(data);
+    if (referenceCase.matchState === 'ambiguous') return referenceCase;
+    if (referenceCase.matchState === 'unique') {
+      if (candidateSet.size > 0 && !candidateSet.has(referenceCase.personId)) {
         return { matchState: 'ambiguous', candidateCount: candidateSet.size + 1 };
       }
-      return matchFromDeal(deal);
+      return referenceCase;
     }
 
     const uniquePersonId = uniqueCandidate(candidatePersonIds);
@@ -1096,8 +1226,11 @@ export function createPipedriveService(
     createServiceActivity,
     createSupportCase,
     createServiceRequest,
+    appendServiceRequestToExistingCase,
     resolveFactoryCase,
     resolveSupportPerson,
+    resolveSupportReferenceCase,
+    resolveSupportFollowUpCase,
     createChatTranscriptNote,
   };
 }

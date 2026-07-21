@@ -139,7 +139,8 @@ describe('POST /api/chat', () => {
   it('emits factory help then completes only after the request orchestrator succeeds', async () => {
     const supportData = {
       ownsLift: 'yes' as const, liftManufacturer: 'lippe' as const, factoryNumber: 'FN-42', factoryNumberStatus: 'provided' as const,
-      serviceRequestType: 'technical' as const, customerName: 'Erika Muster', email: 'erika@example.de', category: 'technik' as const, issueDescription: 'Fehler',
+      serviceRequestType: 'technical' as const, priorContact: 'no' as const,
+      customerName: 'Erika Muster', email: 'erika@example.de', category: 'technik' as const, issueDescription: 'Fehler',
     };
     const execute = vi.fn().mockResolvedValue({ requestId: 'req-service', kind: 'service', completed: true, recipient: 'technik@lippelift.de' });
     const chatRoute = createChatRoute({
@@ -164,6 +165,39 @@ describe('POST /api/chat', () => {
     expect(text).toContain('"action":"show_factory_number_help"');
     expect(text).toContain('"action":"request_completed"');
     expect(text).toContain('Haben Sie noch ein weiteres Anliegen?');
+    expect(text).toContain('"type":"done"');
+  });
+
+  it('does not execute a request-scoped support handoff before prior-contact status is known', async () => {
+    const supportData = {
+      ownsLift: 'yes' as const,
+      liftManufacturer: 'other' as const,
+      serviceRequestType: 'technical' as const,
+      customerName: 'Erika Muster',
+      email: 'erika@example.de',
+      category: 'technik' as const,
+      issueDescription: 'Lift bleibt stehen.',
+    };
+    const execute = vi.fn();
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'service' as const, serviceData: supportData };
+          yield { type: 'state' as const, state: { sessionId, mode: 'service' as const, collectedData: supportData } };
+        },
+      },
+      pipedrive: createMockPipedrive(), email: createMockEmail(), requestOrchestrator: { execute }, notificationEmailTo: '', serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'missing-prior-service', requestId: 'req-missing-prior-service', message: 'Technisches Anliegen', history: [] }),
+    })).text();
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(text).not.toContain('"action":"request_completed"');
     expect(text).toContain('"type":"done"');
   });
 

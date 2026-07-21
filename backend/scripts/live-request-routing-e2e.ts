@@ -1,6 +1,10 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseEmailRecipients } from '../src/email/recipients.js';
+import {
+  buildRunUniquePhone,
+  shouldRetryChatAttempt,
+} from './live-request-routing-helpers.js';
 
 type Json = Record<string, unknown>;
 type CaseResult = {
@@ -13,6 +17,7 @@ type CaseResult = {
   expectedRecipients: string[];
   events: Json[];
   completed: boolean;
+  attempts: number;
 };
 
 const confirm = process.env.LIVE_E2E_CONFIRM;
@@ -114,7 +119,7 @@ function leadMessage(useCase: string, label: string, input: {
 
 function serviceMessage(useCase: string, label: string, input: {
   name: string; email: string; manufacturer: 'LIPPE' | 'Fremdhersteller';
-  kind: string; factory?: string; unavailable?: boolean;
+  kind: string; factory?: string; unavailable?: boolean; prior?: 'ja' | 'nein' | 'unbekannt'; reference?: string;
 }): string {
   return [
     'Ich besitze bereits einen Lift und moechte verbindlich eine Serviceanfrage absenden.',
@@ -122,6 +127,8 @@ function serviceMessage(useCase: string, label: string, input: {
     input.factory ? `Fabriknummer: ${input.factory}.` : '',
     input.unavailable ? 'Die Fabriknummer ist nicht verfuegbar.' : '',
     `Anfrageart: ${input.kind}.`,
+    `Bereits mit uns gesprochen oder geschrieben: ${input.prior ?? 'nein'}.`,
+    input.reference ? `Referenz: ${input.reference}.` : '',
     `Kundenname: ${input.name}. E-Mail: ${input.email}.`,
     `Problembeschreibung und Test-Betreff: ${subject(useCase, label)}.`,
     'Alle Pflichtangaben sind vorhanden. Bitte jetzt absenden und das submit_service_request Tool aufrufen.',
@@ -131,19 +138,28 @@ function serviceMessage(useCase: string, label: string, input: {
 async function chat(useCase: string, label: string, message: string, expected: string, primaryRecipient: string, options: { sessionId?: string; requestId?: string } = {}): Promise<CaseResult> {
   const requestId = options.requestId || `e2e-${useCase}-${runId}-${label.replace(/[^A-Za-z0-9]/g, '').slice(0, 16)}`;
   const sessionId = options.sessionId || `e2e-session-${useCase}-${runId}`;
-  const response = await fetch(`${baseUrl}/api/chat`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ sessionId, requestId, message, history: [] }),
-  });
-  const raw = await response.text();
-  if (!response.ok) throw new Error(`${useCase} HTTP ${response.status}: ${raw}`);
-  const events = raw.split(/\r?\n/).filter((line) => line.startsWith('data: ')).map((line) => JSON.parse(line.slice(6)) as Json);
-  const completed = events.some((event) => event.type === 'action' && event.action === 'request_completed');
   const expectedRecipients = primaryRecipient === 'none'
     ? []
     : parseEmailRecipients(primaryRecipient, ...internalRecipients);
-  return { useCase, subject: subject(useCase, label), requestId, sessionId, expected, primaryRecipient, expectedRecipients, events, completed };
+  const maxAttempts = Math.max(1, Number(process.env.LIVE_E2E_CHAT_ATTEMPTS || 4));
+  const retryDelayMs = Math.max(0, Number(process.env.LIVE_E2E_RETRY_DELAY_MS || 10_000));
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const response = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId, requestId, message, history: [] }),
+    });
+    const raw = await response.text();
+    if (!response.ok) throw new Error(`${useCase} HTTP ${response.status}: ${raw}`);
+    const events = raw.split(/\r?\n/).filter((line) => line.startsWith('data: ')).map((line) => JSON.parse(line.slice(6)) as Json);
+    const completed = events.some((event) => event.type === 'action' && event.action === 'request_completed');
+    const result = { useCase, subject: subject(useCase, label), requestId, sessionId, expected, primaryRecipient, expectedRecipients, events, completed, attempts: attempt };
+    if (!shouldRetryChatAttempt(events, completed, primaryRecipient !== 'none', attempt, maxAttempts)) return result;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, retryDelayMs * attempt));
+  }
+
+  throw new Error(`${useCase} exhausted chat attempts`);
 }
 
 async function main(): Promise<void> {
@@ -151,15 +167,17 @@ async function main(): Promise<void> {
   await mkdir(outputDir, { recursive: true });
   const field = await factoryFieldKey();
   const suffix = runId.slice(-8);
+  const uniquePhone = buildRunUniquePhone(runId, 2);
+  const priorPhone = buildRunUniquePhone(runId, 3);
 
   const uniqueName = `Eetwo Unique ${suffix}`;
   const uniqueEmail = `e2e.unique.${runId}@example.invalid`;
-  const uniquePerson = await fixturePerson(uniqueName, uniqueEmail, '+49 151 70000102');
+  const uniquePerson = await fixturePerson(uniqueName, uniqueEmail, uniquePhone);
   const uniqueDeal = await fixtureDeal(`E2E existing opportunity UC02 ${runId}`, uniquePerson);
 
   const priorName = `Eetwo Prior ${suffix}`;
   const priorEmail = `e2e.prior.${runId}@example.invalid`;
-  const priorPerson = await fixturePerson(priorName, priorEmail, '+49 151 70000103');
+  const priorPerson = await fixturePerson(priorName, priorEmail, priorPhone);
   const priorDeal = await fixtureDeal(`E2E prior opportunity UC03 ${runId}`, priorPerson);
 
   const ambiguousName = `Eetwo Ambiguous ${suffix}`;
@@ -196,10 +214,10 @@ async function main(): Promise<void> {
     name: `Eetwo New ${suffix}`, email: `e2e.new.${runId}@example.invalid`, prior: 'nein',
   }), 'create one opportunity', 'sales@lippelift.de'));
   results.push(await chat('UC-02', 'reuse unique opportunity', leadMessage('UC-02', 'reuse unique opportunity', {
-    name: uniqueName, email: uniqueEmail, phone: '+49 151 70000102', prior: 'nein',
+    name: uniqueName, email: uniqueEmail, phone: uniquePhone, prior: 'nein',
   }), `reuse deal ${uniqueDeal}`, 'sales@lippelift.de'));
   results.push(await chat('UC-03', 'reuse prior contact', leadMessage('UC-03', 'reuse prior contact', {
-    name: priorName, email: priorEmail, phone: '+49 151 70000103', prior: 'ja', reference: `E2E prior opportunity UC03 ${runId}`,
+    name: priorName, email: priorEmail, phone: priorPhone, prior: 'ja', reference: `E2E prior opportunity UC03 ${runId}`,
   }), `reuse deal ${priorDeal}`, 'sales@lippelift.de'));
   results.push(await chat('UC-04', 'prior contact no case', leadMessage('UC-04', 'prior contact no case', {
     name: `Eetwo Missing ${suffix}`, email: `e2e.missing.${runId}@example.invalid`, prior: 'ja', reference: `NOCASE-${runId}`,

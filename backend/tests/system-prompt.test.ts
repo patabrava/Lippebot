@@ -56,12 +56,15 @@ describe('buildSystemPrompt', () => {
 
   it('asks both funnels about prior contact and follows a yes with a reference before contact details', () => {
     const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Diese Regeln gelten fuer den Anfrage- und Service-Modus');
     expect(prompt).toContain('Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?');
     expect(prompt).toContain('Hast du dazu eine Angebots-, Auftrags- oder Vorgangsnummer zur Hand?');
     expect(prompt).toContain('Welche E-Mail-Adresse oder Telefonnummer hast du damals verwendet?');
     expect(prompt).toContain('Frage nicht erneut, wenn');
     expect(prompt).toContain('priorContact = unknown');
     expect(prompt).toContain('Eine Antwort mit nein verhindert niemals die bestehende CRM-Dublettenprüfung');
+    expect(prompt).toContain('Vorheriger Kontakt zu diesem Anliegen: yes, no oder unknown (Pflicht)');
+    expect(prompt).toContain('Rufe `submit_service_request` erst auf, wenn priorContact');
   });
 
   it('includes boundary rules', () => {
