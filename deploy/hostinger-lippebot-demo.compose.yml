@@ -16,7 +16,7 @@ services:
       '
     environment:
       PORT: 3000
-      CORS_ORIGIN: ${CORS_ORIGIN}
+      CORS_ORIGIN: ${CORS_ORIGIN:-https://www.lippelift.de}
       VERTEX_AI_ENABLED: ${VERTEX_AI_ENABLED}
       VERTEX_AI_PROJECT_ID: ${VERTEX_AI_PROJECT_ID}
       VERTEX_AI_LOCATION: ${VERTEX_AI_LOCATION}
@@ -62,3 +62,11 @@ services:
       '
     ports:
       - "8085:8080"
+    expose:
+      - "8080"
+    labels:
+      - traefik.enable=true
+      - 'traefik.http.routers.lippebot-demo.rule=Host(`chat.lippelift.xyz`)'
+      - 'traefik.http.routers.lippebot-demo.entrypoints=websecure'
+      - 'traefik.http.routers.lippebot-demo.tls.certresolver=letsencrypt'
+      - traefik.http.services.lippebot-demo.loadbalancer.server.port=8080
