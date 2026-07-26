@@ -1,4 +1,8 @@
-import type { EmailService, LeadNotificationContext } from '../services/email.js';
+import type {
+  BypassNotification,
+  EmailService,
+  LeadNotificationContext,
+} from '../services/email.js';
 import type { PipedriveService } from '../services/pipedrive.js';
 import type {
   FactoryCaseResult,
@@ -20,8 +24,12 @@ interface RequestOrchestratorDependencies {
     | 'resolveSupportFollowUpCase'
     | 'createServiceRequest'
     | 'appendServiceRequestToExistingCase'>;
-  email: Pick<EmailService, 'sendLeadNotification' | 'sendSupportNotification'>;
+  email: Pick<EmailService, 'sendLeadNotification' | 'sendSupportNotification' | 'sendBypassNotification'>;
   journal: RequestJournal;
+  bypass: Readonly<{
+    enabled: boolean;
+    recipients: readonly string[];
+  }>;
   opportunityRecipient: string;
   opportunityCopyRecipients?: string;
   serviceCopyRecipients?: string;
@@ -50,10 +58,34 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
     pipedrive,
     email,
     journal,
+    bypass,
     opportunityRecipient,
     opportunityCopyRecipients,
     serviceCopyRecipients,
   } = dependencies;
+
+  function bypassKind(input: RequestExecutionInput): BypassNotification['kind'] {
+    if (input.leadData) return 'opportunity';
+    if (input.supportData) return 'service';
+    return 'general';
+  }
+
+  function bypassSummary(input: RequestExecutionInput): string {
+    if (input.leadData) {
+      const name = [input.leadData.firstName, input.leadData.lastName].filter(Boolean).join(' ');
+      return [
+        name ? `Anfrage von ${name}` : 'Neue Anfrage',
+        input.leadData.message,
+      ].filter(Boolean).join(': ');
+    }
+    if (input.supportData) {
+      return [
+        input.supportData.customerName ? `Serviceanfrage von ${input.supportData.customerName}` : 'Neue Serviceanfrage',
+        input.supportData.issueDescription,
+      ].filter(Boolean).join(': ');
+    }
+    return 'Neue allgemeine Anfrage';
+  }
 
   async function sendToRecipients(
     input: RequestExecutionInput,
@@ -117,6 +149,49 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
       completed: true,
       recipient: opportunityRecipient,
       crm,
+    };
+  }
+
+  async function executeBypass(input: RequestExecutionInput): Promise<RequestExecutionResult> {
+    if (!input.leadData && !input.supportData) {
+      throw new Error('Bypass request is missing leadData or supportData');
+    }
+
+    const recipients = parseEmailRecipients(...bypass.recipients);
+    if (recipients.length === 0) throw new Error('Pipedrive bypass has no email recipients');
+    const kind = bypassKind(input);
+    await journal.runStep(
+      { sessionId: input.sessionId, requestId: input.requestId, step: 'crm_bypassed' },
+      async () => ({ reason: 'launch_mode' }),
+    );
+    const notification: BypassNotification = {
+      sessionId: input.sessionId,
+      requestId: input.requestId,
+      kind,
+      summary: bypassSummary(input),
+      transcript: input.transcript,
+      completedAt: new Date().toISOString(),
+      ...(input.leadData ? { leadData: input.leadData } : {}),
+      ...(input.supportData ? { supportData: input.supportData } : {}),
+    };
+    await sendToRecipients(
+      input,
+      recipients,
+      async (recipient) => email.sendBypassNotification(recipient, notification),
+    );
+    await journal.runStep(
+      { sessionId: input.sessionId, requestId: input.requestId, step: 'email' },
+      async () => ({ sent: true, recipients }),
+    );
+    await journal.runStep(
+      { sessionId: input.sessionId, requestId: input.requestId, step: 'completed' },
+      async () => ({ completed: true }),
+    );
+    return {
+      requestId: input.requestId,
+      kind: kind === 'opportunity' ? 'opportunity' : 'service',
+      completed: true,
+      recipient: recipients.join(','),
     };
   }
 
@@ -240,6 +315,20 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
 
   async function execute(input: RequestExecutionInput): Promise<RequestExecutionResult> {
     if (!input.requestId.trim()) throw new Error('requestId is required');
+    const bypassCheckpoint = await journal.getStep<Record<string, unknown>>({
+      sessionId: input.sessionId,
+      requestId: input.requestId,
+      step: 'crm_bypassed',
+    });
+    if (bypassCheckpoint) return executeBypass(input);
+    if (bypass.enabled) {
+      const crmCheckpoint = await journal.getStep<Record<string, unknown>>({
+        sessionId: input.sessionId,
+        requestId: input.requestId,
+        step: 'crm',
+      });
+      if (!crmCheckpoint) return executeBypass(input);
+    }
     if (input.leadData?.ownsLift === 'no' || input.mode === 'anfrage') return executeOpportunity(input);
     return executeService(input);
   }

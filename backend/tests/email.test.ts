@@ -544,4 +544,97 @@ describe('createEmailService', () => {
     expect(call.html).not.toContain('Person-ID:');
     expect(call.html).not.toContain('Fall-ID:');
   });
+
+  it('sendBypassNotification renders neutral escaped request details and the full transcript', async () => {
+    const sendMock = vi.fn().mockResolvedValue({ messageId: 'bypass-opportunity' });
+    const service = createEmailService(
+      { host: 'smtp.test.com', port: 587, user: 'a', pass: 'b' },
+      sendMock,
+    );
+
+    await service.sendBypassNotification('team@example.com', {
+      sessionId: 'session-<unsafe>',
+      requestId: 'request-42',
+      kind: 'opportunity',
+      summary: 'Anfrage zu <script>alert(1)</script>',
+      transcript: 'Nutzer: <b>Komplette Anfrage</b>\nSarah: Vielen Dank.',
+      completedAt: '2026-07-26T12:00:00.000Z',
+      leadData: {
+        firstName: 'Max',
+        lastName: 'Muster',
+        email: 'max@example.de',
+        message: 'Sitzlift <dringend>',
+      },
+    });
+
+    const call = sendMock.mock.calls[0][0];
+    expect(call.to).toBe('team@example.com');
+    expect(call.subject).toBe('Sarah Chat [request-42] – Neue Anfrage');
+    expect(call.html).toContain('session-&lt;unsafe&gt;');
+    expect(call.html).toContain('Anfrage zu &lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(call.html).toContain('Nutzer: &lt;b&gt;Komplette Anfrage&lt;/b&gt;');
+    expect(call.html).toContain('Sitzlift &lt;dringend&gt;');
+    expect(call.html).not.toContain('<script>');
+    expect(call.html).not.toContain('Pipedrive');
+    expect(call.html).not.toContain('CRM');
+    expect(call.html).not.toContain('href=');
+  });
+
+  it('sendBypassNotification omits missing optional contact fields', async () => {
+    const sendMock = vi.fn().mockResolvedValue({ messageId: 'bypass-service' });
+    const service = createEmailService(
+      { host: 'smtp.test.com', port: 587, user: 'a', pass: 'b' },
+      sendMock,
+    );
+
+    await service.sendBypassNotification('team@example.com', {
+      sessionId: 'service-session',
+      requestId: 'service-request',
+      kind: 'service',
+      summary: 'Technische Anfrage',
+      transcript: 'Nutzer: Der Lift steht.',
+      completedAt: '2026-07-26T12:00:00.000Z',
+      supportData: {
+        customerName: 'Maria Muster',
+        category: 'technik',
+        issueDescription: 'Lift steht.',
+      },
+    });
+
+    const call = sendMock.mock.calls[0][0];
+    expect(call.html).toContain('Maria Muster');
+    expect(call.html).toContain('Technik'.toLowerCase());
+    expect(call.html).not.toContain('Telefon:</td>');
+    expect(call.html).not.toContain('E-Mail:</td>');
+    expect(call.html).not.toContain('undefined');
+  });
+
+  it('sendBypassNotification rejects SMTP recipient rejection', async () => {
+    const service = createEmailService(
+      { host: 'smtp.test.com', port: 587, user: 'a', pass: 'b' },
+      vi.fn().mockResolvedValue({ accepted: [], rejected: ['team@example.com'] }),
+    );
+
+    await expect(service.sendBypassNotification('team@example.com', {
+      sessionId: 'session',
+      requestId: 'request',
+      kind: 'general',
+      summary: 'Allgemeine Anfrage',
+      transcript: 'Nutzer: Hallo',
+      completedAt: '2026-07-26T12:00:00.000Z',
+    })).rejects.toBeInstanceOf(EmailDeliveryError);
+  });
+
+  it('sendBypassNotification fails closed when SMTP is not configured', async () => {
+    const service = createEmailService({ host: '', port: 587, user: '', pass: '' });
+
+    await expect(service.sendBypassNotification('team@example.com', {
+      sessionId: 'session',
+      requestId: 'request',
+      kind: 'general',
+      summary: 'Allgemeine Anfrage',
+      transcript: 'Nutzer: Hallo',
+      completedAt: '2026-07-26T12:00:00.000Z',
+    })).rejects.toThrow('Email not configured');
+  });
 });

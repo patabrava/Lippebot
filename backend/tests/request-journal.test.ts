@@ -81,4 +81,20 @@ describe('createRequestJournal', () => {
       { sessionId: 's1', requestId: 'r2', step: 'crm' }, async () => ({ dealId: 999 }),
     )).resolves.toEqual({ dealId: 802 });
   });
+
+  it('reuses a durable CRM bypass checkpoint after restart', async () => {
+    const store: RequestCheckpoint[] = [];
+    const tracker = trackerWithStore(store);
+    await createRequestJournal(tracker).runStep(
+      { sessionId: 's-bypass', requestId: 'r-bypass', step: 'crm_bypassed' },
+      async () => ({ reason: 'launch_mode' }),
+    );
+
+    const operation = vi.fn().mockRejectedValue(new Error('must not run'));
+    await expect(createRequestJournal(tracker).runStep(
+      { sessionId: 's-bypass', requestId: 'r-bypass', step: 'crm_bypassed' },
+      operation,
+    )).resolves.toEqual({ reason: 'launch_mode' });
+    expect(operation).not.toHaveBeenCalled();
+  });
 });

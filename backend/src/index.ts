@@ -9,7 +9,10 @@ import { createConversationTracker } from './services/conversation-tracking.js';
 import { createChatRoute } from './routes/chat.js';
 import { createRequestJournal } from './request/request-journal.js';
 import { createRequestOrchestrator } from './request/request-orchestrator.js';
-import { resolveInternalEmailRecipients } from './email/recipients.js';
+import {
+  resolveBypassEmailRecipients,
+  resolveInternalEmailRecipients,
+} from './email/recipients.js';
 
 const config = loadConfig();
 
@@ -37,10 +40,16 @@ const conversationTracker = createConversationTracker({
   serviceRoleKey: config.supabaseServiceRoleKey,
 });
 const requestJournal = createRequestJournal(conversationTracker);
+const bypassRecipients = Object.freeze(resolveBypassEmailRecipients(config.pipedriveBypassEmailTo));
+const bypass = Object.freeze({
+  enabled: config.pipedriveBypassEnabled,
+  recipients: bypassRecipients,
+});
 const requestOrchestrator = createRequestOrchestrator({
   pipedrive,
   email,
   journal: requestJournal,
+  bypass,
   opportunityRecipient: 'sales@lippelift.de',
   opportunityCopyRecipients: resolveInternalEmailRecipients(config.notificationEmailTo),
   serviceCopyRecipients: resolveInternalEmailRecipients(config.serviceEmailTo),
@@ -57,6 +66,8 @@ app.get('/api/health', (c) => {
     pipedrive: pipedrive.isConfigured(),
     email: email.isConfigured(),
     conversationTracking: conversationTracker.isEnabled(),
+    pipedriveBypass: bypass.enabled,
+    bypassRecipientCount: bypass.recipients.length,
   });
 });
 
@@ -67,6 +78,7 @@ const chatRoute = createChatRoute({
   conversationTracker,
   notificationEmailTo: config.notificationEmailTo,
   serviceEmailTo: config.serviceEmailTo,
+  bypass,
   requestOrchestrator,
 });
 
@@ -79,6 +91,7 @@ serve({ fetch: app.fetch, port }, (info) => {
   console.log(`Pipedrive: ${pipedrive.isConfigured() ? 'configured' : 'not configured (placeholder)'}`);
   console.log(`Email: ${email.isConfigured() ? 'configured' : 'not configured'}`);
   console.log(`Conversation tracking: ${conversationTracker.isEnabled() ? 'enabled' : 'disabled'}`);
+  console.log(`Pipedrive bypass: ${bypass.enabled ? 'enabled' : 'disabled'} (${bypass.recipients.length} recipients)`);
 });
 
 export default app;

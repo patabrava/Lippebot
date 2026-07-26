@@ -5,6 +5,8 @@ import type { GeminiService } from '../src/services/gemini.js';
 import type { PipedriveService } from '../src/services/pipedrive.js';
 import { EmailDeliveryError, type EmailService } from '../src/services/email.js';
 import type { ConversationTracker } from '../src/services/conversation-tracking.js';
+import { createRequestJournal } from '../src/request/request-journal.js';
+import { createRequestOrchestrator } from '../src/request/request-orchestrator.js';
 
 function createMockGemini(): GeminiService {
   return {
@@ -38,6 +40,7 @@ function createMockEmail(): EmailService {
     sendServiceNotification: vi.fn(),
     sendAbandonedChatSummary: vi.fn(),
     sendSupportNotification: vi.fn(),
+    sendBypassNotification: vi.fn(),
     sendCompletedChatSummary: vi.fn().mockResolvedValue(undefined),
   };
 }
@@ -49,6 +52,8 @@ function createMockTracker(overrides: Partial<ConversationTracker> = {}): Conver
     recordMessage: vi.fn().mockResolvedValue(undefined),
     recordEvent: vi.fn().mockResolvedValue(undefined),
     updateSession: vi.fn().mockResolvedValue(undefined),
+    getRequestEvents: vi.fn().mockResolvedValue([]),
+    recordRequestCheckpoint: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -227,6 +232,91 @@ describe('POST /api/chat', () => {
     expect(text).toContain('"type":"error"');
     expect(text).not.toContain('"action":"request_completed"');
     expect(text).not.toContain('"type":"done"');
+  });
+
+  it('completes a bypass request only after both recipients accept it and never calls Pipedrive', async () => {
+    const leadData = {
+      ownsLift: 'no' as const,
+      priorContact: 'no' as const,
+      customerSegment: 'privatperson' as const,
+      firstName: 'Max',
+      lastName: 'Muster',
+      email: 'max@example.de',
+      street: 'Test 1',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+      message: 'Ich brauche einen Lift.',
+    };
+    const piperdriveOperations = {
+      createLead: vi.fn(),
+      resolveFactoryCase: vi.fn(),
+      resolveSupportReferenceCase: vi.fn(),
+      resolveSupportFollowUpCase: vi.fn(),
+      createServiceRequest: vi.fn(),
+      appendServiceRequestToExistingCase: vi.fn(),
+    };
+    const sendBypassNotification = vi.fn().mockResolvedValue(undefined);
+    const email = { ...createMockEmail(), sendBypassNotification };
+    const bypass = {
+      enabled: true,
+      recipients: ['berg@lippelift.de', 'caechma@gmail.com'],
+    };
+    const requestOrchestrator = createRequestOrchestrator({
+      pipedrive: piperdriveOperations,
+      email,
+      journal: createRequestJournal(createMockTracker()),
+      bypass,
+      opportunityRecipient: 'sales@lippelift.de',
+      opportunityCopyRecipients: 'sales@lippelift.de',
+      serviceCopyRecipients: 'technik@lippelift.de,finance@lippelift.de,lossau@lippelift.de',
+    });
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'lead' as const, leadData };
+          yield { type: 'token' as const, content: 'Ihre Anfrage ist vollständig.' };
+          yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: leadData } };
+        },
+      },
+      pipedrive: createMockPipedrive(),
+      email,
+      requestOrchestrator,
+      bypass,
+      notificationEmailTo: 'sales@lippelift.de',
+      serviceEmailTo: 'technik@lippelift.de',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'bypass-integration',
+        requestId: 'bypass-integration-request',
+        message: 'Anfrage absenden',
+        history: [{ role: 'user', content: 'Kompletter Verlauf', timestamp: 1_752_652_000_000 }],
+      }),
+    })).text();
+
+    expect(sendBypassNotification.mock.calls.map(([recipient]) => recipient)).toEqual([
+      'berg@lippelift.de',
+      'caechma@gmail.com',
+    ]);
+    expect(sendBypassNotification).toHaveBeenCalledWith(
+      'berg@lippelift.de',
+      expect.objectContaining({
+        requestId: 'bypass-integration-request',
+        transcript: expect.stringContaining('Kompletter Verlauf'),
+      }),
+    );
+    for (const operation of Object.values(piperdriveOperations)) {
+      expect(operation).not.toHaveBeenCalled();
+    }
+    expect(text).toContain('"action":"request_completed"');
+    expect(text).toContain('Haben Sie noch ein weiteres Anliegen?');
+    expect(text).toContain('"type":"done"');
   });
 
   it('keeps two request IDs in one visible session independent', async () => {
@@ -2443,6 +2533,46 @@ describe('POST /api/chat', () => {
     expect(text).toContain('"type":"token"');
     expect(text).toContain('"type":"done"');
     expect(errorSpy).toHaveBeenCalledWith('Conversation tracking error:', expect.any(Error));
+  });
+});
+
+describe('POST /api/chat/abandoned bypass routing', () => {
+  it('replaces the service recipient with the configured bypass recipients', async () => {
+    const sendAbandonedChatSummary = vi.fn().mockResolvedValue(undefined);
+    const app = createChatRoute({
+      gemini: createMockGemini(),
+      pipedrive: createMockPipedrive(),
+      email: { ...createMockEmail(), sendAbandonedChatSummary },
+      notificationEmailTo: 'sales@lippelift.de',
+      serviceEmailTo: 'technik@lippelift.de',
+      bypass: {
+        enabled: true,
+        recipients: ['berg@lippelift.de', 'caechma@gmail.com'],
+      },
+    });
+
+    const response = await app.request('/api/chat/abandoned', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'abandoned-bypass',
+        reason: 'visitor_left',
+        history: [
+          { role: 'user', content: 'Ich brauche Hilfe.', timestamp: 1_752_652_000_000 },
+          { role: 'assistant', content: 'Gern.', timestamp: 1_752_652_001_000 },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: 'sent' });
+    expect(sendAbandonedChatSummary).toHaveBeenCalledWith(
+      'berg@lippelift.de,caechma@gmail.com',
+      expect.objectContaining({
+        sessionId: 'abandoned-bypass',
+        transcript: expect.stringContaining('Ich brauche Hilfe.'),
+      }),
+    );
   });
 });
 

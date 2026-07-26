@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { DEFAULT_INTERNAL_EMAIL_RECIPIENTS } from '../email/recipients.js';
+import {
+  DEFAULT_BYPASS_EMAIL_RECIPIENTS,
+  DEFAULT_INTERNAL_EMAIL_RECIPIENTS,
+  resolveBypassEmailRecipients,
+} from '../email/recipients.js';
 
 function parseBoolean(value: string | undefined, defaultValue: boolean): boolean {
   if (value === undefined) {
@@ -28,6 +32,8 @@ const configSchema = z.object({
   pipedriveServiceStageId: z.coerce.number().default(2),
   pipedriveServiceOwnerId: z.coerce.number().default(24093328),
   pipedriveWebBaseUrl: z.string().default('https://lippelift.pipedrive.com'),
+  pipedriveBypassEnabled: z.boolean().default(false),
+  pipedriveBypassEmailTo: z.string().default(DEFAULT_BYPASS_EMAIL_RECIPIENTS),
   smtpHost: z.string().default(''),
   smtpPort: z.coerce.number().default(587),
   smtpUser: z.string().default(''),
@@ -40,6 +46,28 @@ const configSchema = z.object({
   port: z.coerce.number().default(3000),
   corsOrigin: z.string().default('http://localhost:5173'),
   nodeEnv: z.enum(['development', 'production', 'test']).default('development'),
+}).superRefine((config, context) => {
+  if (!config.pipedriveBypassEnabled) return;
+
+  const recipients = resolveBypassEmailRecipients(config.pipedriveBypassEmailTo);
+  if (recipients.length === 0) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['pipedriveBypassEmailTo'],
+      message: 'At least one bypass email recipient is required when Pipedrive bypass is enabled',
+    });
+    return;
+  }
+
+  for (const recipient of recipients) {
+    if (!z.string().email().safeParse(recipient).success) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['pipedriveBypassEmailTo'],
+        message: `Invalid bypass email recipient: ${recipient}`,
+      });
+    }
+  }
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -56,6 +84,8 @@ export function loadConfig(): Config {
     pipedriveServiceStageId: process.env.PIPEDRIVE_SERVICE_STAGE_ID,
     pipedriveServiceOwnerId: process.env.PIPEDRIVE_SERVICE_OWNER_ID,
     pipedriveWebBaseUrl: process.env.PIPEDRIVE_WEB_BASE_URL,
+    pipedriveBypassEnabled: parseBoolean(process.env.PIPEDRIVE_BYPASS_ENABLED, false),
+    pipedriveBypassEmailTo: process.env.PIPEDRIVE_BYPASS_EMAIL_TO,
     smtpHost: process.env.SMTP_HOST,
     smtpPort: process.env.SMTP_PORT,
     smtpUser: process.env.SMTP_USER,

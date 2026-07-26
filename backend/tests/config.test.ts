@@ -26,6 +26,8 @@ describe('loadConfig', () => {
     delete process.env.PIPEDRIVE_WEB_BASE_URL;
     delete process.env.NOTIFICATION_EMAIL_TO;
     delete process.env.SERVICE_EMAIL_TO;
+    delete process.env.PIPEDRIVE_BYPASS_ENABLED;
+    delete process.env.PIPEDRIVE_BYPASS_EMAIL_TO;
     const config = loadConfig();
     expect(config.vertexAiProjectId).toBe('test-project');
     expect(config.vertexAiLocation).toBe('us-central1');
@@ -39,7 +41,36 @@ describe('loadConfig', () => {
     expect(config.pipedriveServiceOwnerId).toBe(24093328);
     expect(config.notificationEmailTo).toBe('berg@lippelift.de,caechma@gmail.com');
     expect(config.serviceEmailTo).toBe('berg@lippelift.de,caechma@gmail.com');
+    expect(config.pipedriveBypassEnabled).toBe(false);
+    expect(config.pipedriveBypassEmailTo).toBe('berg@lippelift.de,caechma@gmail.com');
   });
+
+  it.each(['true', '1', 'yes', 'on'])('enables Pipedrive bypass with %s', (value) => {
+    process.env.VERTEX_AI_PROJECT_ID = 'test-project';
+    process.env.PIPEDRIVE_BYPASS_ENABLED = value;
+    process.env.PIPEDRIVE_BYPASS_EMAIL_TO = 'notify@example.test';
+
+    expect(loadConfig().pipedriveBypassEnabled).toBe(true);
+  });
+
+  it('keeps the configured bypass recipient string replaceable', () => {
+    process.env.VERTEX_AI_PROJECT_ID = 'test-project';
+    process.env.PIPEDRIVE_BYPASS_ENABLED = 'true';
+    process.env.PIPEDRIVE_BYPASS_EMAIL_TO = 'replacement@example.test';
+
+    expect(loadConfig().pipedriveBypassEmailTo).toBe('replacement@example.test');
+  });
+
+  it.each(['', '   ', 'not-an-email'])(
+    'rejects an enabled bypass with an unusable recipient list',
+    (recipients) => {
+      process.env.VERTEX_AI_PROJECT_ID = 'test-project';
+      process.env.PIPEDRIVE_BYPASS_ENABLED = 'true';
+      process.env.PIPEDRIVE_BYPASS_EMAIL_TO = recipients;
+
+      expect(() => loadConfig()).toThrow(/bypass email recipient/i);
+    },
+  );
 
   it('loads a configured Pipedrive web base URL', () => {
     process.env.VERTEX_AI_PROJECT_ID = 'test-project';

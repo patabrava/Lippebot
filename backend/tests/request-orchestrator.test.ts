@@ -35,11 +35,182 @@ function baseDependencies() {
     email: {
       sendLeadNotification: vi.fn().mockResolvedValue(undefined),
       sendSupportNotification: vi.fn().mockResolvedValue(undefined),
+      sendBypassNotification: vi.fn().mockResolvedValue(undefined),
     },
+    bypass: { enabled: false, recipients: [] as string[] },
   };
 }
 
 describe('createRequestOrchestrator', () => {
+  it.each([
+    {
+      label: 'opportunity',
+      input: {
+        sessionId: 'bypass-opportunity',
+        requestId: 'request-opportunity',
+        mode: 'anfrage' as const,
+        transcript: 'Nutzer: vollständige Opportunity\nSarah: Danke.',
+        leadData: {
+          ownsLift: 'no' as const,
+          firstName: 'Max',
+          lastName: 'Muster',
+          email: 'max@example.de',
+          message: 'Neuer Lift',
+        },
+      },
+    },
+    {
+      label: 'service',
+      input: {
+        sessionId: 'bypass-service',
+        requestId: 'request-service',
+        mode: 'service' as const,
+        transcript: 'Nutzer: vollständige Serviceanfrage\nSarah: Danke.',
+        supportData: {
+          ownsLift: 'yes' as const,
+          customerName: 'Erika Muster',
+          email: 'erika@example.de',
+          category: 'technik' as const,
+          issueDescription: 'Lift steht',
+        },
+      },
+    },
+  ])('bypasses every Pipedrive operation and department for $label', async ({ input }) => {
+    const deps = baseDependencies();
+    const { journal, store } = durableJournal();
+    const orchestrator = createRequestOrchestrator({
+      ...deps,
+      journal,
+      bypass: {
+        enabled: true,
+        recipients: ['berg@lippelift.de', 'caechma@gmail.com'],
+      },
+      opportunityRecipient: 'sales@lippelift.de',
+      serviceCopyRecipients: 'technik@lippelift.de,finance@lippelift.de,lossau@lippelift.de',
+    });
+
+    const result = await orchestrator.execute(input);
+
+    for (const operation of Object.values(deps.pipedrive)) {
+      expect(operation).not.toHaveBeenCalled();
+    }
+    expect(deps.email.sendLeadNotification).not.toHaveBeenCalled();
+    expect(deps.email.sendSupportNotification).not.toHaveBeenCalled();
+    expect(deps.email.sendBypassNotification.mock.calls.map(([recipient]) => recipient)).toEqual([
+      'berg@lippelift.de',
+      'caechma@gmail.com',
+    ]);
+    expect(deps.email.sendBypassNotification).toHaveBeenCalledWith(
+      'berg@lippelift.de',
+      expect.objectContaining({ transcript: input.transcript }),
+    );
+    expect(result).not.toHaveProperty('crm');
+    expect(result).not.toHaveProperty('sourceCase');
+    expect(store.map((checkpoint) => checkpoint.step)).toContain('crm_bypassed');
+    expect(store.find((checkpoint) => checkpoint.step === 'crm_bypassed')?.payload).toEqual({
+      reason: 'launch_mode',
+    });
+  });
+
+  it('deduplicates bypass recipients and retries only a failed recipient after restart', async () => {
+    const deps = baseDependencies();
+    let caechmaAttempts = 0;
+    deps.email.sendBypassNotification.mockImplementation(async (recipient) => {
+      if (recipient.toLowerCase() === 'caechma@gmail.com' && caechmaAttempts++ === 0) {
+        throw new Error('caechma SMTP unavailable');
+      }
+    });
+    const { journal, store } = durableJournal();
+    const dependencies = {
+      ...deps,
+      bypass: {
+        enabled: true,
+        recipients: ['berg@lippelift.de', 'BERG@lippelift.de', 'caechma@gmail.com'],
+      },
+      opportunityRecipient: 'sales@lippelift.de',
+    };
+    const input = {
+      sessionId: 'bypass-retry',
+      requestId: 'bypass-retry-request',
+      mode: 'anfrage' as const,
+      transcript: 'Nutzer: vollständige Anfrage',
+      leadData: { ownsLift: 'no' as const, firstName: 'Retry', email: 'retry@example.de' },
+    };
+
+    await expect(createRequestOrchestrator({ ...dependencies, journal }).execute(input))
+      .rejects.toThrow('caechma SMTP unavailable');
+    expect(store.some((checkpoint) => checkpoint.step === 'completed')).toBe(false);
+
+    await expect(createRequestOrchestrator({
+      ...dependencies,
+      journal: durableJournal(store).journal,
+    }).execute(input)).resolves.toMatchObject({ completed: true });
+
+    expect(deps.email.sendBypassNotification.mock.calls.map(([recipient]) => recipient)).toEqual([
+      'berg@lippelift.de',
+      'caechma@gmail.com',
+      'caechma@gmail.com',
+    ]);
+  });
+
+  it('keeps a checkpointed bypass request in bypass mode after the launch flag is disabled', async () => {
+    const deps = baseDependencies();
+    const store: RequestCheckpoint[] = [{
+      sessionId: 'mode-pinned',
+      requestId: 'mode-pinned-request',
+      step: 'crm_bypassed',
+      payload: { reason: 'launch_mode' },
+    }];
+    const orchestrator = createRequestOrchestrator({
+      ...deps,
+      bypass: { enabled: false, recipients: ['berg@lippelift.de'] },
+      journal: durableJournal(store).journal,
+      opportunityRecipient: 'sales@lippelift.de',
+    });
+
+    await orchestrator.execute({
+      sessionId: 'mode-pinned',
+      requestId: 'mode-pinned-request',
+      mode: 'anfrage',
+      transcript: 'Nutzer: Anfrage',
+      leadData: { ownsLift: 'no', firstName: 'Pinned', email: 'pinned@example.de' },
+    });
+
+    expect(deps.pipedrive.createLead).not.toHaveBeenCalled();
+    expect(deps.email.sendBypassNotification).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a checkpointed full-workflow request out of bypass after the flag is enabled', async () => {
+    const deps = baseDependencies();
+    const store: RequestCheckpoint[] = [{
+      sessionId: 'full-mode-pinned',
+      requestId: 'full-mode-pinned-request',
+      step: 'crm',
+      payload: { outcome: 'created', personId: 11, dealId: 22, createdPerson: true },
+    }];
+    const orchestrator = createRequestOrchestrator({
+      ...deps,
+      bypass: { enabled: true, recipients: ['berg@lippelift.de'] },
+      journal: durableJournal(store).journal,
+      opportunityRecipient: 'sales@lippelift.de',
+    });
+
+    await orchestrator.execute({
+      sessionId: 'full-mode-pinned',
+      requestId: 'full-mode-pinned-request',
+      mode: 'anfrage',
+      transcript: 'Nutzer: Anfrage',
+      leadData: { ownsLift: 'no', firstName: 'Pinned', email: 'pinned@example.de' },
+    });
+
+    expect(deps.email.sendBypassNotification).not.toHaveBeenCalled();
+    expect(deps.email.sendLeadNotification).toHaveBeenCalledWith(
+      'sales@lippelift.de',
+      expect.any(Object),
+      expect.objectContaining({ dealId: 22 }),
+    );
+  });
+
   it('creates or reuses the opportunity before sending its email', async () => {
     const calls: string[] = [];
     const deps = baseDependencies();

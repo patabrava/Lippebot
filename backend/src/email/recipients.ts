@@ -1,4 +1,5 @@
 export const DEFAULT_INTERNAL_EMAIL_RECIPIENTS = 'berg@lippelift.de,caechma@gmail.com';
+export const DEFAULT_BYPASS_EMAIL_RECIPIENTS = 'berg@lippelift.de,caechma@gmail.com';
 
 export function parseEmailRecipients(...values: Array<string | undefined>): string[] {
   const recipients: string[] = [];
@@ -23,6 +24,12 @@ export function resolveInternalEmailRecipients(value: string | undefined): strin
     value,
     DEFAULT_INTERNAL_EMAIL_RECIPIENTS,
   ).join(',');
+}
+
+export function resolveBypassEmailRecipients(value: string | undefined): string[] {
+  return parseEmailRecipients(
+    value === undefined ? DEFAULT_BYPASS_EMAIL_RECIPIENTS : value,
+  );
 }
 
 export function emailRecipientCheckpointStep(recipient: string): `email_recipient:${string}` {

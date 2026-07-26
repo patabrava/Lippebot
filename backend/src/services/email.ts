@@ -65,6 +65,17 @@ export interface AbandonedChatSummary {
   submittedAt: string;
 }
 
+export interface BypassNotification {
+  sessionId: string;
+  requestId: string;
+  kind: 'opportunity' | 'service' | 'general';
+  summary: string;
+  transcript: string;
+  completedAt: string;
+  leadData?: LeadData;
+  supportData?: SupportData;
+}
+
 export type CompletedChatKind = 'general' | 'opportunity' | 'case';
 
 export interface CompletedChatSummary {
@@ -269,6 +280,43 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
     });
   }
 
+  async function sendBypassNotification(to: string, input: BypassNotification): Promise<void> {
+    if (!configured && !sendOverride) {
+      throw new Error('Email not configured');
+    }
+
+    const customerName = input.leadData
+      ? [input.leadData.firstName, input.leadData.lastName].filter(Boolean).join(' ')
+      : input.supportData?.customerName;
+    const concern = input.leadData?.message ?? input.supportData?.issueDescription;
+    const safeRequestId = input.requestId.replace(/[\r\n]+/g, ' ').trim();
+    const html = `
+      <h2>Neue Anfrage über Sarah</h2>
+      <h3>Zusammenfassung</h3>
+      <p>${escapeHtml(input.summary)}</p>
+      <table style="border-collapse:collapse;">
+        ${row('Anfrage-ID', input.requestId)}
+        ${row('Session-ID', input.sessionId)}
+        ${row('Abgeschlossen', input.completedAt)}
+        ${row('Art', input.kind === 'opportunity' ? 'Anfrage' : input.kind === 'service' ? 'Service' : 'Allgemein')}
+        ${row('Name', customerName)}
+        ${row('Telefon', input.leadData?.phone ?? input.supportData?.phone)}
+        ${row('E-Mail', input.leadData?.email ?? input.supportData?.email)}
+        ${row('Kategorie', input.supportData?.category)}
+        ${row('Anliegen', concern)}
+      </table>
+      <h3>Vollständiges Transkript</h3>
+      <pre style="white-space:pre-wrap;font-family:Arial,sans-serif;border:1px solid #ddd;padding:12px;border-radius:8px;">${escapeHtml(input.transcript)}</pre>
+    `;
+
+    await sendToRecipients({
+      from,
+      to,
+      subject: `Sarah Chat [${safeRequestId}] – Neue Anfrage`,
+      html,
+    });
+  }
+
   async function sendCompletedChatSummary(to: string, input: CompletedChatSummary): Promise<void> {
     if (!configured && !sendOverride) return;
 
@@ -353,6 +401,7 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
     sendLeadNotification,
     sendServiceNotification,
     sendSupportNotification,
+    sendBypassNotification,
     sendAbandonedChatSummary,
     sendCompletedChatSummary,
   };

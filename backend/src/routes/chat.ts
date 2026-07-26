@@ -114,6 +114,10 @@ interface ChatDeps {
   conversationTracker?: ConversationTracker;
   notificationEmailTo: string;
   serviceEmailTo: string;
+  bypass?: Readonly<{
+    enabled: boolean;
+    recipients: readonly string[];
+  }>;
   requestOrchestrator?: RequestOrchestrator;
 }
 
@@ -915,7 +919,9 @@ export function createChatRoute(deps: ChatDeps): Hono {
     }
 
     const { sessionId, reason, history } = parsed.data;
-    const emailRecipient = resolveInternalEmailRecipients(deps.serviceEmailTo);
+    const emailRecipient = deps.bypass?.enabled
+      ? parseEmailRecipients(...deps.bypass.recipients).join(',')
+      : resolveInternalEmailRecipients(deps.serviceEmailTo);
 
     if (completedAbandonedSummaries.has(sessionId)) {
       return c.json({ status: 'duplicate' });
