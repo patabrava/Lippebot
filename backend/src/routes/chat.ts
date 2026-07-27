@@ -24,6 +24,17 @@ import {
   parseEmailRecipients,
   resolveInternalEmailRecipients,
 } from '../email/recipients.js';
+import {
+  buildAuthoritativeStateContext,
+  buildVerificationMessage,
+  isExplicitVerificationConfirmation,
+  isLeadReady,
+  isNoFurtherConcern,
+  isRequestReady,
+  isServiceReady,
+  mergeCollectedData,
+  type IntakeState,
+} from '../request/intake-verification.js';
 
 const OPPORTUNITY_EMAIL_TO = 'sales@lippelift.de';
 
@@ -131,6 +142,15 @@ type LeadClientActionResult = { status: 'accepted' | 'needs_contact' | 'needs_pr
 type SupportClientActionResult = { status: 'accepted' | 'needs_contact' | 'needs_prior_contact' };
 
 type TranscriptMessage = z.infer<typeof abandonedChatRequestSchema>['history'][number];
+
+function isAiQuotaError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { status?: unknown; code?: unknown; message?: unknown };
+  return candidate.status === 429
+    || candidate.code === 429
+    || (typeof candidate.message === 'string'
+      && (candidate.message.includes('RESOURCE_EXHAUSTED') || candidate.message.includes('Quota exceeded')));
+}
 
 function formatTranscript(messages: TranscriptMessage[]): string {
   return messages
@@ -268,6 +288,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
   const inFlightAbandonedSummaries = new Map<string, Promise<void>>();
   const pendingAbandonedSummaryRecipients = new Map<string, string[]>();
   const factoryHelpShownRequests = new Set<string>();
+  const intakeStates = new Map<string, IntakeState>();
 
   async function runRequestScopedFlow(
     stream: Parameters<Parameters<typeof streamSSE>[1]>[0],
@@ -287,52 +308,157 @@ export function createChatRoute(deps: ChatDeps): Hono {
       return;
     }
 
+    let intakeState = intakeStates.get(requestId) ?? {
+      mode: 'undetermined' as const,
+      collectedData: {},
+      awaitingVerification: false,
+      completed: false,
+    };
+
+    if (intakeState.completed) {
+      if (isNoFurtherConcern(message)) {
+        const content = 'Alles klar, danke für deine Nachricht. Ich wünsche dir einen schönen Tag!';
+        await stream.writeSSE({ data: JSON.stringify({ type: 'token', content }) });
+        await stream.writeSSE({
+          data: JSON.stringify({ type: 'done', mode: intakeState.mode, collectedData: intakeState.collectedData }),
+        });
+        return;
+      }
+      await stream.writeSSE({
+        data: JSON.stringify({
+          type: 'action',
+          action: 'start_new_request',
+          data: { completedRequestId: requestId },
+        }),
+      });
+      const content = 'Gerne. Beschreibe mir bitte kurz dein weiteres Anliegen.';
+      await stream.writeSSE({ data: JSON.stringify({ type: 'token', content }) });
+      await stream.writeSSE({ data: JSON.stringify({ type: 'done', mode: 'undetermined', collectedData: {} }) });
+      return;
+    }
+
+    if (intakeState.awaitingVerification
+      && !isExplicitVerificationConfirmation(message)
+      && isNoFurtherConcern(message)) {
+      intakeState = { ...intakeState, awaitingVerification: false };
+      intakeStates.set(requestId, intakeState);
+      const content = 'Alles klar. Welche Angabe soll ich korrigieren?';
+      await stream.writeSSE({ data: JSON.stringify({ type: 'token', content }) });
+      await stream.writeSSE({
+        data: JSON.stringify({ type: 'done', mode: intakeState.mode, collectedData: intakeState.collectedData }),
+      });
+      return;
+    }
+
     const currentUserTimestamp = Date.now();
-    let lastMode: 'berater' | 'anfrage' | 'service' | 'undetermined' = 'undetermined';
-    let lastCollectedData: Record<string, unknown> = {};
+    let lastMode: 'berater' | 'anfrage' | 'service' | 'undetermined' = intakeState.mode;
+    let lastCollectedData: Record<string, unknown> = intakeState.collectedData;
     let leadData: LeadData | undefined;
     let supportData: SupportData | undefined;
     let assistantText = '';
-    const gen = deps.gemini.streamChat(sessionId, message, history);
+    const verificationConfirmed = intakeState.awaitingVerification
+      && isExplicitVerificationConfirmation(message)
+      && isRequestReady(intakeState.mode, intakeState.collectedData);
 
-    for await (const event of gen) {
-      if (event.type === 'token' && event.content) {
-        assistantText += event.content;
-        await stream.writeSSE({ data: JSON.stringify({ type: 'token', content: event.content }) });
-      }
-      if (event.type === 'state' && event.state) {
-        lastMode = event.state.mode;
-        lastCollectedData = event.state.collectedData as Record<string, unknown>;
-        if (!factoryHelpShownRequests.has(requestId)
-          && lastCollectedData.ownsLift === 'yes'
-          && lastCollectedData.liftManufacturer === 'lippe'
-          && (!lastCollectedData.factoryNumberStatus || lastCollectedData.factoryNumberStatus === 'unknown')) {
-          factoryHelpShownRequests.add(requestId);
-          await stream.writeSSE({
-            data: JSON.stringify({
-              type: 'action',
-              action: 'show_factory_number_help',
-              data: { requestId },
-            }),
-          });
+    if (!verificationConfirmed) {
+      const gen = deps.gemini.streamChat(
+        sessionId,
+        message,
+        history,
+        buildAuthoritativeStateContext(intakeState),
+      );
+
+      for await (const event of gen) {
+        if (event.type === 'token' && event.content) {
+          assistantText += event.content;
+        }
+        if (event.type === 'state' && event.state) {
+          if (event.state.mode !== 'undetermined') lastMode = event.state.mode;
+          lastCollectedData = mergeCollectedData(
+            lastCollectedData,
+            event.state.collectedData as Record<string, unknown>,
+          ) as Record<string, unknown>;
+          if (!factoryHelpShownRequests.has(requestId)
+            && lastCollectedData.ownsLift === 'yes'
+            && lastCollectedData.liftManufacturer === 'lippe'
+            && (!lastCollectedData.factoryNumberStatus || lastCollectedData.factoryNumberStatus === 'unknown')) {
+            factoryHelpShownRequests.add(requestId);
+            await stream.writeSSE({
+              data: JSON.stringify({
+                type: 'action',
+                action: 'show_factory_number_help',
+                data: { requestId },
+              }),
+            });
+          }
+        }
+        if (event.type === 'lead' && event.leadData) {
+          lastMode = 'anfrage';
+          lastCollectedData = mergeCollectedData(
+            lastCollectedData,
+            event.leadData as unknown as Record<string, unknown>,
+          ) as Record<string, unknown>;
+        }
+        if (event.type === 'service' && event.serviceData && hasPriorContactStatus(event.serviceData)) {
+          lastMode = 'service';
+          lastCollectedData = mergeCollectedData(lastCollectedData, {
+            ...event.serviceData,
+            category: resolveSupportCategory(event.serviceData),
+          }) as Record<string, unknown>;
         }
       }
-      if (event.type === 'lead' && event.leadData) leadData = event.leadData;
-      if (event.type === 'service' && event.serviceData && hasPriorContactStatus(event.serviceData)) {
-        supportData = { ...event.serviceData, category: resolveSupportCategory(event.serviceData) };
-      }
     }
 
-    if (!leadData && lastMode === 'anfrage' && hasRequiredLeadFields(lastCollectedData)
-      && lastCollectedData.ownsLift === 'no' && hasPriorContactStatus(lastCollectedData)) {
-      leadData = lastCollectedData as LeadData;
+    intakeState = {
+      mode: lastMode,
+      collectedData: mergeCollectedData(intakeState.collectedData, lastCollectedData),
+      awaitingVerification: intakeState.awaitingVerification,
+      completed: false,
+    };
+
+    const ready = isRequestReady(intakeState.mode, intakeState.collectedData);
+    if (ready && !verificationConfirmed) {
+      intakeState.awaitingVerification = true;
+      intakeStates.set(requestId, intakeState);
+      const verificationMessage = buildVerificationMessage(intakeState.mode, intakeState.collectedData);
+      await stream.writeSSE({ data: JSON.stringify({ type: 'token', content: verificationMessage }) });
+      await stream.writeSSE({
+        data: JSON.stringify({
+          type: 'done',
+          mode: intakeState.mode,
+          collectedData: intakeState.collectedData,
+        }),
+      });
+      return;
     }
-    if (!supportData && lastMode === 'service' && hasRequiredServiceFields(lastCollectedData)
-      && lastCollectedData.ownsLift === 'yes'
-      && ['lippe', 'other'].includes(String(lastCollectedData.liftManufacturer))
-      && typeof lastCollectedData.serviceRequestType === 'string'
-      && hasPriorContactStatus(lastCollectedData)) {
-      supportData = { ...(lastCollectedData as SupportData), category: resolveSupportCategory(lastCollectedData as SupportData) };
+
+    if (!ready) {
+      intakeState.awaitingVerification = false;
+      intakeStates.set(requestId, intakeState);
+      if (assistantText) {
+        await stream.writeSSE({ data: JSON.stringify({ type: 'token', content: assistantText }) });
+      }
+      await stream.writeSSE({
+        data: JSON.stringify({
+          type: 'done',
+          mode: intakeState.mode,
+          collectedData: intakeState.collectedData,
+        }),
+      });
+      return;
+    }
+
+    if (isLeadReady(intakeState.collectedData)) {
+      lastMode = 'anfrage';
+      lastCollectedData = intakeState.collectedData as Record<string, unknown>;
+      leadData = lastCollectedData as LeadData;
+    } else if (isServiceReady(intakeState.collectedData)) {
+      lastMode = 'service';
+      lastCollectedData = intakeState.collectedData as Record<string, unknown>;
+      supportData = {
+        ...(lastCollectedData as SupportData),
+        category: resolveSupportCategory(lastCollectedData as SupportData),
+      };
     }
 
     if (!leadData && !supportData) {
@@ -358,7 +484,8 @@ export function createChatRoute(deps: ChatDeps): Hono {
     await stream.writeSSE({
       data: JSON.stringify({ type: 'action', action: 'request_completed', data: { requestId, kind: result.kind } }),
     });
-    const completion = 'Danke. Ihr Anliegen wurde an das zuständige Team weitergegeben. Haben Sie noch ein weiteres Anliegen?';
+    intakeStates.set(requestId, { ...intakeState, awaitingVerification: false, completed: true });
+    const completion = 'Danke. Dein Anliegen wurde an das zuständige Team weitergegeben. Hast du noch ein weiteres Anliegen?';
     await stream.writeSSE({ data: JSON.stringify({ type: 'token', content: completion }) });
     await stream.writeSSE({ data: JSON.stringify({ type: 'done', mode: lastMode, collectedData: lastCollectedData }) });
   }
@@ -903,8 +1030,11 @@ export function createChatRoute(deps: ChatDeps): Hono {
             payload: { message: err instanceof Error ? err.message : String(err) },
           }));
         }
+        const customerError = isAiQuotaError(err)
+          ? 'Das tägliche KI-Testlimit ist gerade erreicht. Bitte versuch es später erneut.'
+          : 'Ein Fehler ist aufgetreten. Bitte versuch es erneut.';
         await stream.writeSSE({
-          data: JSON.stringify({ type: 'error', error: 'Ein Fehler ist aufgetreten. Bitte versuch es erneut.' }),
+          data: JSON.stringify({ type: 'error', error: customerError }),
         });
       }
     });

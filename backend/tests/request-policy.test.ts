@@ -14,6 +14,19 @@ describe('request policy', () => {
     });
   });
 
+  it('routes an ordered but not installed lift to Sales without factory-number handling', () => {
+    expect(classifyRequestPolicy({
+      requestSituation: 'ordered_not_installed',
+      ownsLift: 'no',
+      serviceRequestType: 'sales_contract_order',
+    })).toEqual({
+      kind: 'service',
+      crm: 'forbidden',
+      recipient: 'sales@lippelift.de',
+      needsFactoryNumber: false,
+    });
+  });
+
   it('keeps a third-party lift service request email-only', () => {
     expect(classifyRequestPolicy({
       ownsLift: 'yes',

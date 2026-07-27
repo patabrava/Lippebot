@@ -66,45 +66,49 @@ export async function sendMessage(
   message: string,
   history: ChatMessage[],
 ): Promise<void> {
-  const response = await fetch(`${options.apiUrl}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, requestId, message, history }),
-  });
+  try {
+    const response = await fetch(`${options.apiUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, requestId, message, history }),
+    });
 
-  if (!response.ok || !response.body) {
-    options.onError('Sarah ist gerade nicht erreichbar. Bitte versuch es später erneut.');
-    return;
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      const event = parseSSELine(line);
-      if (!event) continue;
-      dispatchSSEEvent(event, options);
+    if (!response.ok || !response.body) {
+      options.onError('Sarah ist gerade nicht erreichbar. Bitte versuch es später erneut.');
+      return;
     }
-  }
 
-  // Flush any buffered tail in case the server/proxy ended the stream
-  // without a trailing newline. This is common with streaming proxies.
-  buffer += decoder.decode();
-  const tail = buffer.trim();
-  if (tail) {
-    const event = parseSSELine(tail);
-    if (event) {
-      dispatchSSEEvent(event, options);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const event = parseSSELine(line);
+        if (!event) continue;
+        dispatchSSEEvent(event, options);
+      }
     }
+
+    // Flush any buffered tail in case the server/proxy ended the stream
+    // without a trailing newline. This is common with streaming proxies.
+    buffer += decoder.decode();
+    const tail = buffer.trim();
+    if (tail) {
+      const event = parseSSELine(tail);
+      if (event) {
+        dispatchSSEEvent(event, options);
+      }
+    }
+  } catch {
+    options.onError('Sarah ist gerade nicht erreichbar. Bitte prüfe deine Verbindung und versuch es erneut.');
   }
 }
 

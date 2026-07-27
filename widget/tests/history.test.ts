@@ -56,9 +56,9 @@ describe('ChatHistory', () => {
 
   it('expires after TTL', () => {
     history.addMessage('user', 'Old message');
-    const data = JSON.parse(localStorage.getItem('sarah-chat-history-v2-du-flow')!);
+    const data = JSON.parse(localStorage.getItem('sarah-chat-history-v3-verified-flow')!);
     data.lastUpdated = Date.now() - (8 * 24 * 60 * 60 * 1000);
-    localStorage.setItem('sarah-chat-history-v2-du-flow', JSON.stringify(data));
+    localStorage.setItem('sarah-chat-history-v3-verified-flow', JSON.stringify(data));
 
     const newHistory = new ChatHistory();
     expect(newHistory.getMessages()).toEqual([]);

@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -19,6 +20,7 @@ const config = loadConfig();
 const gemini = createGeminiService({
   projectId: config.vertexAiProjectId,
   location: config.vertexAiLocation,
+  apiKey: config.vertexAiApiKey,
   enabled: config.vertexAiEnabled,
 });
 const pipedrive = createPipedriveService(config.pipedriveApiKey, config.pipedrivePipelineId, config.pipedriveStageId, {
@@ -56,8 +58,12 @@ const requestOrchestrator = createRequestOrchestrator({
 });
 
 const app = new Hono();
+const corsOrigins = config.corsOrigin
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
-app.use('/api/*', cors({ origin: config.corsOrigin }));
+app.use('/api/*', cors({ origin: corsOrigins }));
 
 app.get('/api/health', (c) => {
   return c.json({

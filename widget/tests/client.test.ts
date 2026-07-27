@@ -46,4 +46,17 @@ describe('sendMessage', () => {
       history: [],
     });
   });
+
+  it('reports a network or CORS failure instead of leaving the request pending', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+    const onError = vi.fn();
+
+    await expect(sendMessage({
+      apiUrl: 'http://127.0.0.1:3000',
+      onToken: vi.fn(), onDone: vi.fn(), onAction: vi.fn(), onError,
+    }, 'session-1', 'request-1', 'Hallo', [])).resolves.toBeUndefined();
+
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('Verbindung'));
+  });
 });

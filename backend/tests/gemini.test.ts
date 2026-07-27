@@ -1,10 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { generateContentStreamMock, getGenerativeModelMock } = vi.hoisted(() => {
+const {
+  generateContentStreamMock,
+  genAiGenerateContentStreamMock,
+  getGenerativeModelMock,
+  googleGenAIConstructorMock,
+} = vi.hoisted(() => {
   const generateContentStreamMock = vi.fn();
+  const genAiGenerateContentStreamMock = vi.fn();
   return {
     generateContentStreamMock,
+    genAiGenerateContentStreamMock,
     getGenerativeModelMock: vi.fn(() => ({ generateContentStream: generateContentStreamMock })),
+    googleGenAIConstructorMock: vi.fn(() => ({
+      models: { generateContentStream: genAiGenerateContentStreamMock },
+    })),
   };
 });
 
@@ -18,10 +28,16 @@ vi.mock('@google-cloud/vertexai', () => ({
   })),
 }));
 
+vi.mock('@google/genai', () => ({
+  GoogleGenAI: googleGenAIConstructorMock,
+}));
+
 describe('createGeminiService', () => {
   beforeEach(() => {
     getGenerativeModelMock.mockClear();
     generateContentStreamMock.mockReset();
+    googleGenAIConstructorMock.mockClear();
+    genAiGenerateContentStreamMock.mockReset();
   });
 
   it('creates a service with streamChat method', async () => {
@@ -32,6 +48,95 @@ describe('createGeminiService', () => {
     });
     expect(service).toHaveProperty('streamChat');
     expect(typeof service.streamChat).toBe('function');
+  });
+
+  it('uses the API-key client without constructing the ADC Vertex client', async () => {
+    genAiGenerateContentStreamMock.mockResolvedValue((async function* () {
+      yield { candidates: [{ content: { parts: [{ text: 'Hallo vom API-Key.' }] } }] };
+    })());
+    const { createGeminiService } = await import('../src/services/gemini.js');
+    const service = createGeminiService({
+      projectId: 'test-project',
+      location: 'us-central1',
+      apiKey: 'configured-api-key',
+    });
+    const events = [];
+    for await (const event of service.streamChat('api-key-session', 'Hallo', [])) {
+      events.push(event);
+    }
+
+    expect(googleGenAIConstructorMock).toHaveBeenCalledWith({ apiKey: 'configured-api-key' });
+    expect(getGenerativeModelMock).not.toHaveBeenCalled();
+    expect(events).toContainEqual({ type: 'token', content: 'Hallo vom API-Key.' });
+  });
+
+  it('falls back to Flash Lite when the API-key primary model quota is exhausted', async () => {
+    genAiGenerateContentStreamMock
+      .mockRejectedValueOnce(Object.assign(new Error('RESOURCE_EXHAUSTED: Quota exceeded'), { status: 429 }))
+      .mockResolvedValueOnce((async function* () {
+        yield { candidates: [{ content: { parts: [{ text: 'Antwort vom Fallback.' }] } }] };
+      })());
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { createGeminiService } = await import('../src/services/gemini.js');
+    const service = createGeminiService({
+      projectId: 'test-project',
+      location: 'us-central1',
+      apiKey: 'configured-api-key',
+    });
+    const events = [];
+
+    for await (const event of service.streamChat('fallback-session', 'Weiter', [])) {
+      events.push(event);
+    }
+
+    expect(genAiGenerateContentStreamMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ model: 'gemini-2.5-flash' }),
+    );
+    expect(genAiGenerateContentStreamMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ model: 'gemini-2.5-flash-lite' }),
+    );
+    expect(events).toContainEqual({ type: 'token', content: 'Antwort vom Fallback.' });
+    expect(warnSpy).toHaveBeenCalledOnce();
+    warnSpy.mockRestore();
+  });
+
+  it('normalizes widget history before sending it to the API-key client', async () => {
+    genAiGenerateContentStreamMock.mockResolvedValue((async function* () {
+      yield { candidates: [{ content: { parts: [{ text: 'Antwort' }] } }] };
+    })());
+    const { createGeminiService } = await import('../src/services/gemini.js');
+    const service = createGeminiService({
+      projectId: 'test-project',
+      location: 'us-central1',
+      apiKey: 'configured-api-key',
+    });
+
+    for await (const _event of service.streamChat('history-session', 'Aktuelle Frage', [
+      { role: 'assistant', content: 'Lokale Begrüßung', timestamp: 1 },
+      { role: 'user', content: 'Erste Frage', timestamp: 2 },
+      { role: 'assistant', content: 'Ein Fehler ist aufgetreten. Bitte versuch es erneut.', timestamp: 3 },
+      { role: 'user', content: 'Nachtrag', timestamp: 3 },
+      { role: 'assistant', content: 'Zwischenantwort', timestamp: 4 },
+    ])) {
+      // Consume the stream.
+    }
+
+    expect(genAiGenerateContentStreamMock.mock.calls[0][0].contents).toEqual([
+      {
+        role: 'user',
+        parts: [{ text: 'Erste Frage' }, { text: '\n\nNachtrag' }],
+      },
+      {
+        role: 'model',
+        parts: [{ text: 'Zwischenantwort' }],
+      },
+      {
+        role: 'user',
+        parts: [{ text: 'Aktuelle Frage' }],
+      },
+    ]);
   });
 
   it('registers submit_service_request with support category fields', async () => {
@@ -69,6 +174,13 @@ describe('createGeminiService', () => {
     const leadDeclaration = declarations.find((declaration: { name: string }) => declaration.name === 'submit_lead');
     const serviceDeclaration = declarations.find((declaration: { name: string }) => declaration.name === 'submit_service_request');
 
+    expect(stateDeclaration.parameters.properties.collectedData.properties.requestSituation.enum).toEqual([
+      'new_lift',
+      'ordered_not_installed',
+      'installed_lift',
+    ]);
+    expect(leadDeclaration.parameters.properties.requestSituation).toBeDefined();
+    expect(serviceDeclaration.parameters.properties.requestSituation).toBeDefined();
     expect(stateDeclaration.parameters.properties.collectedData.properties.priorContact.enum).toEqual(['yes', 'no', 'unknown']);
     expect(stateDeclaration.parameters.properties.collectedData.properties.priorContactReference).toBeDefined();
     expect(leadDeclaration.parameters.properties.priorContact.enum).toEqual(['yes', 'no', 'unknown']);

@@ -1,8 +1,34 @@
 import { VertexAI, type FunctionDeclaration, FunctionDeclarationSchemaType, type Content, type Part } from '@google-cloud/vertexai';
+import {
+  GoogleGenAI,
+  type Content as GenAIContent,
+  type FunctionDeclaration as GenAIFunctionDeclaration,
+  type Part as GenAIPart,
+} from '@google/genai';
 import type { ChatMessage, Mode, LeadData, ServiceData, ConversationState } from '../types/index.js';
 import { buildSystemPrompt } from '../prompts/system-prompt.js';
 import { hasContactMethod } from '../contact/contact-method.js';
 import { hasPriorContactStatus } from '../contact/prior-contact.js';
+
+const API_KEY_PRIMARY_MODEL = 'gemini-2.5-flash';
+const API_KEY_QUOTA_FALLBACK_MODEL = 'gemini-2.5-flash-lite';
+
+function isQuotaExhausted(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { status?: unknown; code?: unknown; message?: unknown };
+  return candidate.status === 429
+    || candidate.code === 429
+    || (typeof candidate.message === 'string'
+      && (candidate.message.includes('RESOURCE_EXHAUSTED') || candidate.message.includes('Quota exceeded')));
+}
+
+function isWidgetTransportError(message: ChatMessage): boolean {
+  if (message.role !== 'assistant') return false;
+  return message.content === 'Ein Fehler ist aufgetreten. Bitte versuch es erneut.'
+    || message.content === 'Sarah ist gerade nicht erreichbar. Bitte versuch es später erneut.'
+    || message.content === 'Sarah ist gerade nicht erreichbar. Bitte prüfe deine Verbindung und versuch es erneut.'
+    || message.content === 'Das tägliche KI-Testlimit ist gerade erreicht. Bitte versuch es später erneut.';
+}
 
 const priorContactProperty = {
   type: FunctionDeclarationSchemaType.STRING,
@@ -36,6 +62,11 @@ const serviceRequestTypeProperty = {
   ],
 };
 
+const requestSituationProperty = {
+  type: FunctionDeclarationSchemaType.STRING,
+  enum: ['new_lift', 'ordered_not_installed', 'installed_lift'],
+};
+
 const reportStateFn: FunctionDeclaration = {
   name: 'report_state',
   description: 'Report the current conversation mode and any collected data after every response.',
@@ -51,6 +82,7 @@ const reportStateFn: FunctionDeclaration = {
         type: FunctionDeclarationSchemaType.OBJECT,
         description: 'Any lead or service data collected so far',
         properties: {
+          requestSituation: requestSituationProperty,
           ownsLift: ownsLiftProperty,
           liftManufacturer: liftManufacturerProperty,
           factoryNumber: { type: FunctionDeclarationSchemaType.STRING },
@@ -105,6 +137,7 @@ const submitLeadFn: FunctionDeclaration = {
   parameters: {
     type: FunctionDeclarationSchemaType.OBJECT,
     properties: {
+      requestSituation: requestSituationProperty,
       ownsLift: ownsLiftProperty,
       priorContact: priorContactProperty,
       priorContactReference: { type: FunctionDeclarationSchemaType.STRING },
@@ -134,6 +167,7 @@ const submitServiceRequestFn: FunctionDeclaration = {
   parameters: {
     type: FunctionDeclarationSchemaType.OBJECT,
     properties: {
+      requestSituation: requestSituationProperty,
       ownsLift: ownsLiftProperty,
       liftManufacturer: liftManufacturerProperty,
       factoryNumber: { type: FunctionDeclarationSchemaType.STRING },
@@ -174,6 +208,12 @@ function isValidLeadSubmission(args: Record<string, unknown>): boolean {
 }
 
 function isValidServiceSubmission(args: Record<string, unknown>): boolean {
+  if (args.requestSituation === 'ordered_not_installed') {
+    return args.ownsLift === 'no'
+      && args.serviceRequestType === 'sales_contract_order'
+      && hasPriorContactStatus(args)
+      && hasContactMethod(args);
+  }
   if (args.ownsLift !== 'yes' || !['lippe', 'other'].includes(String(args.liftManufacturer))) {
     return false;
   }
@@ -192,6 +232,7 @@ function isValidServiceSubmission(args: Record<string, unknown>): boolean {
 interface VertexChatConfig {
   projectId: string;
   location: string;
+  apiKey?: string;
   enabled?: boolean;
 }
 
@@ -200,16 +241,20 @@ export function createGeminiService(config: VertexChatConfig) {
     throw new Error('Vertex AI is disabled, but this backend only supports Vertex for LLM calls.');
   }
 
-  const vertexAI = new VertexAI({
-    project: config.projectId,
-    location: config.location,
-  });
-
-  const model = vertexAI.getGenerativeModel({
-    model: 'gemini-2.5-flash',
-    systemInstruction: buildSystemPrompt(),
-    tools: [{ functionDeclarations: allFunctionDeclarations }],
-  });
+  const systemInstruction = buildSystemPrompt();
+  const apiKeyClient = config.apiKey
+    ? new GoogleGenAI({ apiKey: config.apiKey })
+    : undefined;
+  const model = apiKeyClient
+    ? undefined
+    : new VertexAI({
+      project: config.projectId,
+      location: config.location,
+    }).getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      systemInstruction,
+      tools: [{ functionDeclarations: allFunctionDeclarations }],
+    });
 
   function extractFunctionCalls(parts: Part[]): Array<{ name: string; args: Record<string, unknown> }> {
     const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
@@ -228,10 +273,65 @@ export function createGeminiService(config: VertexChatConfig) {
       .join('');
   }
 
+  async function generate(
+    contents: Content[],
+  ): Promise<{ textChunks: string[]; responseParts: Part[] }> {
+    if (apiKeyClient) {
+      const generateWithModel = async (
+        modelName: string,
+      ): Promise<{ textChunks: string[]; responseParts: Part[] }> => {
+        const stream = await apiKeyClient.models.generateContentStream({
+          model: modelName,
+          contents: contents as unknown as GenAIContent[],
+          config: {
+            systemInstruction,
+            tools: [{
+              functionDeclarations: allFunctionDeclarations as unknown as GenAIFunctionDeclaration[],
+            }],
+          },
+        });
+        const textChunks: string[] = [];
+        const responseParts: Part[] = [];
+        for await (const chunk of stream) {
+          const parts = (chunk.candidates?.[0]?.content?.parts ?? []) as GenAIPart[];
+          const compatibleParts = parts as unknown as Part[];
+          const text = extractText(compatibleParts);
+          if (text) textChunks.push(text);
+          responseParts.push(...compatibleParts);
+        }
+        return { textChunks, responseParts };
+      };
+
+      try {
+        return await generateWithModel(API_KEY_PRIMARY_MODEL);
+      } catch (error) {
+        if (!isQuotaExhausted(error)) throw error;
+        console.warn(
+          `Gemini quota exhausted for ${API_KEY_PRIMARY_MODEL}; retrying with ${API_KEY_QUOTA_FALLBACK_MODEL}.`,
+        );
+        return generateWithModel(API_KEY_QUOTA_FALLBACK_MODEL);
+      }
+    }
+
+    const result = await model!.generateContentStream({ contents });
+    const textChunks: string[] = [];
+    for await (const chunk of result.stream) {
+      const parts = chunk.candidates?.[0]?.content?.parts ?? [];
+      const text = extractText(parts);
+      if (text) textChunks.push(text);
+    }
+    const response = await result.response;
+    return {
+      textChunks,
+      responseParts: response.candidates?.[0]?.content?.parts || [],
+    };
+  }
+
   async function* streamChat(
     sessionId: string,
     message: string,
     history: ChatMessage[],
+    authoritativeContext?: string,
   ): AsyncGenerator<{
     type: 'token' | 'state' | 'lead' | 'service';
     content?: string;
@@ -239,25 +339,34 @@ export function createGeminiService(config: VertexChatConfig) {
     leadData?: LeadData;
     serviceData?: ServiceData;
   }> {
-    const contents: Content[] = history.map((msg) => ({
-      role: msg.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: msg.content }],
-    }));
-    contents.push({ role: 'user', parts: [{ text: message }] });
+    const contents: Content[] = [];
+    const appendText = (role: 'user' | 'model', text: string): void => {
+      // The widget's initial greeting is presentation-only. Gemini chat
+      // history must begin with a user turn, not that local model greeting.
+      if (contents.length === 0 && role === 'model') return;
 
-    const result = await model.generateContentStream({ contents });
-    const initialTextChunks: string[] = [];
-
-    for await (const chunk of result.stream) {
-      const parts = chunk.candidates?.[0]?.content?.parts ?? [];
-      const text = extractText(parts);
-      if (text) {
-        initialTextChunks.push(text);
+      const previous = contents.at(-1);
+      if (previous?.role === role) {
+        previous.parts.push({ text: `\n\n${text}` });
+        return;
       }
-    }
+      contents.push({ role, parts: [{ text }] });
+    };
 
-    const response = await result.response;
-    const responseParts = response.candidates?.[0]?.content?.parts || [];
+    for (const historyMessage of history) {
+      if (isWidgetTransportError(historyMessage)) continue;
+      appendText(historyMessage.role === 'assistant' ? 'model' : 'user', historyMessage.content);
+    }
+    appendText(
+      'user',
+      authoritativeContext
+        ? `${authoritativeContext}\n\nAKTUELLE KUNDENNACHRICHT:\n${message}`
+        : message,
+    );
+
+    const initialGeneration = await generate(contents);
+    const initialTextChunks = initialGeneration.textChunks;
+    const responseParts = initialGeneration.responseParts;
     const functionCalls = extractFunctionCalls(responseParts);
     const hasInvalidSubmission = functionCalls.some((call) => (
       (call.name === 'submit_lead' && !isValidLeadSubmission(call.args))
@@ -336,7 +445,11 @@ export function createGeminiService(config: VertexChatConfig) {
         });
       } else if (call.name === 'submit_service_request') {
         hasActionCalls = true;
-        if (call.args.ownsLift !== 'yes' || !['lippe', 'other'].includes(String(call.args.liftManufacturer))) {
+        const isOrderedLift = call.args.requestSituation === 'ordered_not_installed'
+          && call.args.ownsLift === 'no'
+          && call.args.serviceRequestType === 'sales_contract_order';
+        if (!isOrderedLift
+          && (call.args.ownsLift !== 'yes' || !['lippe', 'other'].includes(String(call.args.liftManufacturer)))) {
           functionResponses.push({
             functionResponse: {
               name: 'submit_service_request',
@@ -388,7 +501,8 @@ export function createGeminiService(config: VertexChatConfig) {
           });
           continue;
         }
-        const hasFactoryDecision = call.args.liftManufacturer === 'other'
+        const hasFactoryDecision = isOrderedLift
+          || call.args.liftManufacturer === 'other'
           || call.args.factoryNumberStatus === 'unavailable'
           || (call.args.factoryNumberStatus === 'provided'
             && typeof call.args.factoryNumber === 'string'
@@ -423,18 +537,12 @@ export function createGeminiService(config: VertexChatConfig) {
         { role: 'user', parts: functionResponses },
       ];
 
-      const followUpResult = await model.generateContentStream({ contents: followUpContents });
-
-      for await (const chunk of followUpResult.stream) {
-        const parts = chunk.candidates?.[0]?.content?.parts ?? [];
-        const text = extractText(parts);
-        if (text) {
-          yield { type: 'token', content: text };
-        }
+      const followUpGeneration = await generate(followUpContents);
+      for (const text of followUpGeneration.textChunks) {
+        yield { type: 'token', content: text };
       }
 
-      const followUpResponse = await followUpResult.response;
-      const followUpParts = followUpResponse.candidates?.[0]?.content?.parts || [];
+      const followUpParts = followUpGeneration.responseParts;
       const followUpCalls = extractFunctionCalls(followUpParts);
       for (const call of followUpCalls) {
         if (call.name === 'report_state') {

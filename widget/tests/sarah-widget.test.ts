@@ -115,7 +115,7 @@ describe('SarahWidget inactivity handling', () => {
     }));
   });
 
-  it('renders fixed factory-number help and rotates the completed request ID', async () => {
+  it('renders factory-number help and waits to rotate until another concern starts', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response([
       'data: {"type":"action","action":"show_factory_number_help","data":{"requestId":"placeholder"}}',
       'data: {"type":"token","content":"Bitte schreibe die Fabriknummer ab."}',
@@ -126,7 +126,7 @@ describe('SarahWidget inactivity handling', () => {
     vi.stubGlobal('fetch', fetchMock);
     new SarahWidget('https://api.example.test', { delay: 999_999 } as never);
     document.querySelector<HTMLButtonElement>('.sarah-bubble')!.click();
-    const initialRequestId = JSON.parse(localStorage.getItem('sarah-chat-history-v2-du-flow')!).activeRequestId;
+    const initialRequestId = JSON.parse(localStorage.getItem('sarah-chat-history-v3-verified-flow')!).activeRequestId;
     fetchMock.mockResolvedValueOnce(new Response([
       `data: {"type":"action","action":"show_factory_number_help","data":{"requestId":"${initialRequestId}"}}`,
       'data: {"type":"token","content":"Bitte schreibe die Fabriknummer ab."}',
@@ -144,8 +144,23 @@ describe('SarahWidget inactivity handling', () => {
     expect(image).not.toBeNull();
     expect(image.src).toBe('https://api.example.test/fabriknummer-hinweis.png');
     expect(image.alt).toContain('Fabriknummer');
-    const stored = JSON.parse(localStorage.getItem('sarah-chat-history-v2-du-flow')!);
-    expect(stored.activeRequestId).not.toBe(initialRequestId);
+    const stored = JSON.parse(localStorage.getItem('sarah-chat-history-v3-verified-flow')!);
+    expect(stored.activeRequestId).toBe(initialRequestId);
     expect(stored.messages.some((message: { content: string }) => message.content.includes('Fabriknummer'))).toBe(true);
+
+    fetchMock.mockResolvedValueOnce(new Response([
+      `data: {"type":"action","action":"start_new_request","data":{"completedRequestId":"${initialRequestId}"}}`,
+      'data: {"type":"token","content":"Beschreibe bitte dein weiteres Anliegen."}',
+      'data: {"type":"done","mode":"undetermined","collectedData":{}}',
+      '',
+    ].join('\n')));
+    input.value = 'Ja';
+    document.querySelector<HTMLButtonElement>('.sarah-send')!.click();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    await vi.waitFor(() => {
+      const afterNewConcern = JSON.parse(localStorage.getItem('sarah-chat-history-v3-verified-flow')!);
+      expect(afterNewConcern.activeRequestId).not.toBe(initialRequestId);
+    });
   });
 });

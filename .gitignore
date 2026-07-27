@@ -8,6 +8,7 @@ widget/dist/
 # Environment files
 .env
 backend/.env
+backend/.secrets/
 
 # OS files
 .DS_Store

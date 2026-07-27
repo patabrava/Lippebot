@@ -40,7 +40,7 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('Frage immer nur eine einzige neue Information pro Antwort ab');
     expect(prompt).toContain('Stelle niemals mehrere Fragen auf einmal');
     expect(prompt).toContain('Deine Antwort darf maximal ein Fragezeichen enthalten');
-    expect(prompt).toContain('beginne mit: "Ist der Lift für drinnen oder draußen?"');
+    expect(prompt).toContain('erste anfragespezifische Frage: "Ist der Lift für drinnen oder draußen?"');
     expect(prompt).toContain('Wenn du nach dem Namen fragst, formuliere: "Wie ist dein Name?"');
     expect(prompt).toContain('An welcher Adresse brauchst du den Lift?');
   });
@@ -64,7 +64,7 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('priorContact = unknown');
     expect(prompt).toContain('Eine Antwort mit nein verhindert niemals die bestehende CRM-Dublettenprüfung');
     expect(prompt).toContain('Vorheriger Kontakt zu diesem Anliegen: yes, no oder unknown (Pflicht)');
-    expect(prompt).toContain('Rufe `submit_service_request` erst auf, wenn priorContact');
+    expect(prompt).toContain('Rufe `submit_service_request` erst nach ausdruecklicher Bestaetigung');
   });
 
   it('includes boundary rules', () => {
@@ -139,13 +139,34 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('Der Anfrage-Modus bleibt fuer neue Beratungs- und Angebotsanfragen unveraendert');
   });
 
-  it('starts actionable handoffs with the approved lift-ownership decision', () => {
+  it('starts actionable handoffs by distinguishing new, ordered, and installed lifts', () => {
     const prompt = buildSystemPrompt();
-    expect(prompt).toContain('Besitzt die Person bereits einen installierten Lift?');
+    expect(prompt).toContain('neuen Lift, einen bereits bestellten Lift oder einen bereits eingebauten Lift');
+    expect(prompt).toContain('requestSituation = new_lift');
+    expect(prompt).toContain('requestSituation = ordered_not_installed');
+    expect(prompt).toContain('requestSituation = installed_lift');
     expect(prompt).toContain('ownsLift = no');
     expect(prompt).toContain('ownsLift = yes');
     expect(prompt).toContain('Allgemeine Informationsfragen beantwortest du direkt');
     expect(prompt).toContain('ob der Lift von LIPPE Lift stammt');
+  });
+
+  it('collects common base data first and promises a verification summary', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('gemeinsame Basis');
+    expect(prompt).toContain('vollstaendiger Name');
+    expect(prompt).toContain('genau eine Kontaktmoeglichkeit');
+    expect(prompt).toContain('zeige ich dir alle erfassten Angaben zur Kontrolle');
+    expect(prompt).toContain('korrekt an einen unserer Mitarbeiter weiterleiten');
+    expect(prompt).toContain('Bereits erfasste Basisdaten sind verbindlich');
+  });
+
+  it('does not ask ordered-lift customers for factory or new-purchase qualification data', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Frage niemals nach einer Fabriknummer');
+    expect(prompt).toContain('verlange nicht die vollstaendige Neukauf-Qualifizierung');
+    expect(prompt).toContain('serviceRequestType = sales_contract_order');
+    expect(prompt).toContain('category = sales');
   });
 
   it('requires the LIPPE factory-number step and permits explicit unavailability', () => {
@@ -197,17 +218,17 @@ describe('buildSystemPrompt', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('Erwaehne niemals Pipedrive');
     expect(prompt).toContain('Erwaehne niemals CRM');
-    expect(prompt).toContain('Frage nach dem Kundennamen');
+    expect(prompt).toContain('Kundennamen und genau einer Kontaktmoeglichkeit');
     expect(prompt).toContain('Auch im Service-Modus genügt genau eine Kontaktmöglichkeit');
     expect(prompt).toContain('Stelle keine unnoetigen Zusatzfragen');
   });
 
   it('requires a disambiguator before final support handoff when the name alone is not enough', () => {
     const prompt = buildSystemPrompt();
-    expect(prompt).toContain('Rufe `submit_service_request` erst auf, wenn');
+    expect(prompt).toContain('Rufe `submit_service_request` erst nach ausdruecklicher Bestaetigung');
     expect(prompt).toContain('Telefonnummer');
     expect(prompt).toContain('E-Mail-Adresse');
-    expect(prompt).toContain('mindestens eine der beiden Kontaktmöglichkeiten vorhanden ist');
+    expect(prompt).toContain('mindestens eine Kontaktmoeglichkeit vorhanden sein');
   });
 
   it('scopes free-consultation wording to advisor and inquiry modes', () => {

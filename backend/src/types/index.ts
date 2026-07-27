@@ -14,6 +14,7 @@ export interface ChatRequest {
 export type Mode = 'berater' | 'anfrage' | 'service' | 'undetermined';
 export type YesNoUnknown = 'yes' | 'no' | 'unknown';
 export type PriorContactStatus = YesNoUnknown;
+export type RequestSituation = 'new_lift' | 'ordered_not_installed' | 'installed_lift';
 
 export type LiftManufacturer = 'lippe' | 'other' | 'unknown';
 export type FactoryNumberStatus = 'provided' | 'unavailable' | 'unknown';
@@ -55,6 +56,7 @@ export type SupportMatchState = 'unique' | 'ambiguous' | 'unresolved';
 export type SupportNoteStatus = 'created' | 'failed' | 'skipped';
 
 export interface LeadData {
+  requestSituation?: RequestSituation;
   ownsLift?: YesNoUnknown;
   priorContact?: PriorContactStatus;
   priorContactReference?: string;
@@ -87,6 +89,7 @@ export interface LeadCrmResult {
 }
 
 export interface SupportData {
+  requestSituation?: RequestSituation;
   ownsLift?: YesNoUnknown;
   liftManufacturer?: LiftManufacturer;
   factoryNumber?: string;

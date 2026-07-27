@@ -346,8 +346,9 @@ class SarahWidget {
     let streamBubble: AssistantBubble | null = null;
     let fullResponse = '';
 
-    await sendMessage(
-      {
+    try {
+      await sendMessage(
+        {
         apiUrl: this.apiUrl,
         onToken: (token) => {
           if (typingEl.parentNode) typingEl.remove();
@@ -370,25 +371,29 @@ class SarahWidget {
           if (action === 'show_factory_number_help') {
             this.renderFactoryNumberHelp();
           }
-          if (action === 'request_completed' && typeof data.requestId === 'string') {
-            this.history.completeRequest(data.requestId);
+          if (action === 'start_new_request' && typeof data.completedRequestId === 'string') {
+            this.history.completeRequest(data.completedRequestId);
           }
         },
         onError: (error) => {
           if (typingEl.parentNode) typingEl.remove();
-          this.addBotMessage(error);
+          // Connection/provider errors are UI state, not assistant turns.
+          // Persisting them poisons the next model request after a retry.
+          this.appendMessageEl('bot', error, true);
           this.scheduleInactivityFollowUp();
         },
-      },
-      this.history.getSessionId(),
-      this.history.getRequestId(),
-      text,
-      this.history.getMessages().slice(0, -1),
-    );
-
-    this.isStreaming = false;
-    this.sendBtn!.disabled = false;
-    this.inputEl!.focus();
+        },
+        this.history.getSessionId(),
+        this.history.getRequestId(),
+        text,
+        this.history.getMessages().slice(0, -1),
+      );
+    } finally {
+      if (typingEl.parentNode) typingEl.remove();
+      this.isStreaming = false;
+      this.sendBtn!.disabled = false;
+      this.inputEl!.focus();
+    }
   }
 
   private hasUserMessage(): boolean {

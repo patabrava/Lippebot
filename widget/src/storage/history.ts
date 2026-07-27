@@ -13,7 +13,7 @@ interface StoredData {
 }
 
 const LEGACY_STORAGE_KEY = 'sarah-chat-history';
-const STORAGE_KEY = 'sarah-chat-history-v2-du-flow';
+const STORAGE_KEY = 'sarah-chat-history-v3-verified-flow';
 const TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 function generateId(): string {

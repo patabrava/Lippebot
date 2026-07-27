@@ -1,6 +1,7 @@
 import type {
   FactoryNumberStatus,
   LiftManufacturer,
+  RequestSituation,
   ServiceRequestType,
   YesNoUnknown,
 } from '../types/index.js';
@@ -18,6 +19,7 @@ export type CrmPermission =
   | 'create_service_request';
 
 export interface RequestPolicyInput {
+  requestSituation?: RequestSituation;
   ownsLift?: YesNoUnknown;
   liftManufacturer?: LiftManufacturer;
   factoryNumberStatus?: FactoryNumberStatus;
@@ -45,6 +47,14 @@ export function getServiceRecipient(serviceRequestType: ServiceRequestType): Sup
 }
 
 export function classifyRequestPolicy(input: RequestPolicyInput): RequestPolicy {
+  if (input.requestSituation === 'ordered_not_installed') {
+    return {
+      kind: 'service',
+      crm: 'forbidden',
+      recipient: 'sales@lippelift.de',
+      needsFactoryNumber: false,
+    };
+  }
   if (input.ownsLift === 'no') {
     return {
       kind: 'opportunity',

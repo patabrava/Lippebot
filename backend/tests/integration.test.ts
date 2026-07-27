@@ -161,15 +161,24 @@ describe('POST /api/chat', () => {
     const testApp = new Hono();
     testApp.route('/', chatRoute);
 
-    const text = await (await testApp.request('/api/chat', {
+    const reviewText = await (await testApp.request('/api/chat', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: 'service-session', requestId: 'req-service', message: 'Technisches Anliegen', history: [] }),
     })).text();
 
+    expect(execute).not.toHaveBeenCalled();
+    expect(reviewText).toContain('"action":"show_factory_number_help"');
+    expect(reviewText).toContain('Sind alle Angaben korrekt?');
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'service-session', requestId: 'req-service', message: 'Ja, alles korrekt', history: [] }),
+    })).text();
+
     expect(execute).toHaveBeenCalledOnce();
-    expect(text).toContain('"action":"show_factory_number_help"');
     expect(text).toContain('"action":"request_completed"');
-    expect(text).toContain('Haben Sie noch ein weiteres Anliegen?');
+    expect(text).not.toContain('Sind alle Angaben korrekt?');
+    expect(text).toContain('Hast du noch ein weiteres Anliegen?');
     expect(text).toContain('"type":"done"');
   });
 
@@ -224,9 +233,15 @@ describe('POST /api/chat', () => {
     const testApp = new Hono();
     testApp.route('/', chatRoute);
 
-    const text = await (await testApp.request('/api/chat', {
+    const reviewText = await (await testApp.request('/api/chat', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: 'lead-session', requestId: 'req-lead', message: 'Neue Anfrage', history: [] }),
+    })).text();
+
+    expect(reviewText).toContain('Sind alle Angaben korrekt?');
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'lead-session', requestId: 'req-lead', message: 'Ja', history: [] }),
     })).text();
 
     expect(text).toContain('"type":"error"');
@@ -289,15 +304,27 @@ describe('POST /api/chat', () => {
     const testApp = new Hono();
     testApp.route('/', chatRoute);
 
-    const text = await (await testApp.request('/api/chat', {
+    const requestBody = {
+      sessionId: 'bypass-integration',
+      requestId: 'bypass-integration-request',
+      history: [{ role: 'user', content: 'Kompletter Verlauf', timestamp: 1_752_652_000_000 }],
+    };
+    const reviewText = await (await testApp.request('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        sessionId: 'bypass-integration',
-        requestId: 'bypass-integration-request',
+        ...requestBody,
         message: 'Anfrage absenden',
-        history: [{ role: 'user', content: 'Kompletter Verlauf', timestamp: 1_752_652_000_000 }],
       }),
+    })).text();
+
+    expect(reviewText).toContain('Sind alle Angaben korrekt?');
+    expect(sendBypassNotification).not.toHaveBeenCalled();
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...requestBody, message: 'Ja, stimmt' }),
     })).text();
 
     expect(sendBypassNotification.mock.calls.map(([recipient]) => recipient)).toEqual([
@@ -315,7 +342,7 @@ describe('POST /api/chat', () => {
       expect(operation).not.toHaveBeenCalled();
     }
     expect(text).toContain('"action":"request_completed"');
-    expect(text).toContain('Haben Sie noch ein weiteres Anliegen?');
+    expect(text).toContain('Hast du noch ein weiteres Anliegen?');
     expect(text).toContain('"type":"done"');
   });
 
@@ -332,13 +359,149 @@ describe('POST /api/chat', () => {
     const testApp = new Hono();
     testApp.route('/', chatRoute);
     for (const requestId of ['req-1', 'req-2']) {
-      const text = await (await testApp.request('/api/chat', {
+      const reviewText = await (await testApp.request('/api/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: 'same-session', requestId, message: 'Anfrage', history: [] }),
+      })).text();
+      expect(reviewText).toContain('Sind alle Angaben korrekt?');
+      const text = await (await testApp.request('/api/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: 'same-session', requestId, message: 'Ja', history: [] }),
       })).text();
       expect(text).toContain(`"requestId":"${requestId}"`);
     }
     expect(execute.mock.calls.map(([input]) => input.requestId)).toEqual(['req-1', 'req-2']);
+  });
+
+  it('updates a corrected field, shows the summary again, and submits exactly once after confirmation', async () => {
+    const baseLeadData = {
+      requestSituation: 'new_lift' as const,
+      ownsLift: 'no' as const,
+      priorContact: 'no' as const,
+      customerSegment: 'privatperson' as const,
+      firstName: 'Max',
+      lastName: 'Muster',
+      email: 'falsch@example.de',
+      street: 'Test 1',
+      postalCode: '32657',
+      city: 'Lemgo',
+      availability: '08:00 - 12:00' as const,
+    };
+    let generation = 0;
+    const execute = vi.fn(async (input) => ({
+      requestId: input.requestId,
+      kind: 'opportunity' as const,
+      completed: true as const,
+      recipient: 'sales@lippelift.de',
+    }));
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          generation += 1;
+          const data = generation === 1
+            ? baseLeadData
+            : { ...baseLeadData, email: 'richtig@example.de' };
+          yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: data } };
+        },
+      },
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      requestOrchestrator: { execute },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const body = (message: string) => JSON.stringify({
+      sessionId: 'verification-correction',
+      requestId: 'verification-correction-request',
+      message,
+      history: [],
+    });
+
+    const firstReview = await (await testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body('Neue Anfrage'),
+    })).text();
+    expect(firstReview).toContain('falsch@example.de');
+    expect(execute).not.toHaveBeenCalled();
+
+    const correctedReview = await (await testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body('Nein, meine E-Mail ist richtig@example.de'),
+    })).text();
+    expect(correctedReview).toContain('richtig@example.de');
+    expect(correctedReview).not.toContain('falsch@example.de');
+    expect(execute).not.toHaveBeenCalled();
+
+    const completion = await (await testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body('Ja, stimmt'),
+    })).text();
+    expect(completion).toContain('"action":"request_completed"');
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      leadData: expect.objectContaining({ email: 'richtig@example.de' }),
+    }));
+
+    const close = await (await testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body('Nein'),
+    })).text();
+    expect(close).toContain('schönen Tag');
+    expect(close).not.toContain('"action":"request_completed"');
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it('routes an ordered but not installed lift as a verified Sales service request without factory data', async () => {
+    const orderedData = {
+      requestSituation: 'ordered_not_installed' as const,
+      ownsLift: 'no' as const,
+      serviceRequestType: 'sales_contract_order' as const,
+      customerName: 'Patrick Berg',
+      email: 'patrick-berg@online.de',
+      category: 'sales' as const,
+      issueDescription: 'Wartet auf seinen bestellten Treppenlift.',
+      priorContact: 'yes' as const,
+      priorContactReference: 'PB-318654',
+    };
+    const execute = vi.fn(async (input) => ({
+      requestId: input.requestId,
+      kind: 'service' as const,
+      completed: true as const,
+      recipient: 'sales@lippelift.de',
+    }));
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'state' as const, state: { sessionId, mode: 'service' as const, collectedData: orderedData } };
+        },
+      },
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      requestOrchestrator: { execute },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const review = await (await testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'ordered', requestId: 'ordered-request', message: 'Ich warte auf meinen Lift', history: [] }),
+    })).text();
+    expect(review).toContain('noch nicht eingebaut');
+    expect(review).not.toContain('Fabriknummer');
+    expect(execute).not.toHaveBeenCalled();
+
+    await (await testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'ordered', requestId: 'ordered-request', message: 'Ja', history: [] }),
+    })).text();
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'service',
+      supportData: expect.objectContaining({
+        requestSituation: 'ordered_not_installed',
+        priorContactReference: 'PB-318654',
+      }),
+    }));
   });
 
   it('does not mistake an ordinary response turn for the end of a general conversation', async () => {
@@ -859,6 +1022,36 @@ describe('POST /api/chat', () => {
     const text = await res.text();
     expect(text).toContain('Ein Fehler ist aufgetreten. Bitte versuch es erneut.');
     expect(text).not.toContain('Bitte versuchen Sie es erneut.');
+  });
+
+  it('explains quota exhaustion instead of showing a generic chat error', async () => {
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat() {
+          throw Object.assign(new Error('RESOURCE_EXHAUSTED: Quota exceeded'), { status: 429 });
+        },
+      },
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const res = await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'test-quota-copy',
+        message: 'Weiter',
+        history: [],
+      }),
+    });
+
+    const text = await res.text();
+    expect(text).toContain('Das tägliche KI-Testlimit ist gerade erreicht.');
+    expect(text).not.toContain('Ein Fehler ist aufgetreten.');
   });
 
   it('emits a lead action when completed lead data is submitted through state fallback', async () => {

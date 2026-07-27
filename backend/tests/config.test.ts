@@ -28,10 +28,13 @@ describe('loadConfig', () => {
     delete process.env.SERVICE_EMAIL_TO;
     delete process.env.PIPEDRIVE_BYPASS_ENABLED;
     delete process.env.PIPEDRIVE_BYPASS_EMAIL_TO;
+    delete process.env.VERTEX_AI_API_KEY;
+    delete process.env.GEMINI_API_KEY;
     const config = loadConfig();
     expect(config.vertexAiProjectId).toBe('test-project');
     expect(config.vertexAiLocation).toBe('us-central1');
     expect(config.vertexAiEnabled).toBe(true);
+    expect(config.vertexAiApiKey).toBe('');
     expect(config.port).toBe(3000);
     expect(config.corsOrigin).toBe('http://localhost:5173');
     expect(config.pipedriveApiKey).toBe('');
@@ -43,6 +46,14 @@ describe('loadConfig', () => {
     expect(config.serviceEmailTo).toBe('berg@lippelift.de,caechma@gmail.com');
     expect(config.pipedriveBypassEnabled).toBe(false);
     expect(config.pipedriveBypassEmailTo).toBe('berg@lippelift.de,caechma@gmail.com');
+  });
+
+  it('loads API-key authentication without confusing it with local ADC identity', () => {
+    process.env.VERTEX_AI_PROJECT_ID = 'test-project';
+    process.env.VERTEX_AI_API_KEY = 'gemini-api-key';
+    const config = loadConfig();
+
+    expect(config.vertexAiApiKey).toBe('gemini-api-key');
   });
 
   it.each(['true', '1', 'yes', 'on'])('enables Pipedrive bypass with %s', (value) => {
