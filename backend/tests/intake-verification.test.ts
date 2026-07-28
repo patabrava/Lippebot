@@ -88,4 +88,16 @@ describe('intake verification', () => {
     expect(message).not.toContain('Fabriknummer');
     expect(message).toContain('Sind alle Angaben korrekt?');
   });
+
+  it('shows both contact methods when the customer provided both', () => {
+    const message = buildVerificationMessage('anfrage', {
+      firstName: 'LIPPEBOT',
+      lastName: 'QA',
+      email: 'qa@example.de',
+      phone: '+49 151 00000000',
+    });
+
+    expect(message).toContain('• E-Mail: qa@example.de');
+    expect(message).toContain('• Telefon: +49 151 00000000');
+  });
 });

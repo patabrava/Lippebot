@@ -91,11 +91,8 @@ function addLine(lines: string[], label: string, value: unknown): void {
 }
 
 function addContactLine(lines: string[], data: CollectedRequestData): void {
-  if (data.email?.trim()) {
-    addLine(lines, 'E-Mail', data.email);
-  } else {
-    addLine(lines, 'Telefon', data.phone);
-  }
+  addLine(lines, 'E-Mail', data.email);
+  addLine(lines, 'Telefon', data.phone);
 }
 
 function priorContactLabel(data: CollectedRequestData): string | undefined {
