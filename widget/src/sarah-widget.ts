@@ -70,9 +70,11 @@ class SarahWidget {
     delay?: number;
     inactivityMs?: number;
     unansweredInactivityMs?: number;
+    fresh?: boolean;
   } = {}) {
     this.apiUrl = apiUrl;
     this.history = new ChatHistory();
+    if (options.fresh) this.history.clear();
     this.greetingDelay = options.delay || 3000;
     this.inactivityMs = options.inactivityMs || TEN_MINUTES_MS;
     this.unansweredInactivityMs = options.unansweredInactivityMs || TEN_MINUTES_MS;
@@ -506,9 +508,10 @@ function init(): void {
     script.getAttribute('data-unanswered-inactivity-ms') || `${TEN_MINUTES_MS}`,
     10,
   );
+  const fresh = new URLSearchParams(window.location.search).has('fresh');
   const greeting = script.getAttribute('data-greeting') || undefined;
 
-  new SarahWidget(apiUrl, { greeting, delay, inactivityMs, unansweredInactivityMs });
+  new SarahWidget(apiUrl, { greeting, delay, inactivityMs, unansweredInactivityMs, fresh });
 }
 
 if (document.readyState === 'loading') {

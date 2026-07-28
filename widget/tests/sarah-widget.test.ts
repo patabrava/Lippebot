@@ -79,6 +79,26 @@ describe('SarahWidget inactivity handling', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('starts a new session when the fresh option is enabled', () => {
+    localStorage.setItem('sarah-chat-history-v3-verified-flow', JSON.stringify({
+      sessionId: 'old-session',
+      messages: [{ role: 'user', content: 'Alte Anfrage', timestamp: Date.now() }],
+      lastUpdated: Date.now(),
+      requestSequence: 1,
+      activeRequestId: 'old-session-request-1',
+      conversationClosed: false,
+    }));
+
+    new SarahWidget('https://api.example.test', {
+      delay: 999_999,
+      fresh: true,
+    } as never);
+
+    document.querySelector<HTMLButtonElement>('.sarah-bubble')!.click();
+    expect(document.body.textContent).not.toContain('Alte Anfrage');
+    expect(localStorage.getItem('sarah-chat-history-v3-verified-flow')).not.toContain('old-session');
+  });
+
   it('submits an abandoned chat summary when the follow-up stays unanswered', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response([
