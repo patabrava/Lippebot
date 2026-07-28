@@ -28,6 +28,7 @@ import {
   buildAuthoritativeStateContext,
   buildVerificationMessage,
   isExplicitVerificationConfirmation,
+  isFurtherConcernConfirmation,
   isLeadReady,
   isNoFurtherConcern,
   isRequestReady,
@@ -350,16 +351,24 @@ export function createChatRoute(deps: ChatDeps): Hono {
         });
         return;
       }
-      await stream.writeSSE({
-        data: JSON.stringify({
-          type: 'action',
-          action: 'start_new_request',
-          data: { completedRequestId: requestId },
-        }),
-      });
-      const content = 'Gerne. Beschreibe mir bitte kurz dein weiteres Anliegen.';
+      if (isFurtherConcernConfirmation(message)) {
+        await stream.writeSSE({
+          data: JSON.stringify({
+            type: 'action',
+            action: 'start_new_request',
+            data: { completedRequestId: requestId },
+          }),
+        });
+        const content = 'Gerne. Beschreibe mir bitte kurz dein weiteres Anliegen.';
+        await stream.writeSSE({ data: JSON.stringify({ type: 'token', content }) });
+        await stream.writeSSE({ data: JSON.stringify({ type: 'done', mode: 'undetermined', collectedData: {} }) });
+        return;
+      }
+      const content = 'Möchtest du ein weiteres Anliegen melden? Antworte bitte mit „Ja“ oder „Nein“.';
       await stream.writeSSE({ data: JSON.stringify({ type: 'token', content }) });
-      await stream.writeSSE({ data: JSON.stringify({ type: 'done', mode: 'undetermined', collectedData: {} }) });
+      await stream.writeSSE({
+        data: JSON.stringify({ type: 'done', mode: intakeState.mode, collectedData: intakeState.collectedData }),
+      });
       return;
     }
 

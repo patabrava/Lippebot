@@ -504,6 +504,59 @@ describe('POST /api/chat', () => {
     expect(execute).toHaveBeenCalledOnce();
   });
 
+  it('does not rotate or execute another request after a mistyped or ambiguous no-further-concern reply', async () => {
+    const baseLeadData = {
+      ownsLift: 'no' as const,
+      priorContact: 'no' as const,
+      customerSegment: 'privatperson' as const,
+      firstName: 'Patrick',
+      lastName: 'Berg',
+      email: 'patrick@example.de',
+      street: 'Musterweg 15',
+      postalCode: '5557',
+      city: 'Detmand',
+      availability: '16:00 - 20:00' as const,
+    };
+    const execute = vi.fn(async (input) => ({
+      requestId: input.requestId,
+      kind: 'opportunity' as const,
+      completed: true as const,
+      crm: { outcome: 'created' as const, personId: 1, dealId: 2 },
+    }));
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: baseLeadData } };
+        },
+      },
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      requestOrchestrator: { execute },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const requestId = 'mistyped-no-request';
+    const send = async (message: string) => (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'mistyped-no-session', requestId, message, history: [] }),
+    })).text();
+
+    expect(await send('Neue Anfrage')).toContain('Sind alle Angaben korrekt?');
+    expect(await send('Ja')).toContain('"action":"request_completed"');
+
+    const ambiguous = await send('viellecht');
+    expect(ambiguous).toContain('Antworte bitte mit');
+    expect(ambiguous).not.toContain('"action":"start_new_request"');
+
+    const close = await send('nien');
+    expect(close).toContain('"action":"conversation_closed"');
+    expect(close).not.toContain('"action":"start_new_request"');
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
   it('routes an ordered but not installed lift as a verified Sales service request without factory data', async () => {
     const orderedData = {
       requestSituation: 'ordered_not_installed' as const,

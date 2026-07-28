@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildVerificationMessage,
   isExplicitVerificationConfirmation,
+  isFurtherConcernConfirmation,
   isNoFurtherConcern,
   isRequestReady,
   mergeCollectedData,
@@ -35,10 +36,24 @@ describe('intake verification', () => {
     },
   );
 
-  it.each(['nein', 'Nein danke.', 'das war alles', 'kein weiteres Anliegen'])(
+  it.each(['nein', 'nien', 'Nien danke.', 'Nein danke.', 'das war alles', 'kein weiteres Anliegen'])(
     'recognizes that there is no further concern: %s',
     (message) => {
       expect(isNoFurtherConcern(message)).toBe(true);
+    },
+  );
+
+  it.each(['ja', 'Ja bitte.', 'ja gerne', 'ich habe noch eine Frage', 'noch ein Anliegen'])(
+    'recognizes an explicit additional concern confirmation: %s',
+    (message) => {
+      expect(isFurtherConcernConfirmation(message)).toBe(true);
+    },
+  );
+
+  it.each(['vielleicht', 'okay', 'danke', 'mein lift'])(
+    'does not start another request from an ambiguous reply: %s',
+    (message) => {
+      expect(isFurtherConcernConfirmation(message)).toBe(false);
     },
   );
 

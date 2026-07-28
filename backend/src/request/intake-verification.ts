@@ -43,7 +43,18 @@ export function isNoFurtherConcern(message: string): boolean {
     .replace(/[.!?]+$/g, '')
     .replace(/\s+/g, ' ');
 
-  return /^(nein|nö|nee|ne|nein danke|nö danke|das war alles|sonst nichts|kein weiteres anliegen)$/.test(normalized);
+  return /^(nein|nien|nö|nee|ne|nein danke|nien danke|nö danke|das war alles|sonst nichts|kein weiteres anliegen)$/.test(normalized);
+}
+
+export function isFurtherConcernConfirmation(message: string): boolean {
+  const normalized = message
+    .trim()
+    .toLocaleLowerCase('de-DE')
+    .replace(/[.!?]+$/g, '')
+    .replace(/,\s*/g, ' ')
+    .replace(/\s+/g, ' ');
+
+  return /^(ja|jep|jo|ja bitte|ja gerne|ich habe noch (eine frage|ein anliegen)|noch eine frage|noch ein anliegen)$/.test(normalized);
 }
 
 export function isLeadReady(data: CollectedRequestData): data is LeadData {
