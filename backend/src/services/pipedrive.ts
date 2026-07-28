@@ -290,6 +290,7 @@ export function createPipedriveService(
     title?: string;
     status?: string;
     pipeline_id?: number;
+    add_time?: string;
     person_id?: { value?: number } | number;
   };
 
@@ -309,6 +310,20 @@ export function createPipedriveService(
 
   function isOpenSalesDeal(deal: DealSearchItem | PersonDeal): boolean {
     return isOpenDeal(deal) && (deal.pipeline_id === undefined || deal.pipeline_id === pipelineId);
+  }
+
+  function newestDeal(deals: PersonDeal[]): PersonDeal | undefined {
+    return [...deals].sort((left, right) => {
+      const leftCreatedAt = left.add_time ? Date.parse(left.add_time) : Number.NaN;
+      const rightCreatedAt = right.add_time ? Date.parse(right.add_time) : Number.NaN;
+      if (Number.isFinite(leftCreatedAt) && Number.isFinite(rightCreatedAt) && leftCreatedAt !== rightCreatedAt) {
+        return rightCreatedAt - leftCreatedAt;
+      }
+      if (Number.isFinite(leftCreatedAt) !== Number.isFinite(rightCreatedAt)) {
+        return Number.isFinite(rightCreatedAt) ? 1 : -1;
+      }
+      return right.id - left.id;
+    })[0];
   }
 
   function uniqueCandidate<T>(items: T[]): T | undefined {
@@ -592,7 +607,11 @@ export function createPipedriveService(
 
   async function getOpenPersonDeals(personId: number): Promise<PersonDeal[]> {
     const deals = await apiGet<PersonDeal[]>(`/persons/${personId}/deals`, { status: 'open' });
-    return (deals ?? []).filter(isOpenSalesDeal);
+    return (deals ?? []).filter(isOpenDeal);
+  }
+
+  async function getOpenSalesPersonDeals(personId: number): Promise<PersonDeal[]> {
+    return (await getOpenPersonDeals(personId)).filter(isOpenSalesDeal);
   }
 
   async function resolveSupportFollowUpCase(
@@ -744,7 +763,7 @@ export function createPipedriveService(
 
     const uniquePersonId = uniqueCandidate(candidatePersonIds);
     if (uniquePersonId) {
-      const uniqueOpenDeal = uniqueCandidate(await getOpenPersonDeals(uniquePersonId));
+      const uniqueOpenDeal = uniqueCandidate(await getOpenSalesPersonDeals(uniquePersonId));
       if (uniqueOpenDeal) {
         return { matchState: 'unique', personId: uniquePersonId, dealId: uniqueOpenDeal.id, candidateCount: 1 };
       }
@@ -767,7 +786,7 @@ export function createPipedriveService(
 
   type LeadIdentityResolution =
     | { status: 'none' }
-    | { status: 'unique'; personId: number }
+    | { status: 'unique'; personId: number; matchedBy: 'email' | 'phone' | 'name' }
     | { status: 'ambiguous'; candidateCount: number; reason: string };
 
   function cachedPersonId(field: 'email' | 'phone', value: string): number | undefined {
@@ -808,7 +827,7 @@ export function createPipedriveService(
     }
 
     const uniqueIds = [...new Set(corroboratedIds)];
-    if (uniqueIds.length === 1) return { status: 'unique', personId: uniqueIds[0] };
+    if (uniqueIds.length === 1) return { status: 'unique', personId: uniqueIds[0], matchedBy: 'name' };
     if (uniqueIds.length > 1) {
       return {
         status: 'ambiguous',
@@ -848,9 +867,25 @@ export function createPipedriveService(
     }
 
     if (email) {
-      const matches = await searchPeople(email, 'email');
-      const cached = cachedPersonId('email', email);
-      matchSets.push([...new Set(matches.length > 0 ? matches : cached ? [cached] : [])]);
+      const emailMatches = await searchPeople(email, 'email');
+      const cachedEmailPersonId = cachedPersonId('email', email);
+      const exactEmailPersonIds = [...new Set(
+        emailMatches.length > 0
+          ? emailMatches
+          : cachedEmailPersonId
+            ? [cachedEmailPersonId]
+            : [],
+      )];
+      if (exactEmailPersonIds.length === 1) {
+        return { status: 'unique', personId: exactEmailPersonIds[0], matchedBy: 'email' };
+      }
+      if (exactEmailPersonIds.length > 1) {
+        return {
+          status: 'ambiguous',
+          candidateCount: exactEmailPersonIds.length,
+          reason: 'ambiguous_email_identifier',
+        };
+      }
     }
 
     const matchedContactIds = [...new Set(matchSets.flat())];
@@ -876,7 +911,7 @@ export function createPipedriveService(
       new Set(nameCandidateIds),
     );
     if (intersection.size === 1) {
-      return { status: 'unique', personId: [...intersection][0] };
+      return { status: 'unique', personId: [...intersection][0], matchedBy: 'phone' };
     }
     if (intersection.size > 1) {
       return {
@@ -1042,8 +1077,12 @@ export function createPipedriveService(
         };
       }
 
-      await updatePerson(reference.personId, data, firstName, lastName, phone, email, street, postalCode, city);
-      cachePersonId(reference.personId, email, phone, `${firstName} ${lastName}`);
+      if (identity.status !== 'unique' || identity.matchedBy !== 'email') {
+        await updatePerson(reference.personId, data, firstName, lastName, phone, email, street, postalCode, city);
+        cachePersonId(reference.personId, email, phone, `${firstName} ${lastName}`);
+      } else {
+        cachePersonId(reference.personId, email, undefined);
+      }
       return {
         outcome: 'reused',
         personId: reference.personId,
@@ -1062,34 +1101,23 @@ export function createPipedriveService(
 
     const existingPersonId = identity.status === 'unique' ? identity.personId : undefined;
     const personId = existingPersonId ?? (await createPerson(data, firstName, lastName, phone, email, street, postalCode, city)).id;
-    cachePersonId(personId, email, phone, `${firstName} ${lastName}`);
+    if (identity.status === 'unique' && identity.matchedBy === 'email') {
+      cachePersonId(personId, email, undefined);
+    } else {
+      cachePersonId(personId, email, phone, `${firstName} ${lastName}`);
+    }
 
     if (existingPersonId) {
       const openDeals = await getOpenPersonDeals(existingPersonId);
-      if (openDeals.length > 1) {
-        return {
-          outcome: 'person_review',
-          personId: existingPersonId,
-          createdPerson: false,
-          candidateCount: openDeals.length,
-          reason: 'multiple_open_deals',
-        };
+      if (identity.status !== 'unique' || identity.matchedBy !== 'email') {
+        await updatePerson(existingPersonId, data, firstName, lastName, phone, email, street, postalCode, city);
       }
-
-      if (data.priorContact === 'yes' && openDeals.length === 0) {
-        return {
-          outcome: 'identity_review',
-          candidateCount: 0,
-          reason: 'prior_contact_case_not_found',
-        };
-      }
-
-      await updatePerson(existingPersonId, data, firstName, lastName, phone, email, street, postalCode, city);
-      if (openDeals.length === 1) {
+      const newestOpenDeal = newestDeal(openDeals);
+      if (newestOpenDeal) {
         return {
           outcome: 'reused',
           personId: existingPersonId,
-          dealId: openDeals[0].id,
+          dealId: newestOpenDeal.id,
           createdPerson: false,
         };
       }
