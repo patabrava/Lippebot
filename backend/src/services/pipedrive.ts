@@ -2,6 +2,12 @@ import { resolveSupportCategory } from '../support/support-routing.js';
 import { buildPipedriveTranscriptMarker } from '../chat/transcript.js';
 import { buildPipedriveDealUrl } from '../crm/pipedrive-links.js';
 import { formatBerlinDate } from '../time/berlin.js';
+import {
+  normalizeBuildingType,
+  normalizeLiftType,
+  normalizeStairLocation,
+  normalizeStairType,
+} from '../lead/lead-options.js';
 import type { FactoryCaseResult, LeadCrmResult, LeadData, ServiceData, ServiceRequestCrmResult, SupportData, SupportMatchResult, SupportReferenceCaseResult } from '../types/index.js';
 
 const PIPEDRIVE_API_BASE = 'https://api.pipedrive.com/v1';
@@ -59,34 +65,6 @@ const stairLocationMappings: Record<NonNullable<LeadData['stairLocation']>, numb
 };
 
 const optionAliases = {
-  stairLocation: {
-    außentreppe: 'aussen',
-    aussentreppe: 'aussen',
-    außen: 'aussen',
-    aussen: 'aussen',
-    draußen: 'aussen',
-    draussen: 'aussen',
-    aussenbereich: 'aussen',
-    außenbereich: 'aussen',
-    innentreppe: 'innen',
-    innen: 'innen',
-    drinnen: 'innen',
-    innenbereich: 'innen',
-  },
-  stairType: {
-    kurvig: 'kurvig',
-    gerade: 'gerade',
-  },
-  buildingType: {
-    einfamilienhaus: 'einfamilienhaus',
-    mehrfamilienhaus: 'mehrfamilienhaus',
-  },
-  liftType: {
-    rollstuhlgeeignet: 'rollstuhlgeeignet',
-    rollstuhl: 'rollstuhlgeeignet',
-    plattformlift: 'rollstuhlgeeignet',
-    sitzlift: 'sitzlift',
-  },
   customerSegment: {
     privatperson: 'privatperson',
     privat: 'privatperson',
@@ -200,10 +178,10 @@ function buildDealCustomFields(data: LeadData): Record<string, number> {
   if (customerSegment && customerSegmentMappings[customerSegment]) {
     customFields[dealFieldKeys.customerSegment] = customerSegmentMappings[customerSegment];
   }
-  const stairLocation = optionAliases.stairLocation[normalizeOptionValue(data.stairLocation) as keyof typeof optionAliases.stairLocation];
-  const stairType = optionAliases.stairType[normalizeOptionValue(data.stairType) as keyof typeof optionAliases.stairType];
-  const buildingType = optionAliases.buildingType[normalizeOptionValue(data.buildingType) as keyof typeof optionAliases.buildingType];
-  const liftType = optionAliases.liftType[normalizeOptionValue(data.liftType) as keyof typeof optionAliases.liftType];
+  const stairLocation = normalizeStairLocation(data.stairLocation);
+  const stairType = normalizeStairType(data.stairType);
+  const buildingType = normalizeBuildingType(data.buildingType);
+  const liftType = normalizeLiftType(data.liftType);
 
   if (stairLocation && stairLocationMappings[stairLocation]) {
     customFields[dealFieldKeys.stairLocation] = stairLocationMappings[stairLocation];

@@ -37,6 +37,7 @@ import {
 } from '../request/intake-verification.js';
 
 const OPPORTUNITY_EMAIL_TO = 'sales@lippelift.de';
+const REQUEST_COMPLETION_MESSAGE = 'Danke. Dein Anliegen wurde an das zuständige Team weitergegeben. Hast du noch ein weiteres Anliegen?';
 
 function routedEmailRecipients(primaryRecipient: string, configuredInternalRecipients: string): string {
   return parseEmailRecipients(
@@ -470,7 +471,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
     const transcript = buildCompletedTranscript({
       history,
       currentMessage: message,
-      assistantText,
+      assistantText: REQUEST_COMPLETION_MESSAGE,
       currentUserTimestamp,
       assistantTimestamp,
     });
@@ -485,8 +486,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
       data: JSON.stringify({ type: 'action', action: 'request_completed', data: { requestId, kind: result.kind } }),
     });
     intakeStates.set(requestId, { ...intakeState, awaitingVerification: false, completed: true });
-    const completion = 'Danke. Dein Anliegen wurde an das zuständige Team weitergegeben. Hast du noch ein weiteres Anliegen?';
-    await stream.writeSSE({ data: JSON.stringify({ type: 'token', content: completion }) });
+    await stream.writeSSE({ data: JSON.stringify({ type: 'token', content: REQUEST_COMPLETION_MESSAGE }) });
     await stream.writeSSE({ data: JSON.stringify({ type: 'done', mode: lastMode, collectedData: lastCollectedData }) });
   }
 

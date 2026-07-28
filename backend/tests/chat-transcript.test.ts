@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { buildPipedriveTranscriptNote } from '../src/chat/transcript.js';
+import {
+  buildPipedriveCompletedTranscriptNote,
+  buildPipedriveTranscriptNote,
+} from '../src/chat/transcript.js';
 
 describe('buildPipedriveTranscriptNote', () => {
   it('preserves the complete ordered exchange with Berlin timestamps', () => {
@@ -62,5 +65,26 @@ describe('buildPipedriveTranscriptNote', () => {
 
     expect(note.match(/<strong>Nutzer ·/g)).toHaveLength(1);
     expect(note.match(/<strong>Sarah/g)).toBeNull();
+  });
+
+  it('builds a request-scoped combined note from an already completed transcript', () => {
+    const note = buildPipedriveCompletedTranscriptNote({
+      sessionId: 'visible-chat-session',
+      requestId: 'visible-chat-session-request-2',
+      summary: 'Anfrage von Max Muster\nLifttyp: Sitzlift',
+      transcript: [
+        '[2026-07-28 08:00:00 CEST] Nutzer: Ich brauche einen Sitzlift.',
+        '',
+        '[2026-07-28 08:00:05 CEST] Sarah: Danke. Dein Anliegen wurde weitergegeben.',
+      ].join('\n'),
+    });
+
+    expect(note).toContain('<strong>Kurzfassung</strong>');
+    expect(note).toContain('Anfrage von Max Muster<br>Lifttyp: Sitzlift');
+    expect(note).toContain('<strong>Vollständiges Sarah-Chatprotokoll</strong>');
+    expect(note).toContain('Sitzung: visible-chat-session');
+    expect(note).toContain('[Sarah-Chat-ID:visible-chat-session-request-2]');
+    expect(note).toContain('Nutzer: Ich brauche einen Sitzlift.');
+    expect(note).toContain('Sarah: Danke. Dein Anliegen wurde weitergegeben.');
   });
 });

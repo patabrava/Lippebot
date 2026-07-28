@@ -22,6 +22,7 @@ function baseDependencies() {
   return {
     pipedrive: {
       createLead: vi.fn().mockResolvedValue({ outcome: 'created', personId: 11, dealId: 22, createdPerson: true }),
+      createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 33 }),
       resolveFactoryCase: vi.fn().mockResolvedValue({ matchState: 'unique', personId: 31, dealId: 41, factoryNumber: 'FN-42' }),
       resolveSupportReferenceCase: vi.fn().mockResolvedValue({ matchState: 'unique', personId: 31, dealId: 45, candidateCount: 1 }),
       resolveSupportFollowUpCase: vi.fn().mockResolvedValue({ matchState: 'unresolved', candidateCount: 0 }),
@@ -215,6 +216,7 @@ describe('createRequestOrchestrator', () => {
     const calls: string[] = [];
     const deps = baseDependencies();
     deps.pipedrive.createLead.mockImplementation(async () => { calls.push('crm'); return { outcome: 'created', personId: 11, dealId: 22, createdPerson: true }; });
+    deps.pipedrive.createChatTranscriptNote.mockImplementation(async () => { calls.push('note'); return { noteId: 33 }; });
     deps.email.sendLeadNotification.mockImplementation(async () => { calls.push('email'); });
     const { journal } = durableJournal();
     const orchestrator = createRequestOrchestrator({
@@ -229,7 +231,17 @@ describe('createRequestOrchestrator', () => {
       leadData: { ownsLift: 'no', priorContact: 'no', firstName: 'Max', lastName: 'Muster', email: 'max@example.de' },
     });
 
-    expect(calls).toEqual(['crm', 'email', 'email', 'email']);
+    expect(calls).toEqual(['crm', 'note', 'email', 'email', 'email']);
+    expect(deps.pipedrive.createChatTranscriptNote).toHaveBeenCalledWith(
+      'r1',
+      11,
+      22,
+      expect.stringContaining('<strong>Kurzfassung</strong>'),
+    );
+    const noteContent = deps.pipedrive.createChatTranscriptNote.mock.calls[0][3];
+    expect(noteContent).toContain('<strong>Vollständiges Sarah-Chatprotokoll</strong>');
+    expect(noteContent).toContain('[Sarah-Chat-ID:r1]');
+    expect(noteContent).toContain('vollstaendig');
     expect(deps.email.sendLeadNotification.mock.calls.map(([recipient]) => recipient)).toEqual([
       'sales@lippelift.de',
       'berg@lippelift.de',
@@ -239,6 +251,111 @@ describe('createRequestOrchestrator', () => {
       'caechma@gmail.com', expect.any(Object), expect.objectContaining({ dealId: 22 }),
     );
     expect(result).toMatchObject({ requestId: 'r1', kind: 'opportunity', completed: true, crm: { dealId: 22 } });
+  });
+
+  it('adds one request-scoped note when an existing opportunity is reused', async () => {
+    const deps = baseDependencies();
+    deps.pipedrive.createLead.mockResolvedValue({
+      outcome: 'reused',
+      personId: 11,
+      dealId: 22,
+      createdPerson: false,
+    });
+    const { journal } = durableJournal();
+    const orchestrator = createRequestOrchestrator({
+      ...deps,
+      journal,
+      opportunityRecipient: 'sales@lippelift.de',
+    });
+
+    const input = {
+      sessionId: 'same-visible-chat',
+      requestId: 'second-request-in-chat',
+      mode: 'anfrage' as const,
+      transcript: 'Nutzer: zweite Anfrage',
+      leadData: {
+        ownsLift: 'no' as const,
+        priorContact: 'yes' as const,
+        firstName: 'Max',
+        lastName: 'Muster',
+        email: 'max@example.de',
+      },
+    };
+
+    await orchestrator.execute(input);
+    await orchestrator.execute(input);
+
+    expect(deps.pipedrive.createLead).toHaveBeenCalledOnce();
+    expect(deps.pipedrive.createChatTranscriptNote).toHaveBeenCalledOnce();
+    expect(deps.pipedrive.createChatTranscriptNote).toHaveBeenCalledWith(
+      'second-request-in-chat',
+      11,
+      22,
+      expect.stringContaining('[Sarah-Chat-ID:second-request-in-chat]'),
+    );
+  });
+
+  it('retries the opportunity note before email and does not complete without it', async () => {
+    const deps = baseDependencies();
+    deps.pipedrive.createChatTranscriptNote
+      .mockRejectedValueOnce(new Error('notes unavailable'))
+      .mockRejectedValueOnce(new Error('notes unavailable'))
+      .mockResolvedValueOnce({ noteId: 33 });
+    const { journal, store } = durableJournal();
+    const orchestrator = createRequestOrchestrator({
+      ...deps,
+      journal,
+      opportunityRecipient: 'sales@lippelift.de',
+    });
+
+    await orchestrator.execute({
+      sessionId: 'note-retry',
+      requestId: 'note-retry-request',
+      mode: 'anfrage',
+      transcript: 'Nutzer: vollständige Anfrage',
+      leadData: {
+        ownsLift: 'no',
+        priorContact: 'no',
+        firstName: 'Max',
+        lastName: 'Muster',
+        email: 'max@example.de',
+      },
+    });
+
+    expect(deps.pipedrive.createChatTranscriptNote).toHaveBeenCalledTimes(3);
+    expect(deps.email.sendLeadNotification).toHaveBeenCalledOnce();
+    expect(store.map((checkpoint) => checkpoint.step)).toEqual(
+      expect.arrayContaining(['crm', 'note', 'email', 'completed']),
+    );
+  });
+
+  it('stops before email and completion when the opportunity note cannot be saved', async () => {
+    const deps = baseDependencies();
+    deps.pipedrive.createChatTranscriptNote.mockRejectedValue(new Error('notes unavailable'));
+    const { journal, store } = durableJournal();
+    const orchestrator = createRequestOrchestrator({
+      ...deps,
+      journal,
+      opportunityRecipient: 'sales@lippelift.de',
+    });
+
+    await expect(orchestrator.execute({
+      sessionId: 'note-failure',
+      requestId: 'note-failure-request',
+      mode: 'anfrage',
+      transcript: 'Nutzer: vollständige Anfrage',
+      leadData: {
+        ownsLift: 'no',
+        priorContact: 'no',
+        firstName: 'Max',
+        lastName: 'Muster',
+        email: 'max@example.de',
+      },
+    })).rejects.toThrow('notes unavailable');
+
+    expect(deps.pipedrive.createChatTranscriptNote).toHaveBeenCalledTimes(3);
+    expect(deps.email.sendLeadNotification).not.toHaveBeenCalled();
+    expect(store.some((checkpoint) => checkpoint.step === 'completed')).toBe(false);
   });
 
   it.each([

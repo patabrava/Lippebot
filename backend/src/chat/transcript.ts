@@ -11,6 +11,13 @@ interface PipedriveTranscriptInput {
   assistantTimestamp: number;
 }
 
+interface CompletedPipedriveTranscriptInput {
+  sessionId: string;
+  requestId: string;
+  summary: string;
+  transcript: string;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -56,5 +63,19 @@ export function buildPipedriveTranscriptNote(input: PipedriveTranscriptInput): s
     `<small>Sitzung: ${escapeHtml(input.sessionId)} · ${buildPipedriveTranscriptMarker(input.sessionId)}</small>`,
     '<hr>',
     ...messages.map(formatMessage),
+  ].join('\n');
+}
+
+export function buildPipedriveCompletedTranscriptNote(
+  input: CompletedPipedriveTranscriptInput,
+): string {
+  return [
+    '<strong>Kurzfassung</strong>',
+    `<p>${formatContent(input.summary)}</p>`,
+    '<hr>',
+    '<strong>Vollständiges Sarah-Chatprotokoll</strong>',
+    `<small>Sitzung: ${escapeHtml(input.sessionId)} · ${buildPipedriveTranscriptMarker(input.requestId)}</small>`,
+    '<hr>',
+    `<p>${formatContent(input.transcript)}</p>`,
   ].join('\n');
 }

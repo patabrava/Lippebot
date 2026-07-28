@@ -176,6 +176,11 @@ describe('POST /api/chat', () => {
     })).text();
 
     expect(execute).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      transcript: expect.stringContaining(
+        'Sarah: Danke. Dein Anliegen wurde an das zuständige Team weitergegeben. Hast du noch ein weiteres Anliegen?',
+      ),
+    }));
     expect(text).toContain('"action":"request_completed"');
     expect(text).not.toContain('Sind alle Angaben korrekt?');
     expect(text).toContain('Hast du noch ein weiteres Anliegen?');
@@ -348,29 +353,77 @@ describe('POST /api/chat', () => {
 
   it('keeps two request IDs in one visible session independent', async () => {
     const leadData = {
-      ownsLift: 'no' as const, priorContact: 'no' as const, customerSegment: 'privatperson' as const,
-      firstName: 'Max', lastName: 'Muster', email: 'max@example.de', street: 'Test 1', postalCode: '32657', city: 'Lemgo', availability: '08:00 - 12:00' as const,
+      requestSituation: 'new_lift' as const, ownsLift: 'no' as const, priorContact: 'no' as const, customerSegment: 'privatperson' as const,
+      firstName: 'Max', lastName: 'Muster', email: 'max@example.de', phone: '+49 151 00000000',
+      street: 'Test 1', postalCode: '32657', city: 'Lemgo', availability: '08:00 - 12:00' as const,
+      stairLocation: 'innen' as const, stairType: 'gerade' as const,
+      buildingType: 'einfamilienhaus' as const, liftType: 'sitzlift' as const,
     };
-    const execute = vi.fn(async (input) => ({ requestId: input.requestId, kind: 'opportunity', completed: true, recipient: 'sales@lippelift.de' }));
+    const createLead = vi.fn().mockResolvedValue({
+      outcome: 'reused',
+      personId: 12780,
+      dealId: 5297,
+    });
+    const createChatTranscriptNote = vi.fn().mockResolvedValue({ noteId: 9100 });
+    const requestOrchestrator = createRequestOrchestrator({
+      pipedrive: {
+        createLead,
+        createChatTranscriptNote,
+        resolveFactoryCase: vi.fn(),
+        resolveSupportReferenceCase: vi.fn(),
+        resolveSupportFollowUpCase: vi.fn(),
+        createServiceRequest: vi.fn(),
+        appendServiceRequestToExistingCase: vi.fn(),
+      },
+      email: createMockEmail(),
+      journal: createRequestJournal(createMockTracker()),
+      bypass: { enabled: false, recipients: [] },
+      opportunityRecipient: 'sales@lippelift.de',
+    });
     const chatRoute = createChatRoute({
       gemini: { async *streamChat(sessionId: string) { yield { type: 'lead' as const, leadData }; yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: leadData } }; } },
-      pipedrive: createMockPipedrive(), email: createMockEmail(), requestOrchestrator: { execute }, notificationEmailTo: '', serviceEmailTo: '',
+      pipedrive: createMockPipedrive(), email: createMockEmail(), requestOrchestrator, notificationEmailTo: '', serviceEmailTo: '',
     });
     const testApp = new Hono();
     testApp.route('/', chatRoute);
     for (const requestId of ['req-1', 'req-2']) {
+      const originalConcern = `Neue Liftanfrage ${requestId}`;
+      const verificationMessage = `Erfasste Angaben für ${requestId}. Sind alle Angaben korrekt?`;
       const reviewText = await (await testApp.request('/api/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: 'same-session', requestId, message: 'Anfrage', history: [] }),
+        body: JSON.stringify({ sessionId: 'same-session', requestId, message: originalConcern, history: [] }),
       })).text();
       expect(reviewText).toContain('Sind alle Angaben korrekt?');
       const text = await (await testApp.request('/api/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: 'same-session', requestId, message: 'Ja', history: [] }),
+        body: JSON.stringify({
+          sessionId: 'same-session',
+          requestId,
+          message: 'Ja',
+          history: [
+            { role: 'user', content: originalConcern, timestamp: 1_752_652_000_000 },
+            { role: 'assistant', content: verificationMessage, timestamp: 1_752_652_001_000 },
+          ],
+        }),
       })).text();
       expect(text).toContain(`"requestId":"${requestId}"`);
     }
-    expect(execute.mock.calls.map(([input]) => input.requestId)).toEqual(['req-1', 'req-2']);
+    expect(createLead).toHaveBeenCalledTimes(2);
+    expect(createChatTranscriptNote).toHaveBeenCalledTimes(2);
+    expect(createChatTranscriptNote.mock.calls.map(([requestId]) => requestId)).toEqual(['req-1', 'req-2']);
+    expect(createChatTranscriptNote.mock.calls[0][3]).toContain('[Sarah-Chat-ID:req-1]');
+    expect(createChatTranscriptNote.mock.calls[1][3]).toContain('[Sarah-Chat-ID:req-2]');
+    const firstNote = createChatTranscriptNote.mock.calls[0][3];
+    expect(firstNote).toContain('Nutzer: Neue Liftanfrage req-1');
+    expect(firstNote).toContain('Sarah: Erfasste Angaben für req-1. Sind alle Angaben korrekt?');
+    expect(firstNote).toContain('Nutzer: Ja');
+    expect(firstNote).toContain('Sarah: Danke. Dein Anliegen wurde an das zuständige Team weitergegeben.');
+    expect(firstNote).toContain('E-Mail: max@example.de');
+    expect(firstNote).toContain('Telefon: +49 151 00000000');
+    expect(firstNote).toContain('Treppenstandort: Innentreppe');
+    expect(firstNote).toContain('Treppenverlauf: Gerade');
+    expect(firstNote).toContain('Gebäude: Einfamilienhaus');
+    expect(firstNote).toContain('Lifttyp: Sitzlift');
   });
 
   it('updates a corrected field, shows the summary again, and submits exactly once after confirmation', async () => {

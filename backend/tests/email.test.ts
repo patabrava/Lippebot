@@ -103,7 +103,7 @@ describe('createEmailService', () => {
     expect(call.html).not.toContain('Telefon:</td>');
   });
 
-  it('sendLeadNotification identifies a reused CRM case for the internal team', async () => {
+  it('sendLeadNotification links a reused CRM case without exposing internal CRM metadata', async () => {
     const sendMock = vi.fn().mockResolvedValue({ messageId: 'reused-lead' });
     const service = createEmailService(
       {
@@ -130,14 +130,14 @@ describe('createEmailService', () => {
     });
 
     const call = sendMock.mock.calls[0][0];
-    expect(call.html).toContain('Bestehender CRM-Fall wiederverwendet');
-    expect(call.html).toContain('123');
-    expect(call.html).toContain('456');
     expect(call.html).toContain('Fall in Pipedrive öffnen');
     expect(call.html).toContain('href="https://lippelift.pipedrive.com/deal/456"');
+    expect(call.html).not.toContain('CRM-Zuordnung');
+    expect(call.html).not.toContain('Person-ID');
+    expect(call.html).not.toContain('Fall-ID');
   });
 
-  it('sendLeadNotification includes escaped prior-contact routing context', async () => {
+  it('sendLeadNotification keeps an escaped reference but omits prior-contact metadata', async () => {
     const sendMock = vi.fn().mockResolvedValue({ messageId: 'prior-contact-lead' });
     const service = createEmailService(
       { host: 'smtp.test.com', port: 587, user: 'a', pass: 'b' },
@@ -156,7 +156,7 @@ describe('createEmailService', () => {
     });
 
     const call = sendMock.mock.calls[0][0];
-    expect(call.html).toContain('Vorheriger Kontakt');
+    expect(call.html).not.toContain('Vorheriger Kontakt');
     expect(call.html).toContain('Referenz');
     expect(call.html).toContain('ANG-42&lt;script&gt;');
     expect(call.html).not.toContain('ANG-42<script>');
@@ -180,8 +180,8 @@ describe('createEmailService', () => {
     });
 
     const call = sendMock.mock.calls[0][0];
-    expect(call.html).toContain('Neuer CRM-Fall erstellt');
     expect(call.html).toContain('href="https://lippelift.pipedrive.com/deal/789"');
+    expect(call.html).not.toContain('CRM-Zuordnung');
   });
 
   it.each([
@@ -208,7 +208,7 @@ describe('createEmailService', () => {
     });
 
     const call = sendMock.mock.calls[0][0];
-    expect(call.html).toContain(expectedLabel);
+    expect(call.html).not.toContain('CRM-Zuordnung');
     expect(call.html).toContain('&lt;unsafe reason&gt;');
     expect(call.html).not.toContain('<unsafe reason>');
     expect(call.html).toContain('Manuelle Prüfung erforderlich');
@@ -267,8 +267,48 @@ describe('createEmailService', () => {
     const call = sendMock.mock.calls[0][0];
     expect(call.to).toBe('sales@lippelift.de');
     expect(call.subject).toBe('[LIPPEBOT E2E][UC-02][20260721-a] New opportunity without prior contact');
-    expect(call.html).toContain('req-uc-02');
+    expect(call.html).not.toContain('Anfrage-ID');
     expect(call.html).toContain('Nutzer: Ich brauche einen Lift.');
+  });
+
+  it('sendLeadNotification mirrors normalized Pipedrive option labels and omits empty optional rows', async () => {
+    const sendMock = vi.fn().mockResolvedValue({ messageId: 'normalized-lead-summary' });
+    const service = createEmailService(
+      { host: 'smtp.test.com', port: 587, user: 'a', pass: 'b' },
+      sendMock,
+    );
+
+    await service.sendLeadNotification('test@example.com', {
+      firstName: 'Camilo',
+      lastName: 'Echeverri',
+      phone: '0151 1234567',
+      email: 'caechma@gmail.com',
+      stairLocation: 'Innentreppe' as never,
+      stairType: 'Gerade' as never,
+      buildingType: 'Einfamilienhaus' as never,
+      liftType: 'Sitzlift' as never,
+    }, {
+      outcome: 'created',
+      personId: 12780,
+      dealId: 5297,
+      requestId: 'internal-request-id',
+    });
+
+    const call = sendMock.mock.calls[0][0];
+    expect(call.html).toContain('href="https://lippelift.pipedrive.com/deal/5297"');
+    expect(call.html).toContain('Telefon:</td><td>0151 1234567</td>');
+    expect(call.html).toContain('E-Mail:</td><td>caechma@gmail.com</td>');
+    expect(call.html).toContain('Treppenstandort:</td><td>Innentreppe</td>');
+    expect(call.html).toContain('Treppenverlauf:</td><td>Gerade</td>');
+    expect(call.html).toContain('Gebäude:</td><td>Einfamilienhaus</td>');
+    expect(call.html).toContain('Lifttyp:</td><td>Sitzlift</td>');
+    expect(call.html).not.toContain('Newsletter:');
+    expect(call.html).not.toContain('k.A.');
+    expect(call.html).not.toContain('CRM-Zuordnung');
+    expect(call.html).not.toContain('Person-ID');
+    expect(call.html).not.toContain('Fall-ID');
+    expect(call.html).not.toContain('Anfrage-ID');
+    expect(call.html).not.toContain('Vorheriger Kontakt');
   });
 
   it('sendServiceNotification formats email correctly', async () => {

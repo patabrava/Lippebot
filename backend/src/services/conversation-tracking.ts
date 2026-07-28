@@ -21,6 +21,7 @@ export type ConversationEventType =
 export type RequestCheckpointStep =
   | 'crm'
   | 'crm_bypassed'
+  | 'note'
   | 'email'
   | `email_recipient:${string}`
   | 'completed'

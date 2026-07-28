@@ -3,6 +3,12 @@ import { buildPipedriveDealUrl } from '../crm/pipedrive-links.js';
 import { buildSupportEmailHtml, buildSupportEmailSubject } from '../support/support-routing.js';
 import { extractE2ESubject } from '../request/e2e-marker.js';
 import { parseEmailRecipients } from '../email/recipients.js';
+import {
+  buildingTypeLabel,
+  liftTypeLabel,
+  stairLocationLabel,
+  stairTypeLabel,
+} from '../lead/lead-options.js';
 import type {
   LeadData,
   LeadCrmOutcome,
@@ -160,15 +166,6 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
   ): Promise<void> {
     if (!configured && !sendOverride) return;
 
-    const crmLabel = crmContext
-      ? {
-        created: 'Neuer CRM-Fall erstellt',
-        reused: 'Bestehender CRM-Fall wiederverwendet',
-        person_review: 'Manuelle Fallauswahl erforderlich',
-        identity_review: 'Manuelle Identitätsprüfung erforderlich',
-        failed: 'CRM-Übertragung fehlgeschlagen',
-      }[crmContext.outcome]
-      : undefined;
     const dealUrl = buildPipedriveDealUrl(pipedriveWebBaseUrl, crmContext?.dealId);
     const crmAction = crmContext
       ? dealUrl
@@ -180,24 +177,20 @@ export function createEmailService(smtp: SmtpConfig, sendOverride?: SendFn) {
       <h2>Neue Anfrage über Sarah (Chatbot)</h2>
       ${crmAction}
       <table style="border-collapse:collapse;">
-        ${crmLabel ? row('CRM-Zuordnung', crmLabel) : ''}
-        ${crmContext?.personId ? row('Person-ID', crmContext.personId) : ''}
-        ${crmContext?.dealId ? row('Fall-ID', crmContext.dealId) : ''}
         ${crmContext?.reason ? row('CRM-Hinweis', crmContext.reason) : ''}
-        ${row('Anfrage-ID', crmContext?.requestId)}
         ${row('Name', `${data.firstName} ${data.lastName}`)}
         ${row('Telefon', data.phone)}
         ${row('E-Mail', data.email)}
-        ${row('Vorheriger Kontakt', data.priorContact)}
         ${row('Referenz', data.priorContactReference)}
         ${row('Straße', data.street)}
         ${row('PLZ / Stadt', [data.postalCode, data.city].filter(Boolean).join(' '))}
         ${row('Erreichbarkeit', data.availability)}
-        ${row('Treppe', `${data.stairLocation || 'k.A.'} / ${data.stairType || 'k.A.'}`)}
-        ${row('Gebäude', data.buildingType || 'k.A.')}
-        ${row('Lifttyp', data.liftType === 'sitzlift' ? 'Sitzlift' : data.liftType === 'rollstuhlgeeignet' ? 'Rollstuhlgeeignet' : 'k.A.')}
+        ${row('Treppenstandort', stairLocationLabel(data.stairLocation))}
+        ${row('Treppenverlauf', stairTypeLabel(data.stairType))}
+        ${row('Gebäude', buildingTypeLabel(data.buildingType))}
+        ${row('Lifttyp', liftTypeLabel(data.liftType))}
         ${row('Nachricht', data.message)}
-        ${row('Newsletter', data.newsletter || 'k.A.')}
+        ${row('Newsletter', data.newsletter)}
       </table>
       ${crmContext?.transcript ? `
         <h3>Vollständiges Anfrage-Transkript</h3>

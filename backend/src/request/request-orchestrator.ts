@@ -15,10 +15,18 @@ import type {
 import { classifyRequestPolicy } from './request-policy.js';
 import type { RequestJournal } from './request-journal.js';
 import { emailRecipientCheckpointStep, parseEmailRecipients } from '../email/recipients.js';
+import { buildPipedriveCompletedTranscriptNote } from '../chat/transcript.js';
+import {
+  buildingTypeLabel,
+  liftTypeLabel,
+  stairLocationLabel,
+  stairTypeLabel,
+} from '../lead/lead-options.js';
 
 interface RequestOrchestratorDependencies {
   pipedrive: Pick<PipedriveService,
     'createLead'
+    | 'createChatTranscriptNote'
     | 'resolveFactoryCase'
     | 'resolveSupportReferenceCase'
     | 'resolveSupportFollowUpCase'
@@ -87,6 +95,60 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
     return 'Neue allgemeine Anfrage';
   }
 
+  function opportunityNoteSummary(data: LeadData, crm: LeadCrmResult): string {
+    const name = [data.firstName, data.lastName].filter(Boolean).join(' ');
+    const address = [data.street, data.postalCode, data.city].filter(Boolean).join(', ');
+    return [
+      name && `Anfrage von: ${name}`,
+      data.email && `E-Mail: ${data.email}`,
+      data.phone && `Telefon: ${data.phone}`,
+      address && `Adresse: ${address}`,
+      data.availability && `Erreichbarkeit: ${data.availability}`,
+      stairLocationLabel(data.stairLocation) && `Treppenstandort: ${stairLocationLabel(data.stairLocation)}`,
+      stairTypeLabel(data.stairType) && `Treppenverlauf: ${stairTypeLabel(data.stairType)}`,
+      buildingTypeLabel(data.buildingType) && `Gebäude: ${buildingTypeLabel(data.buildingType)}`,
+      liftTypeLabel(data.liftType) && `Lifttyp: ${liftTypeLabel(data.liftType)}`,
+      data.priorContact && `Vorheriger Kontakt: ${data.priorContact}`,
+      data.priorContactReference && `Referenz: ${data.priorContactReference}`,
+      data.message && `Anliegen: ${data.message}`,
+      `CRM-Ergebnis: ${crm.outcome}`,
+    ].filter(Boolean).join('\n');
+  }
+
+  async function createOpportunityNote(
+    input: RequestExecutionInput,
+    leadData: LeadData,
+    crm: LeadCrmResult,
+  ): Promise<void> {
+    if (!crm.personId || !crm.dealId) return;
+
+    const content = buildPipedriveCompletedTranscriptNote({
+      sessionId: input.sessionId,
+      requestId: input.requestId,
+      summary: opportunityNoteSummary(leadData, crm),
+      transcript: input.transcript,
+    });
+    await journal.runStep(
+      { sessionId: input.sessionId, requestId: input.requestId, step: 'note' },
+      async () => {
+        let lastError: unknown;
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          try {
+            return await pipedrive.createChatTranscriptNote(
+              input.requestId,
+              crm.personId!,
+              crm.dealId!,
+              content,
+            );
+          } catch (error) {
+            lastError = error;
+          }
+        }
+        throw lastError;
+      },
+    );
+  }
+
   async function sendToRecipients(
     input: RequestExecutionInput,
     recipients: string[],
@@ -114,6 +176,7 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
       { sessionId: input.sessionId, requestId: input.requestId, step: 'crm' },
       async () => ({ ...await pipedrive.createLead(leadData) }),
     ) as LeadCrmResult;
+    await createOpportunityNote(input, leadData, crm);
     const emailStep = { sessionId: input.sessionId, requestId: input.requestId, step: 'email' as const };
     const previousEmail = await journal.getStep<{ recipient?: string; recipients?: string[] }>(emailStep);
     const previouslySent = parseEmailRecipients(
