@@ -10,6 +10,7 @@ interface StoredData {
   lastUpdated: number;
   requestSequence: number;
   activeRequestId: string;
+  conversationClosed: boolean;
 }
 
 const LEGACY_STORAGE_KEY = 'sarah-chat-history';
@@ -32,6 +33,7 @@ function freshData(): StoredData {
     lastUpdated: Date.now(),
     requestSequence: 1,
     activeRequestId: requestId(sessionId, 1),
+    conversationClosed: false,
   };
 }
 
@@ -57,8 +59,9 @@ export class ChatHistory {
       if (!Number.isSafeInteger(parsed.requestSequence) || parsed.requestSequence < 1 || !parsed.activeRequestId) {
         parsed.requestSequence = 1;
         parsed.activeRequestId = requestId(parsed.sessionId, parsed.requestSequence);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
       }
+      if (typeof parsed.conversationClosed !== 'boolean') parsed.conversationClosed = false;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
       return parsed;
     } catch {
       return freshData();
@@ -82,10 +85,22 @@ export class ChatHistory {
     return this.data.activeRequestId;
   }
 
+  isConversationClosed(): boolean {
+    return this.data.conversationClosed;
+  }
+
+  closeConversation(requestIdToClose: string): boolean {
+    if (requestIdToClose !== this.data.activeRequestId) return false;
+    this.data.conversationClosed = true;
+    this.save();
+    return true;
+  }
+
   completeRequest(completedRequestId: string): boolean {
     if (completedRequestId !== this.data.activeRequestId) return false;
     this.data.requestSequence += 1;
     this.data.activeRequestId = requestId(this.data.sessionId, this.data.requestSequence);
+    this.data.conversationClosed = false;
     this.save();
     return true;
   }

@@ -498,6 +498,8 @@ describe('POST /api/chat', () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body('Nein'),
     })).text();
     expect(close).toContain('schönen Tag');
+    expect(close).toContain('"action":"conversation_closed"');
+    expect(close).toContain('"requestId":"verification-correction-request"');
     expect(close).not.toContain('"action":"request_completed"');
     expect(execute).toHaveBeenCalledOnce();
   });

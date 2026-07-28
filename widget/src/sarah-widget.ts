@@ -87,7 +87,7 @@ class SarahWidget {
 
     if (this.history.getMessages().length === 0) {
       setTimeout(() => this.showGreeting(), this.greetingDelay);
-    } else if (this.hasUserMessage()) {
+    } else if (this.hasUserMessage() && !this.history.isConversationClosed()) {
       this.scheduleInactivityFollowUp();
     }
   }
@@ -374,6 +374,11 @@ class SarahWidget {
           if (action === 'start_new_request' && typeof data.completedRequestId === 'string') {
             this.history.completeRequest(data.completedRequestId);
           }
+          if (action === 'conversation_closed' && typeof data.requestId === 'string') {
+            this.history.closeConversation(data.requestId);
+            this.followUpPending = false;
+            this.cancelInactivityTimers();
+          }
         },
         onError: (error) => {
           if (typingEl.parentNode) typingEl.remove();
@@ -412,7 +417,11 @@ class SarahWidget {
   }
 
   private scheduleInactivityFollowUp(): void {
-    if (!this.hasUserMessage() || this.abandonedSummarySubmitted) return;
+    if (
+      !this.hasUserMessage()
+      || this.abandonedSummarySubmitted
+      || this.history.isConversationClosed()
+    ) return;
 
     if (this.inactivityTimer) {
       clearTimeout(this.inactivityTimer);
@@ -425,7 +434,12 @@ class SarahWidget {
   }
 
   private showInactivityFollowUp(): void {
-    if (this.followUpPending || this.abandonedSummarySubmitted || !this.hasUserMessage()) return;
+    if (
+      this.followUpPending
+      || this.abandonedSummarySubmitted
+      || !this.hasUserMessage()
+      || this.history.isConversationClosed()
+    ) return;
 
     this.followUpPending = true;
     this.addBotMessage(INACTIVITY_FOLLOW_UP_MESSAGE);
@@ -437,7 +451,11 @@ class SarahWidget {
   }
 
   private async submitUnansweredChat(): Promise<void> {
-    if (!this.followUpPending || this.abandonedSummarySubmitted) return;
+    if (
+      !this.followUpPending
+      || this.abandonedSummarySubmitted
+      || this.history.isConversationClosed()
+    ) return;
 
     const ok = await submitAbandonedChat({
       apiUrl: this.apiUrl,

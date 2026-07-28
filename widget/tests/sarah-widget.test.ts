@@ -115,6 +115,52 @@ describe('SarahWidget inactivity handling', () => {
     }));
   });
 
+  it('never follows up or submits an abandoned summary after the conversation is closed', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response([
+      'data: {"type":"action","action":"conversation_closed","data":{"requestId":"placeholder"}}',
+      'data: {"type":"token","content":"Alles klar. Ich wünsche dir einen schönen Tag!"}',
+      'data: {"type":"done","mode":"anfrage","collectedData":{}}',
+      '',
+    ].join('\n')));
+    vi.stubGlobal('fetch', fetchMock);
+
+    new SarahWidget('https://api.example.test', {
+      delay: 999_999,
+      inactivityMs: 600_000,
+      unansweredInactivityMs: 600_000,
+    } as never);
+
+    document.querySelector<HTMLButtonElement>('.sarah-bubble')!.click();
+    const storedBefore = JSON.parse(localStorage.getItem('sarah-chat-history-v3-verified-flow')!);
+    fetchMock.mockResolvedValueOnce(new Response([
+      `data: {"type":"action","action":"conversation_closed","data":{"requestId":"${storedBefore.activeRequestId}"}}`,
+      'data: {"type":"token","content":"Alles klar. Ich wünsche dir einen schönen Tag!"}',
+      'data: {"type":"done","mode":"anfrage","collectedData":{}}',
+      '',
+    ].join('\n')));
+
+    const input = document.querySelector<HTMLInputElement>('.sarah-input')!;
+    input.value = 'Nein';
+    document.querySelector<HTMLButtonElement>('.sarah-send')!.click();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+
+    await vi.advanceTimersByTimeAsync(1_200_000);
+
+    expect(document.body.textContent).not.toContain(INACTIVITY_FOLLOW_UP_MESSAGE);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(localStorage.getItem('sarah-chat-history-v3-verified-flow')!).conversationClosed).toBe(true);
+
+    document.body.innerHTML = '';
+    new SarahWidget('https://api.example.test', {
+      delay: 999_999,
+      inactivityMs: 600_000,
+      unansweredInactivityMs: 600_000,
+    } as never);
+    await vi.advanceTimersByTimeAsync(1_200_000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('renders factory-number help and waits to rotate until another concern starts', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response([
       'data: {"type":"action","action":"show_factory_number_help","data":{"requestId":"placeholder"}}',

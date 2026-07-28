@@ -319,6 +319,13 @@ export function createChatRoute(deps: ChatDeps): Hono {
     if (intakeState.completed) {
       if (isNoFurtherConcern(message)) {
         const content = 'Alles klar, danke für deine Nachricht. Ich wünsche dir einen schönen Tag!';
+        await stream.writeSSE({
+          data: JSON.stringify({
+            type: 'action',
+            action: 'conversation_closed',
+            data: { requestId },
+          }),
+        });
         await stream.writeSSE({ data: JSON.stringify({ type: 'token', content }) });
         await stream.writeSSE({
           data: JSON.stringify({ type: 'done', mode: intakeState.mode, collectedData: intakeState.collectedData }),
