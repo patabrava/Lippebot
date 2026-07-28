@@ -2829,6 +2829,43 @@ describe('POST /api/chat/abandoned', () => {
     vi.restoreAllMocks();
   });
 
+  it('suppresses an abandoned email for a legacy transcript that already closed normally', async () => {
+    const sendAbandonedChatSummary = vi.fn().mockResolvedValue(undefined);
+    const chatRoute = createChatRoute({
+      gemini: createMockGemini(),
+      pipedrive: createMockPipedrive(),
+      email: { ...createMockEmail(), sendAbandonedChatSummary },
+      notificationEmailTo: '',
+      serviceEmailTo: 'support@lippelift.de',
+    });
+
+    const response = await chatRoute.request('/api/chat/abandoned', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'legacy-completed-session',
+        reason: 'no_answer_after_inactivity_prompt',
+        history: [
+          { role: 'user', content: 'Nein', timestamp: 1_000 },
+          {
+            role: 'assistant',
+            content: 'Alles klar, danke für deine Nachricht. Ich wünsche dir einen schönen Tag!',
+            timestamp: 2_000,
+          },
+          {
+            role: 'assistant',
+            content: 'Gibt es noch was was ich tun kann?',
+            timestamp: 3_000,
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: 'ignored_completed' });
+    expect(sendAbandonedChatSummary).not.toHaveBeenCalled();
+  });
+
   it('sends a support summary email for an unanswered inactive chat', async () => {
     const sendAbandonedChatSummary = vi.fn().mockResolvedValue(undefined);
     const tracker = createMockTracker();

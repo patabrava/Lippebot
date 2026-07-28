@@ -165,6 +165,24 @@ function formatTranscript(messages: TranscriptMessage[]): string {
     .join('\n\n');
 }
 
+function isTerminalClosingMessage(message: TranscriptMessage): boolean {
+  if (message.role !== 'assistant') return false;
+  const normalized = message.content.toLocaleLowerCase('de-DE');
+  return normalized.includes('ich wünsche dir einen schönen tag')
+    || normalized.includes('ich wuensche dir einen schoenen tag');
+}
+
+function hasTerminalClosureWithoutLaterUser(messages: TranscriptMessage[]): boolean {
+  let closingIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isTerminalClosingMessage(messages[index])) {
+      closingIndex = index;
+      break;
+    }
+  }
+  return closingIndex >= 0 && !messages.slice(closingIndex + 1).some((message) => message.role === 'user');
+}
+
 function buildCompletedTranscript(input: {
   history: ChatMessage[];
   currentMessage: string;
@@ -1056,6 +1074,9 @@ export function createChatRoute(deps: ChatDeps): Hono {
     }
 
     const { sessionId, reason, history } = parsed.data;
+    if (hasTerminalClosureWithoutLaterUser(history)) {
+      return c.json({ status: 'ignored_completed' });
+    }
     const emailRecipient = deps.bypass?.enabled
       ? parseEmailRecipients(...deps.bypass.recipients).join(',')
       : resolveInternalEmailRecipients(deps.serviceEmailTo);

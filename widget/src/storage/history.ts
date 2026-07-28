@@ -17,6 +17,24 @@ const LEGACY_STORAGE_KEY = 'sarah-chat-history';
 const STORAGE_KEY = 'sarah-chat-history-v3-verified-flow';
 const TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+function isTerminalClosingMessage(message: StoredMessage): boolean {
+  if (message.role !== 'assistant') return false;
+  const normalized = message.content.toLocaleLowerCase('de-DE');
+  return normalized.includes('ich wünsche dir einen schönen tag')
+    || normalized.includes('ich wuensche dir einen schoenen tag');
+}
+
+function hasTerminalClosureWithoutLaterUser(messages: StoredMessage[]): boolean {
+  let closingIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isTerminalClosingMessage(messages[index])) {
+      closingIndex = index;
+      break;
+    }
+  }
+  return closingIndex >= 0 && !messages.slice(closingIndex + 1).some((message) => message.role === 'user');
+}
+
 function generateId(): string {
   return `sarah-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -61,6 +79,9 @@ export class ChatHistory {
         parsed.activeRequestId = requestId(parsed.sessionId, parsed.requestSequence);
       }
       if (typeof parsed.conversationClosed !== 'boolean') parsed.conversationClosed = false;
+      if (!parsed.conversationClosed && hasTerminalClosureWithoutLaterUser(parsed.messages)) {
+        parsed.conversationClosed = true;
+      }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
       return parsed;
     } catch {

@@ -77,6 +77,54 @@ describe('ChatHistory', () => {
     expect(requestId).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 
+  it('migrates a legacy terminal transcript to closed even after automated follow-ups', () => {
+    localStorage.setItem('sarah-chat-history-v3-verified-flow', JSON.stringify({
+      sessionId: 'legacy-closed-session',
+      messages: [
+        { role: 'user', content: 'Nein', timestamp: Date.now() - 3_000 },
+        {
+          role: 'assistant',
+          content: 'Alles klar, danke für deine Nachricht. Ich wünsche dir einen schönen Tag!',
+          timestamp: Date.now() - 2_000,
+        },
+        {
+          role: 'assistant',
+          content: 'Gibt es noch was was ich tun kann?',
+          timestamp: Date.now() - 1_000,
+        },
+      ],
+      lastUpdated: Date.now(),
+      requestSequence: 1,
+      activeRequestId: 'legacy-closed-session-request-1',
+      conversationClosed: false,
+    }));
+
+    const restored = new ChatHistory();
+
+    expect(restored.isConversationClosed()).toBe(true);
+    expect(JSON.parse(localStorage.getItem('sarah-chat-history-v3-verified-flow')!).conversationClosed).toBe(true);
+  });
+
+  it('does not infer closure when the user started another request afterward', () => {
+    localStorage.setItem('sarah-chat-history-v3-verified-flow', JSON.stringify({
+      sessionId: 'continued-session',
+      messages: [
+        {
+          role: 'assistant',
+          content: 'Alles klar. Ich wünsche dir einen schönen Tag!',
+          timestamp: Date.now() - 2_000,
+        },
+        { role: 'user', content: 'Ich habe noch ein Anliegen', timestamp: Date.now() - 1_000 },
+      ],
+      lastUpdated: Date.now(),
+      requestSequence: 2,
+      activeRequestId: 'continued-session-request-2',
+      conversationClosed: false,
+    }));
+
+    expect(new ChatHistory().isConversationClosed()).toBe(false);
+  });
+
   it('rotates only the matching completed request while retaining messages', () => {
     history.addMessage('user', 'Erstes Anliegen');
     const first = history.getRequestId();
