@@ -37,7 +37,13 @@ export interface RequestContext {
 }
 
 export type FactoryCaseResult =
-  | { matchState: 'unique'; personId: number; dealId: number; factoryNumber: string }
+  | {
+      matchState: 'unique';
+      personId: number;
+      dealId: number;
+      factoryNumber: string;
+      hasMontageDate?: boolean;
+    }
   | { matchState: 'unresolved'; candidateCount: 0 }
   | { matchState: 'ambiguous'; candidateCount: number };
 

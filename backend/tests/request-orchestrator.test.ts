@@ -24,6 +24,8 @@ function baseDependencies() {
       createLead: vi.fn().mockResolvedValue({ outcome: 'created', personId: 11, dealId: 22, createdPerson: true }),
       createChatTranscriptNote: vi.fn().mockResolvedValue({ noteId: 33 }),
       resolveFactoryCase: vi.fn().mockResolvedValue({ matchState: 'unique', personId: 31, dealId: 41, factoryNumber: 'FN-42' }),
+      resolveSupportPerson: vi.fn().mockResolvedValue({ matchState: 'unresolved', candidateCount: 0 }),
+      createSupportCase: vi.fn().mockResolvedValue({ personId: 31, dealId: 52, createdPerson: true }),
       resolveSupportReferenceCase: vi.fn().mockResolvedValue({ matchState: 'unique', personId: 31, dealId: 45, candidateCount: 1 }),
       resolveSupportFollowUpCase: vi.fn().mockResolvedValue({ matchState: 'unresolved', candidateCount: 0 }),
       createServiceRequest: vi.fn().mockResolvedValue({
@@ -369,7 +371,7 @@ describe('createRequestOrchestrator', () => {
       data: { ownsLift: 'yes' as const, liftManufacturer: 'lippe' as const, factoryNumberStatus: 'unavailable' as const, serviceRequestType: 'invoice_payment' as const },
       recipient: 'finance@lippelift.de',
     },
-  ])('uses email only for $label', async ({ data, recipient }) => {
+  ])('creates a Sales opportunity and note when $label has no unique original deal', async ({ label, data }) => {
     const deps = baseDependencies();
     const { journal } = durableJournal();
     const orchestrator = createRequestOrchestrator({
@@ -380,22 +382,32 @@ describe('createRequestOrchestrator', () => {
     });
 
     const result = await orchestrator.execute({
-      sessionId: 's1', requestId: `r-${recipient}`, mode: 'service', transcript: 'vollstaendig',
+      sessionId: 's1', requestId: `r-${label}`, mode: 'service', transcript: 'vollstaendig',
       supportData: { ...data, customerName: 'Erika Muster', email: 'erika@example.de', category: data.serviceRequestType === 'invoice_payment' ? 'finance' : 'technik', issueDescription: 'Bitte pruefen.' },
     });
 
     expect(deps.pipedrive.resolveFactoryCase).not.toHaveBeenCalled();
     expect(deps.pipedrive.createServiceRequest).not.toHaveBeenCalled();
+    expect(deps.pipedrive.createSupportCase).toHaveBeenCalledTimes(1);
+    expect(deps.pipedrive.createChatTranscriptNote).toHaveBeenCalledWith(
+      expect.any(String),
+      31,
+      52,
+      expect.stringContaining('Zielteam: sales@lippelift.de'),
+    );
     expect(deps.email.sendSupportNotification.mock.calls.map(([address]) => address)).toEqual([
-      recipient,
       'berg@lippelift.de',
       'caechma@gmail.com',
     ]);
     expect(deps.email.sendSupportNotification).toHaveBeenLastCalledWith(
-      'caechma@gmail.com', expect.objectContaining({ intendedInbox: recipient }),
+      'caechma@gmail.com', expect.objectContaining({ intendedInbox: 'sales@lippelift.de' }),
     );
-    expect(result).toMatchObject({ kind: 'service', completed: true, recipient });
-    expect(result.crm).toBeUndefined();
+    expect(result).toMatchObject({
+      kind: 'service',
+      completed: true,
+      recipient: 'sales@lippelift.de',
+      crm: { outcome: 'created', dealId: 52 },
+    });
   });
 
   it('keeps maintenance read-only but creates a Serviceanfrage for another exact LIPPE case', async () => {
@@ -429,6 +441,65 @@ describe('createRequestOrchestrator', () => {
     expect(maintenance.sourceCase).toMatchObject({ dealId: 41 });
     expect(technical.crm).toMatchObject({ dealId: 51 });
   });
+
+  it.each([
+    { hasMontageDate: true, intendedInbox: 'lossau@lippelift.de' },
+    { hasMontageDate: false, intendedInbox: 'sales@lippelift.de' },
+  ])(
+    'routes a uniquely matched original deal with Montagedatum=$hasMontageDate to $intendedInbox',
+    async ({ hasMontageDate, intendedInbox }) => {
+      const deps = baseDependencies();
+      deps.pipedrive.resolveFactoryCase.mockResolvedValue({
+        matchState: 'unique',
+        personId: 31,
+        dealId: 41,
+        factoryNumber: 'FN-42',
+        hasMontageDate,
+      });
+      const { journal } = durableJournal();
+      const orchestrator = createRequestOrchestrator({
+        ...deps,
+        journal,
+        opportunityRecipient: 'sales@lippelift.de',
+        serviceCopyRecipients: 'berg@lippelift.de,caechma@gmail.com',
+      });
+
+      const result = await orchestrator.execute({
+        sessionId: `montage-${hasMontageDate}`,
+        requestId: `montage-request-${hasMontageDate}`,
+        mode: 'service',
+        transcript: 'vollständiger Chat',
+        supportData: {
+          ownsLift: 'yes',
+          liftManufacturer: 'lippe',
+          factoryNumber: 'FN-42',
+          factoryNumberStatus: 'provided',
+          serviceRequestType: 'maintenance',
+          customerName: 'Erika Muster',
+          email: 'erika@example.de',
+          category: 'technik',
+          issueDescription: 'Wartung gewünscht.',
+        },
+      });
+
+      expect(deps.pipedrive.createSupportCase).not.toHaveBeenCalled();
+      expect(deps.pipedrive.createChatTranscriptNote).toHaveBeenCalledWith(
+        expect.any(String),
+        31,
+        41,
+        expect.stringContaining(`Zielteam: ${intendedInbox}`),
+      );
+      expect(deps.email.sendSupportNotification.mock.calls.map(([recipient]) => recipient)).toEqual([
+        'berg@lippelift.de',
+        'caechma@gmail.com',
+      ]);
+      expect(deps.email.sendSupportNotification).toHaveBeenLastCalledWith(
+        'caechma@gmail.com',
+        expect.objectContaining({ intendedInbox, noteStatus: 'created' }),
+      );
+      expect(result).toMatchObject({ recipient: intendedInbox, sourceCase: { dealId: 41 } });
+    },
+  );
 
   it('routes separate-session prior-contact follow-ups to the same exact support case', async () => {
     const deps = baseDependencies();
@@ -540,7 +611,7 @@ describe('createRequestOrchestrator', () => {
     expect(deps.pipedrive.createServiceRequest).not.toHaveBeenCalled();
     expect(deps.pipedrive.appendServiceRequestToExistingCase).not.toHaveBeenCalled();
     expect(result.crm).toBeUndefined();
-    expect(result.sourceCase).toEqual({ matchState: 'ambiguous', candidateCount: 2 });
+    expect(result.sourceCase).toEqual({ matchState: 'unique', personId: 31, dealId: 41, factoryNumber: 'FN-42' });
   });
 
   it('does not create a duplicate support case when prior contact is yes but no existing case resolves', async () => {
@@ -562,7 +633,7 @@ describe('createRequestOrchestrator', () => {
     expect(deps.pipedrive.createServiceRequest).not.toHaveBeenCalled();
     expect(deps.pipedrive.appendServiceRequestToExistingCase).not.toHaveBeenCalled();
     expect(result.crm).toBeUndefined();
-    expect(result.sourceCase).toEqual({ matchState: 'unresolved', candidateCount: 0 });
+    expect(result.sourceCase).toEqual({ matchState: 'unique', personId: 31, dealId: 41, factoryNumber: 'FN-42' });
   });
 
   it('does not mutate CRM when prior-contact and factory identities conflict', async () => {
@@ -583,10 +654,10 @@ describe('createRequestOrchestrator', () => {
     expect(deps.pipedrive.appendServiceRequestToExistingCase).not.toHaveBeenCalled();
     expect(deps.pipedrive.createServiceRequest).not.toHaveBeenCalled();
     expect(result.crm).toBeUndefined();
-    expect(result.sourceCase).toEqual({ matchState: 'ambiguous', candidateCount: 2 });
+    expect(result.sourceCase).toEqual({ matchState: 'unique', personId: 31, dealId: 41, factoryNumber: 'FN-42' });
     expect(deps.email.sendSupportNotification).toHaveBeenCalledWith(
       'technik@lippelift.de',
-      expect.objectContaining({ matchState: 'ambiguous', dealId: undefined }),
+      expect.objectContaining({ matchState: 'unique', dealId: 41 }),
     );
   });
 
@@ -673,7 +744,6 @@ describe('createRequestOrchestrator', () => {
     expect(deps.pipedrive.resolveFactoryCase).toHaveBeenCalledTimes(1);
     expect(deps.pipedrive.createServiceRequest).toHaveBeenCalledTimes(1);
     expect(deps.email.sendSupportNotification.mock.calls.map(([recipient]) => recipient)).toEqual([
-      'technik@lippelift.de',
       'berg@lippelift.de',
       'caechma@gmail.com',
       'caechma@gmail.com',

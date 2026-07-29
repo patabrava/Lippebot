@@ -215,6 +215,8 @@ export function createPipedriveService(
   const configured = apiKey.length > 0;
   const recentlyResolvedPersonIds = new Map<string, number>();
   let factoryNumberFieldKey: string | undefined;
+  let montageDateFieldKey: string | null | undefined;
+  let dealFieldsMetadata: Promise<Array<{ key?: string; name?: string }> | null> | undefined;
   let serviceMetadataVerification: Promise<void> | undefined;
   const webBaseUrl = options.webBaseUrl ?? 'https://lippelift.pipedrive.com';
   const servicePipelineId = options.servicePipelineId ?? 1;
@@ -348,9 +350,14 @@ export function createPipedriveService(
       : '';
   }
 
+  async function getDealFieldsMetadata(): Promise<Array<{ key?: string; name?: string }> | null> {
+    dealFieldsMetadata ??= apiGet<Array<{ key?: string; name?: string }> | null>('/dealFields', { limit: 500 });
+    return dealFieldsMetadata;
+  }
+
   async function getFactoryNumberFieldKey(): Promise<string> {
     if (factoryNumberFieldKey) return factoryNumberFieldKey;
-    const fields = await apiGet<Array<{ key?: string; name?: string }> | null>('/dealFields', { limit: 500 });
+    const fields = await getDealFieldsMetadata();
     const matches = (fields ?? []).filter((field) => field.name === 'Fabriknummer' && typeof field.key === 'string');
     if (matches.length !== 1) {
       throw new Error('Fabriknummer field is not uniquely configured');
@@ -359,12 +366,28 @@ export function createPipedriveService(
     return factoryNumberFieldKey;
   }
 
+  async function getMontageDateFieldKey(): Promise<string | undefined> {
+    if (montageDateFieldKey !== undefined) return montageDateFieldKey ?? undefined;
+    const fields = await getDealFieldsMetadata();
+    const matches = (fields ?? []).filter((field) => field.name === 'Montagedatum' && typeof field.key === 'string');
+    montageDateFieldKey = matches.length === 1 ? matches[0].key! : null;
+    return montageDateFieldKey ?? undefined;
+  }
+
+  function hasNonEmptyFieldValue(value: unknown): boolean {
+    if (typeof value === 'string') return value.trim().length > 0;
+    return value !== undefined && value !== null && value !== '';
+  }
+
   async function resolveFactoryCase(factoryNumber: string): Promise<FactoryCaseResult> {
     if (!configured) throw new Error('Pipedrive not configured');
     const normalizedFactoryNumber = normalizeFactoryNumber(factoryNumber);
     if (!normalizedFactoryNumber) return { matchState: 'unresolved', candidateCount: 0 };
 
-    const fieldKey = await getFactoryNumberFieldKey();
+    const [fieldKey, montageFieldKey] = await Promise.all([
+      getFactoryNumberFieldKey(),
+      getMontageDateFieldKey(),
+    ]);
     const searchMatches = await searchDeals(factoryNumber, 'custom_fields');
     const candidateIds = [...new Set(searchMatches.map((deal) => deal.id))];
     const exactDeals: PersonDeal[] = [];
@@ -383,6 +406,9 @@ export function createPipedriveService(
       personId,
       dealId: exactDeals[0].id,
       factoryNumber: factoryNumber.trim(),
+      hasMontageDate: montageFieldKey
+        ? hasNonEmptyFieldValue((exactDeals[0] as Record<string, unknown>)[montageFieldKey])
+        : false,
     };
   }
 

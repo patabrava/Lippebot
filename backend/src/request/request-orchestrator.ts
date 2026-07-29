@@ -28,6 +28,8 @@ interface RequestOrchestratorDependencies {
     'createLead'
     | 'createChatTranscriptNote'
     | 'resolveFactoryCase'
+    | 'resolveSupportPerson'
+    | 'createSupportCase'
     | 'resolveSupportReferenceCase'
     | 'resolveSupportFollowUpCase'
     | 'createServiceRequest'
@@ -113,6 +115,37 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
       data.message && `Anliegen: ${data.message}`,
       `CRM-Ergebnis: ${crm.outcome}`,
     ].filter(Boolean).join('\n');
+  }
+
+  function supportNoteSummary(
+    data: SupportData,
+    sourceCase: FactoryCaseResult | undefined,
+    intendedInbox: string,
+  ): string {
+    return [
+      data.customerName && `Serviceanfrage von: ${data.customerName}`,
+      data.email && `E-Mail: ${data.email}`,
+      data.phone && `Telefon: ${data.phone}`,
+      data.factoryNumber && `Fabriknummer: ${data.factoryNumber}`,
+      data.serviceRequestType && `Service-Typ: ${data.serviceRequestType}`,
+      data.priorContact && `Vorheriger Kontakt: ${data.priorContact}`,
+      data.priorContactReference && `Referenz: ${data.priorContactReference}`,
+      data.issueDescription && `Anliegen: ${data.issueDescription}`,
+      `CRM-Treffer: ${sourceCase?.matchState ?? 'unresolved'}`,
+      `Montagedatum vorhanden: ${sourceCase?.matchState === 'unique' && sourceCase.hasMontageDate === true ? 'ja' : 'nein'}`,
+      `Zielteam: ${intendedInbox}`,
+    ].filter(Boolean).join('\n');
+  }
+
+  function serviceRecipient(
+    policyRecipient: string,
+    sourceCase: FactoryCaseResult | undefined,
+  ): string {
+    if (sourceCase?.matchState !== 'unique') return 'sales@lippelift.de';
+    if (sourceCase.hasMontageDate === true) return 'lossau@lippelift.de';
+    if (sourceCase.hasMontageDate === false) return 'sales@lippelift.de';
+    // Compatibility for durable checkpoints written before Montagedatum routing existed.
+    return policyRecipient;
   }
 
   async function createOpportunityNote(
@@ -266,16 +299,38 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
 
     let sourceCase: FactoryCaseResult | undefined;
     let crm: ServiceRequestCrmResult | undefined;
-    if (policy.crm === 'read_only' || policy.crm === 'create_service_request') {
-      if (!supportData.factoryNumber?.trim()) throw new Error('LIPPE request is missing factoryNumber');
-      const crmCheckpoint = await journal.runStep(
-        { sessionId: input.sessionId, requestId: input.requestId, step: 'crm' },
-        async () => {
-          const resolvedCase = await pipedrive.resolveFactoryCase(supportData.factoryNumber!);
-          if (policy.crm !== 'create_service_request' || resolvedCase.matchState !== 'unique') {
-            return { sourceCase: resolvedCase };
+    let salesOpportunity: LeadCrmResult | undefined;
+    const crmCheckpoint = await journal.runStep(
+      { sessionId: input.sessionId, requestId: input.requestId, step: 'crm' },
+      async () => {
+        let resolvedCase: FactoryCaseResult = { matchState: 'unresolved', candidateCount: 0 };
+        if (
+          supportData.liftManufacturer === 'lippe'
+          && supportData.factoryNumberStatus === 'provided'
+          && supportData.factoryNumber?.trim()
+        ) {
+          try {
+            resolvedCase = await pipedrive.resolveFactoryCase(supportData.factoryNumber);
+          } catch {
+            resolvedCase = { matchState: 'unresolved', candidateCount: 0 };
           }
+        }
 
+        if (resolvedCase.matchState !== 'unique') {
+          const match = await pipedrive.resolveSupportPerson(supportData);
+          const opportunity = await pipedrive.createSupportCase(supportData, match);
+          return {
+            sourceCase: resolvedCase,
+            salesOpportunity: {
+              outcome: 'created' as const,
+              personId: opportunity.personId,
+              dealId: opportunity.dealId,
+              createdPerson: opportunity.createdPerson,
+            },
+          };
+        }
+
+        if (policy.crm === 'create_service_request') {
           if (supportData.priorContact === 'yes') {
             const referenceCase = await pipedrive.resolveSupportReferenceCase(supportData);
             const targetCase = referenceCase.matchState === 'unresolved'
@@ -283,24 +338,24 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
               : referenceCase;
             if (targetCase.matchState === 'ambiguous') {
               return {
-                sourceCase: { matchState: 'ambiguous' as const, candidateCount: targetCase.candidateCount },
+                sourceCase: resolvedCase,
                 referenceCase,
                 targetCase,
               };
             }
             if (targetCase.matchState === 'unresolved') {
-              return { sourceCase: targetCase, referenceCase, targetCase };
+              return { sourceCase: resolvedCase, referenceCase, targetCase };
             }
             if (targetCase.personId !== resolvedCase.personId) {
               return {
-                sourceCase: { matchState: 'ambiguous' as const, candidateCount: 2 },
+                sourceCase: resolvedCase,
                 referenceCase,
                 targetCase,
               };
             }
             if (targetCase.dealId === resolvedCase.dealId) {
               return {
-                sourceCase: { matchState: 'ambiguous' as const, candidateCount: 1 },
+                sourceCase: resolvedCase,
                 referenceCase,
                 targetCase,
               };
@@ -322,11 +377,37 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
             transcript: input.transcript,
           });
           return { sourceCase: resolvedCase, crm: created };
-        },
-      );
-      sourceCase = crmCheckpoint.sourceCase as FactoryCaseResult;
-      crm = crmCheckpoint.crm as ServiceRequestCrmResult | undefined;
+        }
+
+        return { sourceCase: resolvedCase };
+      },
+    );
+    sourceCase = crmCheckpoint.sourceCase as FactoryCaseResult;
+    crm = crmCheckpoint.crm as ServiceRequestCrmResult | undefined;
+    salesOpportunity = crmCheckpoint.salesOpportunity as LeadCrmResult | undefined;
+
+    const intendedInbox = serviceRecipient(policy.recipient, sourceCase);
+    const notePersonId = salesOpportunity?.personId
+      ?? (sourceCase.matchState === 'unique' ? sourceCase.personId : undefined);
+    const noteDealId = salesOpportunity?.dealId
+      ?? (sourceCase.matchState === 'unique' ? sourceCase.dealId : undefined);
+    if (!notePersonId || !noteDealId) {
+      throw new Error('Service request has no safe Pipedrive deal for its note');
     }
+    await journal.runStep(
+      { sessionId: input.sessionId, requestId: input.requestId, step: 'note' },
+      async () => pipedrive.createChatTranscriptNote(
+        input.requestId,
+        notePersonId,
+        noteDealId,
+        buildPipedriveCompletedTranscriptNote({
+          sessionId: input.sessionId,
+          requestId: input.requestId,
+          summary: supportNoteSummary(supportData, sourceCase, intendedInbox),
+          transcript: input.transcript,
+        }),
+      ),
+    );
 
     const emailStep = { sessionId: input.sessionId, requestId: input.requestId, step: 'email' as const };
     const previousEmail = await journal.getStep<{ recipient?: string; recipients?: string[] }>(emailStep);
@@ -336,8 +417,12 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
     );
     const previouslySentSet = new Set(previouslySent.map((recipient) => recipient.toLowerCase()));
     const matchState = sourceCase?.matchState ?? 'unresolved';
-    const dealId = crm?.dealId ?? (sourceCase?.matchState === 'unique' ? sourceCase.dealId : undefined);
-    const recipients = parseEmailRecipients(policy.recipient, serviceCopyRecipients);
+    const dealId = salesOpportunity?.dealId
+      ?? crm?.dealId
+      ?? (sourceCase?.matchState === 'unique' ? sourceCase.dealId : undefined);
+    const recipients = serviceCopyRecipients
+      ? parseEmailRecipients(serviceCopyRecipients)
+      : parseEmailRecipients(intendedInbox);
     await sendToRecipients(
       input,
       recipients.filter((recipient) => !previouslySentSet.has(recipient.toLowerCase())),
@@ -345,9 +430,9 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
         await email.sendSupportNotification(recipient, {
           requestId: input.requestId,
           data: supportData,
-          intendedInbox: policy.recipient!,
+          intendedInbox,
           matchState,
-          noteStatus: crm ? 'created' : 'skipped',
+          noteStatus: 'created',
           dealId,
           sourceDealUrl: crm?.sourceDealUrl,
           serviceDealUrl: crm?.serviceDealUrl,
@@ -358,7 +443,7 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
     await journal.runStep(
       emailStep,
       async () => {
-        return { sent: true, recipient: policy.recipient!, recipients };
+        return { sent: true, recipient: intendedInbox, recipients };
       },
     );
     await journal.runStep(
@@ -370,8 +455,8 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
       requestId: input.requestId,
       kind: 'service',
       completed: true,
-      recipient: policy.recipient,
-      ...(crm ? { crm } : {}),
+      recipient: intendedInbox,
+      ...(crm ? { crm } : salesOpportunity ? { crm: salesOpportunity } : {}),
       ...(sourceCase ? { sourceCase } : {}),
     };
   }

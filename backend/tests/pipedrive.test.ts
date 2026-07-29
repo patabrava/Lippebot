@@ -2117,10 +2117,20 @@ describe('createPipedriveService', () => {
 
   it('resolveFactoryCase returns one exact Fabriknummer match including a closed source deal', async () => {
     const factoryKey = 'factory-field-key';
+    const montageDateKey = 'montage-date-field-key';
     const mockFetch = vi.fn(async (input: string | URL | Request) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith('/dealFields')) {
-        return { ok: true, json: () => Promise.resolve({ success: true, data: [{ id: 91, key: factoryKey, name: 'Fabriknummer' }] }) };
+        return {
+          ok: true,
+          json: () => Promise.resolve({
+            success: true,
+            data: [
+              { id: 91, key: factoryKey, name: 'Fabriknummer' },
+              { id: 92, key: montageDateKey, name: 'Montagedatum' },
+            ],
+          }),
+        };
       }
       if (url.pathname.endsWith('/deals/search')) {
         expect(url.searchParams.get('fields')).toBe('custom_fields');
@@ -2134,7 +2144,13 @@ describe('createPipedriveService', () => {
           ok: true,
           json: () => Promise.resolve({
             success: true,
-            data: { id: 701, status: 'won', person_id: { value: 501 }, [factoryKey]: ' FN  42 ' },
+            data: {
+              id: 701,
+              status: 'won',
+              person_id: { value: 501 },
+              [factoryKey]: ' FN  42 ',
+              [montageDateKey]: '2026-07-15',
+            },
           }),
         };
       }
@@ -2147,6 +2163,7 @@ describe('createPipedriveService', () => {
       personId: 501,
       dealId: 701,
       factoryNumber: 'fn 42',
+      hasMontageDate: true,
     });
   });
 
