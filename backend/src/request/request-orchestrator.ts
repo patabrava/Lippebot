@@ -11,6 +11,7 @@ import type {
   Mode,
   ServiceRequestCrmResult,
   SupportData,
+  SupportMatchState,
 } from '../types/index.js';
 import { classifyRequestPolicy } from './request-policy.js';
 import type { RequestJournal } from './request-journal.js';
@@ -121,6 +122,7 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
     data: SupportData,
     sourceCase: FactoryCaseResult | undefined,
     intendedInbox: string,
+    matchState: SupportMatchState,
   ): string {
     return [
       data.customerName && `Serviceanfrage von: ${data.customerName}`,
@@ -131,7 +133,7 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
       data.priorContact && `Vorheriger Kontakt: ${data.priorContact}`,
       data.priorContactReference && `Referenz: ${data.priorContactReference}`,
       data.issueDescription && `Anliegen: ${data.issueDescription}`,
-      `CRM-Treffer: ${sourceCase?.matchState ?? 'unresolved'}`,
+      `CRM-Treffer: ${matchState}`,
       `Montagedatum vorhanden: ${sourceCase?.matchState === 'unique' && sourceCase.hasMontageDate === true ? 'ja' : 'nein'}`,
       `Zielteam: ${intendedInbox}`,
     ].filter(Boolean).join('\n');
@@ -398,6 +400,9 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
     salesOpportunity = crmCheckpoint.salesOpportunity as LeadCrmResult | undefined;
 
     const intendedInbox = serviceRecipient(policy.recipient, sourceCase);
+    const matchState: SupportMatchState = salesOpportunity?.outcome === 'reused'
+      ? 'unique'
+      : sourceCase.matchState;
     const notePersonId = salesOpportunity?.personId
       ?? (sourceCase.matchState === 'unique' ? sourceCase.personId : undefined);
     const noteDealId = salesOpportunity?.dealId
@@ -414,7 +419,7 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
         buildPipedriveCompletedTranscriptNote({
           sessionId: input.sessionId,
           requestId: input.requestId,
-          summary: supportNoteSummary(supportData, sourceCase, intendedInbox),
+          summary: supportNoteSummary(supportData, sourceCase, intendedInbox, matchState),
           transcript: input.transcript,
         }),
       ),
@@ -427,7 +432,6 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
       ...(previousEmail?.recipients ?? []),
     );
     const previouslySentSet = new Set(previouslySent.map((recipient) => recipient.toLowerCase()));
-    const matchState = sourceCase?.matchState ?? 'unresolved';
     const dealId = salesOpportunity?.dealId
       ?? crm?.dealId
       ?? (sourceCase?.matchState === 'unique' ? sourceCase.dealId : undefined);

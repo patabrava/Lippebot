@@ -395,12 +395,18 @@ describe('createRequestOrchestrator', () => {
       52,
       expect.stringContaining('Zielteam: sales@lippelift.de'),
     );
+    expect(deps.pipedrive.createChatTranscriptNote.mock.calls[0]?.[3])
+      .toContain('CRM-Treffer: unresolved');
     expect(deps.email.sendSupportNotification.mock.calls.map(([address]) => address)).toEqual([
       'berg@lippelift.de',
       'caechma@gmail.com',
     ]);
     expect(deps.email.sendSupportNotification).toHaveBeenLastCalledWith(
-      'caechma@gmail.com', expect.objectContaining({ intendedInbox: 'sales@lippelift.de' }),
+      'caechma@gmail.com',
+      expect.objectContaining({
+        intendedInbox: 'sales@lippelift.de',
+        matchState: 'unresolved',
+      }),
     );
     expect(result).toMatchObject({
       kind: 'service',
@@ -448,6 +454,15 @@ describe('createRequestOrchestrator', () => {
       31,
       41,
       expect.stringContaining('Nutzer: Ich habe einen Lift bestellt.'),
+    );
+    expect(deps.pipedrive.createChatTranscriptNote.mock.calls[0]?.[3])
+      .toContain('CRM-Treffer: unique');
+    expect(deps.email.sendSupportNotification).toHaveBeenCalledWith(
+      'sales@lippelift.de',
+      expect.objectContaining({
+        matchState: 'unique',
+        dealId: 41,
+      }),
     );
     expect(result).toMatchObject({
       kind: 'service',
