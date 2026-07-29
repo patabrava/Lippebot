@@ -259,6 +259,81 @@ describe('POST /api/chat', () => {
     expect(completion).toContain('"action":"request_completed"');
   });
 
+  it('never ends an incomplete ordered-lift turn without the next required question', async () => {
+    const baseData = {
+      requestSituation: 'ordered_not_installed' as const,
+      ownsLift: 'no' as const,
+      serviceRequestType: 'sales_contract_order' as const,
+      customerName: 'Patrick Berg',
+      email: 'patrick-berg@online.de',
+      category: 'sales' as const,
+      issueDescription: 'Ich habe einen Lift bestellt, höre aber nichts mehr.',
+    };
+    const streamChat = vi.fn(async function* (sessionId: string, message: string) {
+      if (message.includes('@')) {
+        yield { type: 'token' as const, content: 'Verstanden, die E-Mail-Adresse ist patrick-berg@online.de.' };
+        yield {
+          type: 'state' as const,
+          state: { sessionId, mode: 'service' as const, collectedData: baseData },
+        };
+        return;
+      }
+      if (message.toLocaleLowerCase('de-DE') === 'ja') {
+        yield { type: 'token' as const, content: 'Verstehe, du hattest also schon einmal Kontakt mit uns dazu.' };
+        yield {
+          type: 'state' as const,
+          state: {
+            sessionId,
+            mode: 'service' as const,
+            collectedData: { ...baseData, priorContact: 'yes' as const },
+          },
+        };
+        return;
+      }
+      yield {
+        type: 'state' as const,
+        state: {
+          sessionId,
+          mode: 'service' as const,
+          collectedData: { ...baseData, priorContact: 'yes' as const },
+        },
+      };
+    });
+    const chatRoute = createChatRoute({
+      gemini: { streamChat } as unknown as GeminiService,
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      requestOrchestrator: { execute: vi.fn() },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const request = (message: string) => testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'follow-up-guarantee-session',
+        requestId: 'follow-up-guarantee-request',
+        message,
+        history: [],
+      }),
+    });
+
+    const afterEmail = await (await request('patrick-berg@online.de')).text();
+    expect(afterEmail).toContain('Verstanden, die E-Mail-Adresse ist patrick-berg@online.de.');
+    expect(afterEmail).toContain('Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?');
+
+    const afterPriorContact = await (await request('jA')).text();
+    expect(afterPriorContact).toContain('Verstehe, du hattest also schon einmal Kontakt mit uns dazu.');
+    expect(afterPriorContact).toContain('Hast du dazu eine Angebots-, Auftrags- oder Vorgangsnummer zur Hand?');
+    expect(afterPriorContact).not.toContain('Sind alle Angaben korrekt?');
+
+    const afterNoReference = await (await request('Nein')).text();
+    expect(afterNoReference).toContain('Sind alle Angaben korrekt?');
+    expect(afterNoReference.match(/Angebots-, Auftrags- oder Vorgangsnummer/g)).toBeNull();
+  });
+
   it('emits factory help then completes only after the request orchestrator succeeds', async () => {
     const supportData = {
       ownsLift: 'yes' as const, liftManufacturer: 'lippe' as const, factoryNumber: 'FN-42', factoryNumberStatus: 'provided' as const,

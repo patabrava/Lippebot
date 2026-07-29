@@ -28,7 +28,7 @@ import {
   buildAuthoritativeStateContext,
   buildNextMissingQuestion,
   buildVerificationMessage,
-  containsVerificationQuestion,
+  ensureNextMissingQuestion,
   isExplicitVerificationConfirmation,
   inferExplicitServiceContext,
   isFurtherConcernConfirmation,
@@ -37,6 +37,7 @@ import {
   isRequestReady,
   isServiceReady,
   mergeCollectedData,
+  needsPriorContactReferenceQuestion,
   normalizeCollectedData,
   type IntakeState,
 } from '../request/intake-verification.js';
@@ -337,6 +338,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
       collectedData: {},
       awaitingVerification: false,
       completed: false,
+      priorContactReferenceAsked: false,
     };
 
     const explicitServiceContext = inferExplicitServiceContext(message);
@@ -465,9 +467,35 @@ export function createChatRoute(deps: ChatDeps): Hono {
       collectedData: normalizeCollectedData(mergeCollectedData(intakeState.collectedData, lastCollectedData)),
       awaitingVerification: intakeState.awaitingVerification,
       completed: false,
+      priorContactReferenceAsked: intakeState.priorContactReferenceAsked ?? false,
     };
 
     const ready = isRequestReady(intakeState.mode, intakeState.collectedData);
+    if (!verificationConfirmed && needsPriorContactReferenceQuestion(intakeState)) {
+      intakeState.awaitingVerification = false;
+      intakeState.priorContactReferenceAsked = true;
+      intakeStates.set(requestId, intakeState);
+      const nextQuestion = buildNextMissingQuestion(
+        intakeState.mode,
+        intakeState.collectedData,
+        { priorContactReferenceAsked: false },
+      );
+      await stream.writeSSE({
+        data: JSON.stringify({
+          type: 'token',
+          content: ensureNextMissingQuestion(assistantText, nextQuestion),
+        }),
+      });
+      await stream.writeSSE({
+        data: JSON.stringify({
+          type: 'done',
+          mode: intakeState.mode,
+          collectedData: intakeState.collectedData,
+        }),
+      });
+      return;
+    }
+
     if (ready && !verificationConfirmed) {
       intakeState.awaitingVerification = true;
       intakeStates.set(requestId, intakeState);
@@ -486,12 +514,13 @@ export function createChatRoute(deps: ChatDeps): Hono {
     if (!ready) {
       intakeState.awaitingVerification = false;
       intakeStates.set(requestId, intakeState);
-      if (assistantText) {
-        const content = containsVerificationQuestion(assistantText)
-          ? buildNextMissingQuestion(intakeState.mode, intakeState.collectedData)
-          : assistantText;
-        await stream.writeSSE({ data: JSON.stringify({ type: 'token', content }) });
-      }
+      const nextQuestion = buildNextMissingQuestion(
+        intakeState.mode,
+        intakeState.collectedData,
+        { priorContactReferenceAsked: intakeState.priorContactReferenceAsked },
+      );
+      const content = ensureNextMissingQuestion(assistantText, nextQuestion);
+      await stream.writeSSE({ data: JSON.stringify({ type: 'token', content }) });
       await stream.writeSSE({
         data: JSON.stringify({
           type: 'done',

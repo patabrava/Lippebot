@@ -4,12 +4,14 @@ import {
   buildNextMissingQuestion,
   buildVerificationMessage,
   containsVerificationQuestion,
+  ensureNextMissingQuestion,
   inferExplicitServiceContext,
   isExplicitVerificationConfirmation,
   isFurtherConcernConfirmation,
   isNoFurtherConcern,
   isRequestReady,
   mergeCollectedData,
+  needsPriorContactReferenceQuestion,
   normalizeCollectedData,
 } from '../src/request/intake-verification.js';
 
@@ -169,6 +171,55 @@ describe('intake verification', () => {
       email: 'patrick@example.de',
       issueDescription: 'Lift ist kaputt.',
     })).toBe('Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?');
+  });
+
+  it('adds the required next question when the model only acknowledges a field', () => {
+    expect(ensureNextMissingQuestion(
+      'Verstanden, die E-Mail-Adresse ist patrick-berg@online.de.',
+      'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?',
+    )).toBe([
+      'Verstanden, die E-Mail-Adresse ist patrick-berg@online.de.',
+      '',
+      'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?',
+    ].join('\n'));
+  });
+
+  it('uses the required next question when the model emits no visible text', () => {
+    expect(ensureNextMissingQuestion(
+      '',
+      'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?',
+    )).toBe('Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?');
+  });
+
+  it('asks for a prior-contact reference exactly until that question has been shown', () => {
+    const collectedData = {
+      requestSituation: 'ordered_not_installed' as const,
+      ownsLift: 'no' as const,
+      serviceRequestType: 'sales_contract_order' as const,
+      priorContact: 'yes' as const,
+      customerName: 'Patrick Berg',
+      email: 'patrick-berg@online.de',
+      category: 'sales' as const,
+      issueDescription: 'Ich höre nichts mehr zum Status.',
+    };
+
+    expect(needsPriorContactReferenceQuestion({
+      mode: 'service',
+      collectedData,
+      awaitingVerification: false,
+      completed: false,
+      priorContactReferenceAsked: false,
+    })).toBe(true);
+    expect(buildNextMissingQuestion('service', collectedData, {
+      priorContactReferenceAsked: false,
+    })).toBe('Hast du dazu eine Angebots-, Auftrags- oder Vorgangsnummer zur Hand?');
+    expect(needsPriorContactReferenceQuestion({
+      mode: 'service',
+      collectedData,
+      awaitingVerification: false,
+      completed: false,
+      priorContactReferenceAsked: true,
+    })).toBe(false);
   });
 
   it('recognizes a complete ordered-but-not-installed request without factory data', () => {

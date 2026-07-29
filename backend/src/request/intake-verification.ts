@@ -9,6 +9,7 @@ export interface IntakeState {
   collectedData: CollectedRequestData;
   awaitingVerification: boolean;
   completed: boolean;
+  priorContactReferenceAsked?: boolean;
 }
 
 const repairIssuePattern = /\b(?:kaputt|defekt|reparatur|reparieren|beschädigt|beschaedigt)\b/i;
@@ -122,7 +123,38 @@ export function containsVerificationQuestion(message: string): boolean {
   return /\b(?:ist (?:das(?: alles)?|alles)(?: so)? korrekt|ist das alles so richtig|stimmt das so|sind (?:alle |die )?(?:angaben|daten)(?: so)? korrekt|sind alle angaben richtig)\b/.test(normalized);
 }
 
-export function buildNextMissingQuestion(mode: Mode, data: CollectedRequestData): string {
+function hasPriorContactReference(data: CollectedRequestData): boolean {
+  return [
+    data.priorContactReference,
+    data.invoiceNumber,
+    data.customerNumber,
+    data.paymentReference,
+    data.orderNumber,
+    data.offerNumber,
+    data.leadId,
+    data.contractReference,
+    data.sparePartReference,
+  ].some((value) => typeof value === 'string' && value.trim().length > 0);
+}
+
+export function needsPriorContactReferenceQuestion(state: IntakeState): boolean {
+  return state.collectedData.priorContact === 'yes'
+    && !state.priorContactReferenceAsked
+    && !hasPriorContactReference(state.collectedData);
+}
+
+export function ensureNextMissingQuestion(assistantText: string, nextQuestion: string): string {
+  const trimmed = assistantText.trim();
+  if (!trimmed || containsVerificationQuestion(trimmed)) return nextQuestion;
+  if (trimmed.includes(nextQuestion) || trimmed.includes('?')) return trimmed;
+  return `${trimmed}\n\n${nextQuestion}`;
+}
+
+export function buildNextMissingQuestion(
+  mode: Mode,
+  data: CollectedRequestData,
+  options: { priorContactReferenceAsked?: boolean } = {},
+): string {
   if (!data.requestSituation && !data.ownsLift) {
     return 'Geht es um einen neuen Lift, einen bereits bestellten Lift oder einen bereits eingebauten Lift?';
   }
@@ -134,6 +166,11 @@ export function buildNextMissingQuestion(mode: Mode, data: CollectedRequestData)
     }
     if (!data.message) return 'Beschreibe mir bitte kurz, worum es bei deiner Anfrage geht.';
     if (!hasPriorContactStatus(data)) return 'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?';
+    if (data.priorContact === 'yes'
+      && !options.priorContactReferenceAsked
+      && !hasPriorContactReference(data)) {
+      return 'Hast du dazu eine Angebots-, Auftrags- oder Vorgangsnummer zur Hand?';
+    }
     if (!data.stairLocation) return 'Ist der Lift für drinnen oder draußen?';
     if (!data.stairType) return 'Ist deine Treppe gerade oder kurvig?';
     if (!data.liftType) return 'Brauchst du einen Sitzlift oder einen rollstuhlgeeigneten Lift?';
@@ -150,6 +187,11 @@ export function buildNextMissingQuestion(mode: Mode, data: CollectedRequestData)
     }
     if (!data.issueDescription) return 'Beschreibe mir bitte kurz, worum es bei deinem Anliegen geht.';
     if (!hasPriorContactStatus(data)) return 'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?';
+    if (data.priorContact === 'yes'
+      && !options.priorContactReferenceAsked
+      && !hasPriorContactReference(data)) {
+      return 'Hast du dazu eine Angebots-, Auftrags- oder Vorgangsnummer zur Hand?';
+    }
     if (data.requestSituation !== 'ordered_not_installed' && data.ownsLift !== 'yes') {
       return 'Ist der Lift bereits eingebaut?';
     }
@@ -336,5 +378,8 @@ export function buildAuthoritativeStateContext(state: IntakeState): string {
     state.awaitingVerification
       ? 'Die Backend-Zusammenfassung wurde bereits gezeigt. Übernimm nur eine Korrektur; formuliere selbst keine weitere Kontroll-Zusammenfassung oder Bestätigungsfrage.'
       : 'Die Daten wurden noch nicht durch den Nutzer bestätigt. Das Backend zeigt die einzige Kontroll-Zusammenfassung automatisch, sobald alles vollständig ist; formuliere selbst niemals eine Zusammenfassung mit Bestätigungsfrage.',
+    state.collectedData.priorContact === 'yes' && state.priorContactReferenceAsked
+      ? 'Die Frage nach einer Angebots-, Auftrags- oder Vorgangsnummer wurde bereits gestellt. Frage sie nicht erneut, wenn der Nutzer keine Referenz hat.'
+      : 'Wenn vorheriger Kontakt bejaht wurde und noch keine Referenz bekannt ist, frage als Nächstes genau einmal nach einer Angebots-, Auftrags- oder Vorgangsnummer.',
   ].join('\n');
 }
