@@ -186,6 +186,79 @@ describe('POST /api/chat', () => {
     expect(text).not.toContain('Geht es bei dem Problem eher um die Technik');
   });
 
+  it('shows exactly one review when Gemini omits the status for a provided factory number', async () => {
+    const prematureReview = [
+      '**Name:** Patrick Berg **E-Mail:** patrick-berg@online.de',
+      '**Fabriknummer:** FBRK123456 **Bisheriger Kontakt:** Nein',
+      '',
+      'Ist das alles so korrekt?',
+    ].join('\n');
+    const collectedData = {
+      requestSituation: 'installed_lift' as const,
+      ownsLift: 'yes' as const,
+      liftManufacturer: 'lippe' as const,
+      factoryNumber: 'FBRK123456',
+      serviceRequestType: 'repair' as const,
+      priorContact: 'no' as const,
+      customerName: 'Patrick Berg',
+      email: 'patrick-berg@online.de',
+      category: 'technik' as const,
+      issueDescription: 'Hi mein Lift ist kaputt',
+    };
+    const streamChat = vi.fn(async function* (sessionId: string) {
+      yield { type: 'token' as const, content: prematureReview };
+      yield {
+        type: 'state' as const,
+        state: { sessionId, mode: 'service' as const, collectedData },
+      };
+    });
+    const execute = vi.fn().mockResolvedValue({
+      requestId: 'single-review-request',
+      kind: 'service',
+      completed: true,
+      recipient: 'technik@lippelift.de',
+    });
+    const chatRoute = createChatRoute({
+      gemini: { streamChat } as unknown as GeminiService,
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      requestOrchestrator: { execute },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const body = (message: string) => JSON.stringify({
+      sessionId: 'single-review-session',
+      requestId: 'single-review-request',
+      message,
+      history: [],
+    });
+
+    const review = await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body('Nein'),
+    })).text();
+
+    expect(review).toContain('Sind alle Angaben korrekt?');
+    expect(review).not.toContain('Ist das alles so korrekt?');
+    expect(review.match(/Angaben korrekt/g)).toHaveLength(1);
+    expect(review).toContain('"factoryNumberStatus":"provided"');
+    expect(execute).not.toHaveBeenCalled();
+
+    const completion = await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body('Ja'),
+    })).text();
+
+    expect(streamChat).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledOnce();
+    expect(completion).not.toContain('Sind alle Angaben korrekt?');
+    expect(completion).toContain('"action":"request_completed"');
+  });
+
   it('emits factory help then completes only after the request orchestrator succeeds', async () => {
     const supportData = {
       ownsLift: 'yes' as const, liftManufacturer: 'lippe' as const, factoryNumber: 'FN-42', factoryNumberStatus: 'provided' as const,

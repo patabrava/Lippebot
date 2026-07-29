@@ -26,7 +26,9 @@ import {
 } from '../email/recipients.js';
 import {
   buildAuthoritativeStateContext,
+  buildNextMissingQuestion,
   buildVerificationMessage,
+  containsVerificationQuestion,
   isExplicitVerificationConfirmation,
   inferExplicitServiceContext,
   isFurtherConcernConfirmation,
@@ -35,6 +37,7 @@ import {
   isRequestReady,
   isServiceReady,
   mergeCollectedData,
+  normalizeCollectedData,
   type IntakeState,
 } from '../request/intake-verification.js';
 
@@ -341,10 +344,10 @@ export function createChatRoute(deps: ChatDeps): Hono {
       intakeState = {
         ...intakeState,
         mode: intakeState.mode === 'undetermined' ? explicitServiceContext.mode : intakeState.mode,
-        collectedData: mergeCollectedData(
+        collectedData: normalizeCollectedData(mergeCollectedData(
           explicitServiceContext.collectedData,
           intakeState.collectedData as Record<string, unknown>,
-        ),
+        )),
       };
     }
 
@@ -400,7 +403,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
 
     const currentUserTimestamp = Date.now();
     let lastMode: 'berater' | 'anfrage' | 'service' | 'undetermined' = intakeState.mode;
-    let lastCollectedData: Record<string, unknown> = intakeState.collectedData;
+    let lastCollectedData: Record<string, unknown> = normalizeCollectedData(intakeState.collectedData);
     let leadData: LeadData | undefined;
     let supportData: SupportData | undefined;
     let assistantText = '';
@@ -422,10 +425,10 @@ export function createChatRoute(deps: ChatDeps): Hono {
         }
         if (event.type === 'state' && event.state) {
           if (event.state.mode !== 'undetermined') lastMode = event.state.mode;
-          lastCollectedData = mergeCollectedData(
+          lastCollectedData = normalizeCollectedData(mergeCollectedData(
             lastCollectedData,
             event.state.collectedData as Record<string, unknown>,
-          ) as Record<string, unknown>;
+          )) as Record<string, unknown>;
           if (!factoryHelpShownRequests.has(requestId)
             && lastCollectedData.ownsLift === 'yes'
             && lastCollectedData.liftManufacturer === 'lippe'
@@ -442,24 +445,24 @@ export function createChatRoute(deps: ChatDeps): Hono {
         }
         if (event.type === 'lead' && event.leadData) {
           lastMode = 'anfrage';
-          lastCollectedData = mergeCollectedData(
+          lastCollectedData = normalizeCollectedData(mergeCollectedData(
             lastCollectedData,
             event.leadData as unknown as Record<string, unknown>,
-          ) as Record<string, unknown>;
+          )) as Record<string, unknown>;
         }
         if (event.type === 'service' && event.serviceData && hasPriorContactStatus(event.serviceData)) {
           lastMode = 'service';
-          lastCollectedData = mergeCollectedData(lastCollectedData, {
+          lastCollectedData = normalizeCollectedData(mergeCollectedData(lastCollectedData, {
             ...event.serviceData,
             category: resolveSupportCategory(event.serviceData),
-          }) as Record<string, unknown>;
+          })) as Record<string, unknown>;
         }
       }
     }
 
     intakeState = {
       mode: lastMode,
-      collectedData: mergeCollectedData(intakeState.collectedData, lastCollectedData),
+      collectedData: normalizeCollectedData(mergeCollectedData(intakeState.collectedData, lastCollectedData)),
       awaitingVerification: intakeState.awaitingVerification,
       completed: false,
     };
@@ -484,7 +487,10 @@ export function createChatRoute(deps: ChatDeps): Hono {
       intakeState.awaitingVerification = false;
       intakeStates.set(requestId, intakeState);
       if (assistantText) {
-        await stream.writeSSE({ data: JSON.stringify({ type: 'token', content: assistantText }) });
+        const content = containsVerificationQuestion(assistantText)
+          ? buildNextMissingQuestion(intakeState.mode, intakeState.collectedData)
+          : assistantText;
+        await stream.writeSSE({ data: JSON.stringify({ type: 'token', content }) });
       }
       await stream.writeSSE({
         data: JSON.stringify({

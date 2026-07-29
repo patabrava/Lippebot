@@ -95,10 +95,80 @@ export function mergeCollectedData(
   current: CollectedRequestData,
   incoming: Record<string, unknown>,
 ): CollectedRequestData {
+  const normalizedIncoming = normalizeCollectedData(incoming as CollectedRequestData);
   const definedIncoming = Object.fromEntries(
-    Object.entries(incoming).filter(([, value]) => value !== undefined && value !== null && value !== ''),
+    Object.entries(normalizedIncoming).filter(([, value]) => value !== undefined && value !== null && value !== ''),
   );
-  return { ...current, ...definedIncoming } as CollectedRequestData;
+  return normalizeCollectedData({ ...current, ...definedIncoming } as CollectedRequestData);
+}
+
+export function normalizeCollectedData(data: CollectedRequestData): CollectedRequestData {
+  if (
+    typeof data.factoryNumber === 'string'
+    && data.factoryNumber.trim()
+    && data.factoryNumberStatus !== 'unavailable'
+  ) {
+    return { ...data, factoryNumberStatus: 'provided' };
+  }
+  return data;
+}
+
+export function containsVerificationQuestion(message: string): boolean {
+  const normalized = message
+    .replace(/[*_`]/g, '')
+    .toLocaleLowerCase('de-DE')
+    .replace(/\s+/g, ' ');
+
+  return /\b(?:ist (?:das(?: alles)?|alles)(?: so)? korrekt|ist das alles so richtig|stimmt das so|sind (?:alle |die )?(?:angaben|daten)(?: so)? korrekt|sind alle angaben richtig)\b/.test(normalized);
+}
+
+export function buildNextMissingQuestion(mode: Mode, data: CollectedRequestData): string {
+  if (!data.requestSituation && !data.ownsLift) {
+    return 'Geht es um einen neuen Lift, einen bereits bestellten Lift oder einen bereits eingebauten Lift?';
+  }
+
+  if (mode === 'anfrage') {
+    if (!data.firstName || !data.lastName) return 'Wie ist dein vollständiger Name?';
+    if (!hasContactMethod(data)) {
+      return 'Wie können wir dich am besten erreichen? Schick mir bitte entweder deine Telefonnummer oder deine E-Mail-Adresse.';
+    }
+    if (!data.message) return 'Beschreibe mir bitte kurz, worum es bei deiner Anfrage geht.';
+    if (!hasPriorContactStatus(data)) return 'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?';
+    if (!data.stairLocation) return 'Ist der Lift für drinnen oder draußen?';
+    if (!data.stairType) return 'Ist deine Treppe gerade oder kurvig?';
+    if (!data.liftType) return 'Brauchst du einen Sitzlift oder einen rollstuhlgeeigneten Lift?';
+    if (!data.buildingType) return 'Geht es um ein Einfamilienhaus oder ein Mehrfamilienhaus?';
+    if (!data.customerSegment) return 'Geht es um eine private Anfrage oder fragst du geschäftlich an?';
+    if (!data.street || !data.postalCode || !data.city) return 'An welcher vollständigen Adresse brauchst du den Lift?';
+    if (!data.availability) return 'Wann bist du am besten erreichbar: 08:00–12:00, 12:00–16:00 oder 16:00–20:00 Uhr?';
+  }
+
+  if (mode === 'service') {
+    if (!data.customerName) return 'Wie ist dein vollständiger Name?';
+    if (!hasContactMethod(data)) {
+      return 'Wie können wir dich am besten erreichen? Schick mir bitte entweder deine Telefonnummer oder deine E-Mail-Adresse.';
+    }
+    if (!data.issueDescription) return 'Beschreibe mir bitte kurz, worum es bei deinem Anliegen geht.';
+    if (!hasPriorContactStatus(data)) return 'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?';
+    if (data.requestSituation !== 'ordered_not_installed' && data.ownsLift !== 'yes') {
+      return 'Ist der Lift bereits eingebaut?';
+    }
+    if (data.requestSituation !== 'ordered_not_installed' && !['lippe', 'other'].includes(String(data.liftManufacturer))) {
+      return 'Ist der Lift von LIPPE Lift oder von einem anderen Hersteller?';
+    }
+    if (
+      data.liftManufacturer === 'lippe'
+      && data.factoryNumberStatus !== 'provided'
+      && data.factoryNumberStatus !== 'unavailable'
+    ) {
+      return 'Schreibe die Fabriknummer bitte vom Etikett ab. Falls du sie nicht findest, sag mir kurz Bescheid.';
+    }
+    if (!data.serviceRequestType || !data.category) {
+      return 'Geht es um Technik, Rechnung, Vertrag oder Ersatzteile und Montage?';
+    }
+  }
+
+  return 'Welche Angabe fehlt noch oder soll geändert werden?';
 }
 
 export function isExplicitVerificationConfirmation(message: string): boolean {
@@ -264,7 +334,7 @@ export function buildAuthoritativeStateContext(state: IntakeState): string {
       ? 'Das Anliegen, der Service-Typ und die Kategorie sind bereits eindeutig. Erkenne das konkrete Anliegen kurz an und frage NICHT erneut, ob es um Technik, Rechnung, Vertrag, Ersatzteile oder Montage geht.'
       : 'Wenn die aktuelle Nachricht oder eingefügter Text das Anliegen eindeutig beschreibt, übernimm Beschreibung, Service-Typ und Kategorie sofort und frage nicht allgemein nach der Art des Anliegens.',
     state.awaitingVerification
-      ? 'Die Zusammenfassung wurde bereits gezeigt. Der Nutzer kann jetzt bestätigen oder eine Korrektur nennen.'
-      : 'Die Daten wurden noch nicht durch den Nutzer bestätigt.',
+      ? 'Die Backend-Zusammenfassung wurde bereits gezeigt. Übernimm nur eine Korrektur; formuliere selbst keine weitere Kontroll-Zusammenfassung oder Bestätigungsfrage.'
+      : 'Die Daten wurden noch nicht durch den Nutzer bestätigt. Das Backend zeigt die einzige Kontroll-Zusammenfassung automatisch, sobald alles vollständig ist; formuliere selbst niemals eine Zusammenfassung mit Bestätigungsfrage.',
   ].join('\n');
 }

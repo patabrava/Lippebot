@@ -151,13 +151,14 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('ob der Lift von LIPPE Lift stammt');
   });
 
-  it('collects common base data first and promises a verification summary', () => {
+  it('collects common base data and reserves the single verification summary for the backend', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('gemeinsame Basis');
     expect(prompt).toContain('vollstaendiger Name');
     expect(prompt).toContain('genau eine Kontaktmoeglichkeit');
-    expect(prompt).toContain('zeige ich dir alle erfassten Angaben zur Kontrolle');
-    expect(prompt).toContain('korrekt an einen unserer Mitarbeiter weiterleiten');
+    expect(prompt).toContain('Kontroll-Zusammenfassung gehoert ausschliesslich dem Backend');
+    expect(prompt).toContain('frage niemals selbst "Ist das korrekt?"');
+    expect(prompt).toContain('genau einmal seine verbindliche Zusammenfassung');
     expect(prompt).toContain('Bereits erfasste Basisdaten sind verbindlich');
   });
 

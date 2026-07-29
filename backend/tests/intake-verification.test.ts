@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildAuthoritativeStateContext,
+  buildNextMissingQuestion,
   buildVerificationMessage,
+  containsVerificationQuestion,
   inferExplicitServiceContext,
   isExplicitVerificationConfirmation,
   isFurtherConcernConfirmation,
   isNoFurtherConcern,
   isRequestReady,
   mergeCollectedData,
+  normalizeCollectedData,
 } from '../src/request/intake-verification.js';
 
 describe('intake verification', () => {
@@ -126,6 +129,46 @@ describe('intake verification', () => {
     expect(context).toContain('"serviceRequestType":"repair"');
     expect(context).toContain('"category":"technik"');
     expect(context).toContain('frage NICHT erneut');
+  });
+
+  it('marks a supplied factory number as provided without relying on model state', () => {
+    expect(normalizeCollectedData({
+      factoryNumber: ' FBRK123456 ',
+      factoryNumberStatus: 'unknown',
+    })).toEqual({
+      factoryNumber: ' FBRK123456 ',
+      factoryNumberStatus: 'provided',
+    });
+  });
+
+  it('preserves an explicit unavailable correction even if an older number remains', () => {
+    expect(mergeCollectedData({
+      factoryNumber: 'FBRK123456',
+      factoryNumberStatus: 'provided',
+    }, {
+      factoryNumberStatus: 'unavailable',
+    })).toEqual({
+      factoryNumber: 'FBRK123456',
+      factoryNumberStatus: 'unavailable',
+    });
+  });
+
+  it.each([
+    'Ist das alles so korrekt?',
+    'Sind alle Angaben korrekt?',
+    '**Name:** Patrick Berg\n\nStimmt das so?',
+  ])('detects a model-generated verification question: %s', (message) => {
+    expect(containsVerificationQuestion(message)).toBe(true);
+  });
+
+  it('replaces a premature review with the genuinely missing service question', () => {
+    expect(buildNextMissingQuestion('service', {
+      requestSituation: 'installed_lift',
+      ownsLift: 'yes',
+      customerName: 'Patrick Berg',
+      email: 'patrick@example.de',
+      issueDescription: 'Lift ist kaputt.',
+    })).toBe('Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?');
   });
 
   it('recognizes a complete ordered-but-not-installed request without factory data', () => {
