@@ -363,8 +363,12 @@ const CSS = `
   border: 1.5px solid ${COLORS.lippeHellblau};
   border-radius: ${DIMENSIONS.inputRadius}px;
   padding: 8px 16px;
+  min-height: 36px;
+  max-height: 112px;
   font-size: 13px;
+  line-height: 1.4;
   font-family: 'Instrument Sans', sans-serif;
+  resize: vertical;
   outline: none;
   transition: border-color 0.2s;
 }

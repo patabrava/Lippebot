@@ -79,6 +79,30 @@ describe('SarahWidget inactivity handling', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('preserves multiline pasted issue context in the API request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response([
+      'data: {"type":"token","content":"Verstanden. Wie ist dein Name?"}',
+      'data: {"type":"done","mode":"service","collectedData":{}}',
+      '',
+    ].join('\n')));
+    vi.stubGlobal('fetch', fetchMock);
+
+    new SarahWidget('https://api.example.test', { delay: 999_999 } as never);
+    document.querySelector<HTMLButtonElement>('.sarah-bubble')!.click();
+    const input = document.querySelector<HTMLTextAreaElement>('.sarah-input')!;
+    const pasted = [
+      'Hi mein Sitzlift ist kaputt',
+      '**S**',
+      'Hattest du wegen dieses Anliegens schon Kontakt mit uns?',
+    ].join('\n');
+    input.value = pasted;
+    document.querySelector<HTMLButtonElement>('.sarah-send')!.click();
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(input.tagName).toBe('TEXTAREA');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).message).toBe(pasted);
+  });
+
   it('starts a new session when the fresh option is enabled', () => {
     localStorage.setItem('sarah-chat-history-v3-verified-flow', JSON.stringify({
       sessionId: 'old-session',

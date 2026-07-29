@@ -141,6 +141,51 @@ describe('POST /api/chat', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it('pins a clear pasted repair issue into authoritative context before asking for more data', async () => {
+    const streamChat = vi.fn(async function* (
+      _sessionId: string,
+      _message: string,
+      _history: unknown[],
+      authoritativeContext?: string,
+    ) {
+      expect(authoritativeContext).toContain('"serviceRequestType":"repair"');
+      expect(authoritativeContext).toContain('"category":"technik"');
+      expect(authoritativeContext).toContain('"issueDescription":"Hi mein Sitzlift ist kaputt"');
+      expect(authoritativeContext).toContain('frage NICHT erneut');
+      yield { type: 'token' as const, content: 'Verstanden, dein Sitzlift ist kaputt. Wie ist dein Name?' };
+    });
+    const chatRoute = createChatRoute({
+      gemini: { streamChat } as unknown as GeminiService,
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      requestOrchestrator: { execute: vi.fn() },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const pastedConversation = [
+      'Hi mein Sitzlift ist kaputt',
+      '**S**',
+      'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?',
+    ].join('\n');
+
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'pasted-repair-session',
+        requestId: 'pasted-repair-request',
+        message: pastedConversation,
+        history: [],
+      }),
+    })).text();
+
+    expect(streamChat).toHaveBeenCalledOnce();
+    expect(text).toContain('dein Sitzlift ist kaputt');
+    expect(text).not.toContain('Geht es bei dem Problem eher um die Technik');
+  });
+
   it('emits factory help then completes only after the request orchestrator succeeds', async () => {
     const supportData = {
       ownsLift: 'yes' as const, liftManufacturer: 'lippe' as const, factoryNumber: 'FN-42', factoryNumberStatus: 'provided' as const,

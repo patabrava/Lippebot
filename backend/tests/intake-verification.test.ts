@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildAuthoritativeStateContext,
   buildVerificationMessage,
+  inferExplicitServiceContext,
   isExplicitVerificationConfirmation,
   isFurtherConcernConfirmation,
   isNoFurtherConcern,
@@ -66,6 +68,64 @@ describe('intake verification', () => {
       lastName: 'Berg',
       email: 'new@example.de',
     });
+  });
+
+  it('extracts a clear repair issue from a pasted conversation', () => {
+    const pastedConversation = [
+      'Hi mein Sitzlift ist kaputt',
+      '**S**',
+      'Verstehe, das ist ärgerlich.',
+      'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?',
+    ].join('\n');
+
+    expect(inferExplicitServiceContext(pastedConversation)).toEqual({
+      mode: 'service',
+      collectedData: {
+        serviceRequestType: 'repair',
+        category: 'technik',
+        issueDescription: 'Hi mein Sitzlift ist kaputt',
+      },
+    });
+  });
+
+  it('does not infer a service category from an unclear generic message', () => {
+    expect(inferExplicitServiceContext('Ich brauche Hilfe und möchte etwas melden.')).toBeUndefined();
+  });
+
+  it('does not mistake a pasted category menu for the customer issue', () => {
+    expect(inferExplicitServiceContext(
+      'Geht es eher um Technik, Rechnung, Vertrag oder Ersatzteile und Montage?',
+    )).toBeUndefined();
+  });
+
+  it('respects an explicit negation before classifying an invoice issue', () => {
+    expect(inferExplicitServiceContext(
+      'Mein Lift ist nicht kaputt. Ich habe eine Frage zur Rechnung.',
+    )).toEqual({
+      mode: 'service',
+      collectedData: {
+        serviceRequestType: 'invoice_payment',
+        category: 'finance',
+        issueDescription: 'Ich habe eine Frage zur Rechnung.',
+      },
+    });
+  });
+
+  it('marks an already classified pasted issue as authoritative context', () => {
+    const context = buildAuthoritativeStateContext({
+      mode: 'service',
+      collectedData: {
+        serviceRequestType: 'repair',
+        category: 'technik',
+        issueDescription: 'Mein Sitzlift ist kaputt.',
+      },
+      awaitingVerification: false,
+      completed: false,
+    });
+
+    expect(context).toContain('"serviceRequestType":"repair"');
+    expect(context).toContain('"category":"technik"');
+    expect(context).toContain('frage NICHT erneut');
   });
 
   it('recognizes a complete ordered-but-not-installed request without factory data', () => {

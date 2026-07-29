@@ -11,6 +11,86 @@ export interface IntakeState {
   completed: boolean;
 }
 
+const repairIssuePattern = /\b(?:kaputt|defekt|reparatur|reparieren|beschädigt|beschaedigt)\b/i;
+const technicalIssuePattern = /\b(?:störung|stoerung|fehler(?:code)?|ausfall|piept|funktioniert\s+nicht|bleibt\s+stehen)\b/i;
+const maintenanceIssuePattern = /\b(?:wartung|warten\s+lassen|inspektion)\b/i;
+const invoiceIssuePattern = /\b(?:rechnung|zahlung|mahnung|zahlungsreferenz)\b/i;
+const salesIssuePattern = /\b(?:vertrag|vertragsbestätigung|vertragsbestaetigung|bestellung|auftragsstatus)\b/i;
+const installationIssuePattern = /\b(?:ersatzteil|montage|installation|einbau|gewährleistung|gewaehrleistung|garantie)\b/i;
+const liftContextPattern = /\b(?:sitzlift|treppenlift|plattformlift|lift)\b/i;
+const negatedRepairPattern = /\b(?:nicht|kein(?:e|en|er|es)?)\s+(?:kaputt|defekt|beschädigt|beschaedigt)\b/i;
+
+function issueCandidates(message: string): string[] {
+  return message
+    .split(/\r?\n|(?<=[.!?])\s+/)
+    .map((part) => part.replace(/^\s*(?:\*\*)?[A-ZÄÖÜ][^:]{0,20}(?::|\*\*)\s*/u, '').trim())
+    .filter(Boolean);
+}
+
+function isCategoryMenu(candidate: string): boolean {
+  const categoryMatches = [
+    repairIssuePattern,
+    technicalIssuePattern,
+    maintenanceIssuePattern,
+    invoiceIssuePattern,
+    salesIssuePattern,
+    installationIssuePattern,
+  ].filter((pattern) => pattern.test(candidate)).length;
+  return categoryMatches >= 3;
+}
+
+export function inferExplicitServiceContext(message: string): {
+  mode: 'service';
+  collectedData: CollectedRequestData;
+} | undefined {
+  const normalized = message.trim();
+  if (!normalized) return undefined;
+
+  for (const candidate of issueCandidates(normalized)) {
+    if (isCategoryMenu(candidate)) continue;
+
+    let serviceRequestType: SupportData['serviceRequestType'];
+    let category: SupportData['category'];
+
+    if (
+      repairIssuePattern.test(candidate)
+      && liftContextPattern.test(candidate)
+      && !negatedRepairPattern.test(candidate)
+    ) {
+      serviceRequestType = 'repair';
+      category = 'technik';
+    } else if (technicalIssuePattern.test(candidate) && liftContextPattern.test(candidate)) {
+      serviceRequestType = 'technical';
+      category = 'technik';
+    } else if (maintenanceIssuePattern.test(candidate) && liftContextPattern.test(candidate)) {
+      serviceRequestType = 'maintenance';
+      category = 'technik';
+    } else if (invoiceIssuePattern.test(candidate)) {
+      serviceRequestType = 'invoice_payment';
+      category = 'finance';
+    } else if (installationIssuePattern.test(candidate)) {
+      serviceRequestType = 'spare_parts_installation_warranty';
+      category = 'lossau';
+    } else if (salesIssuePattern.test(candidate)) {
+      serviceRequestType = 'sales_contract_order';
+      category = 'sales';
+    }
+
+    if (serviceRequestType && category) {
+      return {
+        mode: 'service',
+        collectedData: {
+          serviceRequestType,
+          category,
+          issueDescription: candidate.slice(0, 500),
+        },
+      };
+    }
+  }
+
+  return undefined;
+}
+
 export function mergeCollectedData(
   current: CollectedRequestData,
   incoming: Record<string, unknown>,
@@ -170,11 +250,19 @@ export function buildVerificationMessage(mode: Mode, data: CollectedRequestData)
 }
 
 export function buildAuthoritativeStateContext(state: IntakeState): string {
+  const hasExplicitIssue = !!(
+    state.collectedData.issueDescription
+    && state.collectedData.category
+    && state.collectedData.serviceRequestType
+  );
   return [
     'INTERNER, VERBINDLICHER ANFRAGESTATUS:',
     `Modus: ${state.mode}`,
     `Bereits erfasste Daten: ${JSON.stringify(state.collectedData)}`,
     'Bereits erfasste Werte nicht erneut abfragen. Neue oder korrigierte Angaben im report_state vollständig übernehmen.',
+    hasExplicitIssue
+      ? 'Das Anliegen, der Service-Typ und die Kategorie sind bereits eindeutig. Erkenne das konkrete Anliegen kurz an und frage NICHT erneut, ob es um Technik, Rechnung, Vertrag, Ersatzteile oder Montage geht.'
+      : 'Wenn die aktuelle Nachricht oder eingefügter Text das Anliegen eindeutig beschreibt, übernimm Beschreibung, Service-Typ und Kategorie sofort und frage nicht allgemein nach der Art des Anliegens.',
     state.awaitingVerification
       ? 'Die Zusammenfassung wurde bereits gezeigt. Der Nutzer kann jetzt bestätigen oder eine Korrektur nennen.'
       : 'Die Daten wurden noch nicht durch den Nutzer bestätigt.',

@@ -214,6 +214,13 @@ describe('buildSystemPrompt', () => {
     expect(prompt).not.toContain('lossau@lippelift.de');
   });
 
+  it('treats clear pasted issue context as already answered', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('längere eingefügte Texte oder Chatverläufe');
+    expect(prompt).toContain('"mein Sitzlift ist kaputt"');
+    expect(prompt).toContain('frage dann niemals allgemein');
+  });
+
   it('keeps CRM matching internal and limits support questions', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('Erwaehne niemals Pipedrive');

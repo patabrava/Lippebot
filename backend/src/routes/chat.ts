@@ -28,6 +28,7 @@ import {
   buildAuthoritativeStateContext,
   buildVerificationMessage,
   isExplicitVerificationConfirmation,
+  inferExplicitServiceContext,
   isFurtherConcernConfirmation,
   isLeadReady,
   isNoFurtherConcern,
@@ -334,6 +335,18 @@ export function createChatRoute(deps: ChatDeps): Hono {
       awaitingVerification: false,
       completed: false,
     };
+
+    const explicitServiceContext = inferExplicitServiceContext(message);
+    if (explicitServiceContext && intakeState.mode !== 'anfrage') {
+      intakeState = {
+        ...intakeState,
+        mode: intakeState.mode === 'undetermined' ? explicitServiceContext.mode : intakeState.mode,
+        collectedData: mergeCollectedData(
+          explicitServiceContext.collectedData,
+          intakeState.collectedData as Record<string, unknown>,
+        ),
+      };
+    }
 
     if (intakeState.completed) {
       if (isNoFurtherConcern(message)) {

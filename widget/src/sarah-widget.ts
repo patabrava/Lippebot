@@ -55,7 +55,7 @@ class SarahWidget {
   private greetingEl: HTMLDivElement | null = null;
   private panel: HTMLDivElement | null = null;
   private messagesEl: HTMLDivElement | null = null;
-  private inputEl: HTMLInputElement | null = null;
+  private inputEl: HTMLTextAreaElement | null = null;
   private sendBtn: HTMLButtonElement | null = null;
   private greetingDelay: number;
   private inactivityMs: number;
@@ -148,9 +148,10 @@ class SarahWidget {
     const inputArea = document.createElement('div');
     inputArea.className = 'sarah-input-area';
 
-    this.inputEl = document.createElement('input');
+    this.inputEl = document.createElement('textarea');
     this.inputEl.className = 'sarah-input';
     this.inputEl.placeholder = 'Nachricht eingeben...';
+    this.inputEl.rows = 1;
     this.inputEl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
