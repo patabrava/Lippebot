@@ -410,6 +410,52 @@ describe('createRequestOrchestrator', () => {
     });
   });
 
+  it('reuses an existing ordered-lift opportunity and writes the transcript there', async () => {
+    const deps = baseDependencies();
+    deps.pipedrive.resolveSupportPerson.mockResolvedValue({
+      matchState: 'unique',
+      personId: 31,
+      dealId: 41,
+      candidateCount: 1,
+    });
+    const { journal } = durableJournal();
+    const orchestrator = createRequestOrchestrator({
+      ...deps,
+      journal,
+      opportunityRecipient: 'sales@lippelift.de',
+    });
+
+    const result = await orchestrator.execute({
+      sessionId: 'ordered-lift',
+      requestId: 'ordered-lift-request',
+      mode: 'service',
+      transcript: 'Nutzer: Ich habe einen Lift bestellt.',
+      supportData: {
+        requestSituation: 'ordered_not_installed',
+        ownsLift: 'no',
+        priorContact: 'yes',
+        serviceRequestType: 'sales_contract_order',
+        customerName: 'patrick Berg',
+        email: 'patrick-berg@online.de',
+        category: 'sales',
+        issueDescription: 'Ich höre nichts mehr zum Status.',
+      },
+    });
+
+    expect(deps.pipedrive.createSupportCase).not.toHaveBeenCalled();
+    expect(deps.pipedrive.createChatTranscriptNote).toHaveBeenCalledWith(
+      'ordered-lift-request',
+      31,
+      41,
+      expect.stringContaining('Nutzer: Ich habe einen Lift bestellt.'),
+    );
+    expect(result).toMatchObject({
+      kind: 'service',
+      completed: true,
+      crm: { outcome: 'reused', personId: 31, dealId: 41, createdPerson: false },
+    });
+  });
+
   it('keeps maintenance read-only but creates a Serviceanfrage for another exact LIPPE case', async () => {
     const deps = baseDependencies();
     const { journal } = durableJournal();

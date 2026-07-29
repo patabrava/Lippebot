@@ -135,6 +135,16 @@ function nameTokensMatch(candidateName: string | undefined, submittedName: strin
   return submittedTokens.length >= 2 && submittedTokens.every((token) => candidateTokens.has(token));
 }
 
+function normalizeDisplayName(value?: string): string {
+  if (!value?.trim()) return '';
+  return value
+    .trim()
+    .replace(/\s+/g, ' ')
+    .split(' ')
+    .map((part) => part.charAt(0).toLocaleUpperCase('de-DE') + part.slice(1).toLocaleLowerCase('de-DE'))
+    .join(' ');
+}
+
 function capitalize(value?: string): string {
   if (!value || !value.trim()) return 'nicht ausgefüllt';
   return value.trim().charAt(0).toUpperCase() + value.trim().slice(1).toLowerCase();
@@ -308,6 +318,10 @@ export function createPipedriveService(
 
   function isOpenDeal(deal: DealSearchItem | PersonDeal): boolean {
     return !deal.status || deal.status === 'open';
+  }
+
+  function isOpenOrWonDeal(deal: DealSearchItem | PersonDeal): boolean {
+    return !deal.status || deal.status === 'open' || deal.status === 'won';
   }
 
   function isOpenSalesDeal(deal: DealSearchItem | PersonDeal): boolean {
@@ -636,6 +650,11 @@ export function createPipedriveService(
     return (deals ?? []).filter(isOpenDeal);
   }
 
+  async function getOpenOrWonPersonDeals(personId: number): Promise<PersonDeal[]> {
+    const deals = await apiGet<PersonDeal[]>(`/persons/${personId}/deals`);
+    return (deals ?? []).filter(isOpenOrWonDeal);
+  }
+
   async function getOpenSalesPersonDeals(personId: number): Promise<PersonDeal[]> {
     return (await getOpenPersonDeals(personId)).filter(isOpenSalesDeal);
   }
@@ -789,9 +808,22 @@ export function createPipedriveService(
 
     const uniquePersonId = uniqueCandidate(candidatePersonIds);
     if (uniquePersonId) {
-      const uniqueOpenDeal = uniqueCandidate(await getOpenSalesPersonDeals(uniquePersonId));
-      if (uniqueOpenDeal) {
-        return { matchState: 'unique', personId: uniquePersonId, dealId: uniqueOpenDeal.id, candidateCount: 1 };
+      const openDeals = data.serviceRequestType === 'sales_contract_order'
+        ? await getOpenOrWonPersonDeals(uniquePersonId)
+        : await getOpenSalesPersonDeals(uniquePersonId);
+      const submittedName = normalizeDisplayName(data.customerName);
+      const nameMatchedDeals = submittedName
+        ? openDeals.filter((deal) => nameTokensMatch(deal.title, submittedName))
+        : [];
+      const selectedDeal = newestDeal(
+        nameMatchedDeals.length > 0
+          ? nameMatchedDeals
+          : openDeals.length === 1
+            ? openDeals
+            : [],
+      );
+      if (selectedDeal) {
+        return { matchState: 'unique', personId: uniquePersonId, dealId: selectedDeal.id, candidateCount: 1 };
       }
     }
 
@@ -1192,7 +1224,11 @@ export function createPipedriveService(
   ): Promise<{ personId: number; dealId: number; createdPerson: boolean }> {
     if (!configured) throw new Error('Pipedrive not configured');
 
-    const customerName = data.customerName?.trim() || 'Unbekannter Kunde';
+    if (match.matchState === 'unique' && match.personId && match.dealId) {
+      return { personId: match.personId, dealId: match.dealId, createdPerson: false };
+    }
+
+    const customerName = normalizeDisplayName(data.customerName) || 'Unbekannter Kunde';
     const email = normalizeEmail(data.email);
     const phone = normalizePhoneNumber(data.phone);
     const phoneKey = normalizeGermanPhoneKey(data.phone);
@@ -1212,8 +1248,11 @@ export function createPipedriveService(
 
     const category = resolveSupportCategory(data);
     const reviewSuffix = match.matchState === 'unique' ? '' : ' – Zuordnung prüfen';
+    const dealTitle = data.serviceRequestType === 'sales_contract_order'
+      ? customerName
+      : `Sarah Support [${category}]: ${customerName}${reviewSuffix}`;
     const deal = await apiCall('/deals', {
-      title: `Sarah Support [${category}]: ${customerName}${reviewSuffix}`,
+      title: dealTitle,
       person_id: personId,
       pipeline_id: pipelineId,
       stage_id: stageId,

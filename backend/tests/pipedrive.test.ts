@@ -1394,6 +1394,75 @@ describe('createPipedriveService', () => {
     expect(mockFetch.mock.calls[1][0]).toContain('status=open');
   });
 
+  it('resolveSupportPerson selects the newest email-linked opportunity whose title flexibly matches the normalized customer name', async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { items: [] } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          data: { items: [{ item: { id: 501, name: 'Patrick Berg' } }] },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          data: [
+            {
+              id: 7001,
+              title: 'Patrick Berg',
+              status: 'open',
+              pipeline_id: 1,
+              add_time: '2026-05-01 10:00:00',
+              person_id: { value: 501 },
+            },
+            {
+              id: 7002,
+              title: 'Sarah Lead: Berg, Patrick',
+              status: 'won',
+              pipeline_id: 99,
+              add_time: '2026-06-01 10:00:00',
+              person_id: { value: 501 },
+            },
+            {
+              id: 7003,
+              title: 'Unrelated Customer',
+              status: 'open',
+              pipeline_id: 1,
+              add_time: '2026-07-01 10:00:00',
+              person_id: { value: 501 },
+            },
+            {
+              id: 7004,
+              title: 'Patrick Berg',
+              status: 'lost',
+              pipeline_id: 100,
+              add_time: '2026-07-02 10:00:00',
+              person_id: { value: 501 },
+            },
+          ],
+        }),
+      });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const service = createPipedriveService('test-key', 1, 2);
+    const result = await service.resolveSupportPerson({
+      customerName: '  patrick   Berg ',
+      email: ' PATRICK-BERG@ONLINE.DE ',
+      serviceRequestType: 'sales_contract_order',
+    });
+
+    expect(result).toEqual({ matchState: 'unique', personId: 501, dealId: 7002, candidateCount: 1 });
+    expect(mockFetch.mock.calls[0][0]).toContain('term=patrick+berg');
+    expect(mockFetch.mock.calls[1][0]).toContain('term=patrick-berg%40online.de');
+    expect(mockFetch.mock.calls[2][0]).toContain('/persons/501/deals');
+    expect(new URL(String(mockFetch.mock.calls[2][0])).searchParams.has('status')).toBe(false);
+  });
+
   it('resolveSupportPerson asks for disambiguation when name search has multiple people and no phone or email', async () => {
     const mockFetch = vi.fn().mockResolvedValueOnce({
       ok: true,

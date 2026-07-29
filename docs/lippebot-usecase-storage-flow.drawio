@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="30.0.4">
+  <diagram id="lippebot-usecases" name="Lippebot Use Cases">
+    <mxGraphModel dx="1422" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="2" value="Wie Sarah Anliegen weiterleitet und speichert" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=26;fontStyle=1;fontColor=#1F2937;" vertex="1" parent="1">
+          <mxGeometry x="390" y="20" width="820" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="3" value="User hat ein konkretes Anliegen" style="ellipse;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="650" y="85" width="300" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="4" value="Bot sammelt die nötigen Daten" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="650" y="190" width="300" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="5" value="User bestätigt die Angaben mit „Ja“" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="650" y="290" width="300" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="6" value="Welche Situation liegt vor?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=15;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="675" y="395" width="250" height="120" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="7" value="1. User hat keinen Lift" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F1FB;strokeColor=#4E79A7;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="570" width="350" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="8" value="Verkaufsanfrage" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="95" y="675" width="300" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="9" value="Pipedrive:&#xa;Verkaufschance neu anlegen oder bestehende nutzen" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#D5E8D4;strokeColor=#82B366;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="95" y="775" width="300" height="85" as="geometry"/>
+        </mxCell>
+        <mxCell id="10" value="E-Mail an Vertrieb" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;fontSize=15;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="120" y="900" width="250" height="65" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="11" value="2. Lift gekauft, aber noch nicht installiert" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="455" y="570" width="350" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="12" value="Auftrags- oder Installationsanliegen" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="480" y="675" width="300" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="13" value="Pipedrive:&#xa;keine Änderung" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#F8CECC;strokeColor=#B85450;fontSize=15;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="480" y="775" width="300" height="85" as="geometry"/>
+        </mxCell>
+        <mxCell id="14" value="E-Mail an Vertrieb" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;fontSize=15;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="505" y="900" width="250" height="65" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="15" value="3. User hat einen installierten Lift" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="840" y="570" width="700" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="16" value="Ist es ein LIPPE Lift?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1065" y="665" width="250" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="17" value="Nein: anderer Hersteller" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="840" y="815" width="240" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="18" value="Pipedrive: keine Änderung&#xa;E-Mail an zuständiges Team" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="840" y="910" width="240" height="75" as="geometry"/>
+        </mxCell>
+        <mxCell id="19" value="Ja: Fabriknummer prüfen" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="815" width="240" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="20" value="Genau ein Treffer?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1195" y="910" width="210" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="21" value="Nein: keine oder mehrere passende Anlagen" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="910" y="1045" width="260" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="22" value="Pipedrive: keine Änderung&#xa;E-Mail an zuständiges Team" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="910" y="1145" width="260" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="23" value="Wartung oder Reparatur?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1250" y="1045" width="210" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="24" value="Wartung oder Reparatur" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="1190" width="210" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="25" value="Pipedrive nur lesen, nichts ändern&#xa;E-Mail an Technik" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1165" y="1285" width="260" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="26" value="Anderes Serviceanliegen" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1450" y="1190" width="210" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="27" value="Pipedrive: neue Serviceanfrage&#xa;E-Mail an zuständiges Team" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1425" y="1285" width="260" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="28" value="Im Browser: Chatverlauf wird lokal gespeichert" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#666666;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="70" y="1405" width="690" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="29" value="In Supabase (wenn aktiv): Arbeitsschritte werden gespeichert, damit nichts doppelt angelegt oder gesendet wird" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#666666;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="860" y="1405" width="825" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="30" value="Zuständiges Team: Technik, Finanzen, Vertrieb oder Lossau" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=13;fontColor=#4B5563;" vertex="1" parent="1">
+          <mxGeometry x="910" y="1490" width="730" height="35" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="31" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="32" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="4" target="5"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="33" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="34" value="Kein Lift" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="6" target="7"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="245" y="535"/></Array></mxGeometry></mxCell>
+        <mxCell id="35" value="Gekauft, nicht installiert" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="6" target="11"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="630" y="535"/></Array></mxGeometry></mxCell>
+        <mxCell id="36" value="Lift ist installiert" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="6" target="15"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1190" y="535"/></Array></mxGeometry></mxCell>
+        <mxCell id="37" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="7" target="8"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="38" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="8" target="9"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="39" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="9" target="10"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="40" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="11" target="12"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="41" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="12" target="13"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="42" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="13" target="14"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="43" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="15" target="16"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="44" value="Nein" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="16" target="17"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="45" value="Ja" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="16" target="19"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="46" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="17" target="18"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="47" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="19" target="20"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="48" value="Nein" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="20" target="21"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1245" y="1025"/><mxPoint x="1040" y="1025"/></Array></mxGeometry></mxCell>
+        <mxCell id="49" value="Ja" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="20" target="23"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="50" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="21" target="22"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="51" value="Ja" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="23" target="24"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="52" value="Nein" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="23" target="26"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="53" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="24" target="25"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="54" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="26" target="27"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -318,6 +318,17 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
 
         if (resolvedCase.matchState !== 'unique') {
           const match = await pipedrive.resolveSupportPerson(supportData);
+          if (match.matchState === 'unique' && match.personId && match.dealId) {
+            return {
+              sourceCase: resolvedCase,
+              salesOpportunity: {
+                outcome: 'reused' as const,
+                personId: match.personId,
+                dealId: match.dealId,
+                createdPerson: false,
+              },
+            };
+          }
           const opportunity = await pipedrive.createSupportCase(supportData, match);
           return {
             sourceCase: resolvedCase,

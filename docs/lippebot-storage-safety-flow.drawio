@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="30.0.4">
+  <diagram name="Speicherung und Sicherheit">
+    <mxGraphModel dx="1980" dy="1050" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1980" pageHeight="1050" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="2" value="Wie Sarah speichert und doppelte Aktionen verhindert" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=28;fontStyle=1;fontColor=#1F2937;" vertex="1" parent="1"><mxGeometry x="270" y="20" width="1260" height="50" as="geometry"/></mxCell>
+        <mxCell id="3" value="Browser" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F1FB;strokeColor=#4E79A7;fontSize=17;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="60" y="150" width="280" height="60" as="geometry"/></mxCell>
+        <mxCell id="4" value="Chatverlauf, Session-ID, aktive Request-ID und Abschlussstatus lokal speichern" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=14;" vertex="1" parent="1"><mxGeometry x="50" y="250" width="300" height="110" as="geometry"/></mxCell>
+        <mxCell id="5" value="Neue bestätigte Anfrage" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontSize=17;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="430" y="150" width="300" height="60" as="geometry"/></mxCell>
+        <mxCell id="6" value="Jedes Anliegen erhält eine eigene Request-ID" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=14;" vertex="1" parent="1"><mxGeometry x="440" y="260" width="280" height="90" as="geometry"/></mxCell>
+        <mxCell id="7" value="Backend-Checkpoints" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F1FB;strokeColor=#4E79A7;fontSize=17;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="820" y="150" width="330" height="60" as="geometry"/></mxCell>
+        <mxCell id="8" value="Supabase, wenn Tracking aktiv ist:&#xa;erledigte Schritte pro Request-ID speichern" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#D5E8D4;strokeColor=#82B366;fontSize=14;" vertex="1" parent="1"><mxGeometry x="830" y="250" width="310" height="110" as="geometry"/></mxCell>
+        <mxCell id="9" value="CRM | Notiz | einzelne E-Mail-Empfänger | abgeschlossen" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=14;" vertex="1" parent="1"><mxGeometry x="820" y="410" width="330" height="85" as="geometry"/></mxCell>
+        <mxCell id="10" value="Schritt fehlgeschlagen?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=14;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="1270" y="400" width="230" height="105" as="geometry"/></mxCell>
+        <mxCell id="11" value="Ja: Beim nächsten Versuch nur den fehlenden Schritt wiederholen.&#xa;Keine doppelten Deals, Notizen oder E-Mails." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;fontSize=13;" vertex="1" parent="1"><mxGeometry x="1220" y="570" width="330" height="120" as="geometry"/></mxCell>
+        <mxCell id="12" value="Nein: Anfrage abschließen und Erfolg anzeigen" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontSize=13;" vertex="1" parent="1"><mxGeometry x="1620" y="410" width="300" height="90" as="geometry"/></mxCell>
+        <mxCell id="13" value="Optionaler Pipedrive-Bypass" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#666666;fontSize=13;" vertex="1" parent="1"><mxGeometry x="430" y="800" width="430" height="65" as="geometry"/></mxCell>
+        <mxCell id="14" value="Wenn dieser Startmodus aktiv ist:&#xa;keine Pipedrive-Änderung; nur E-Mail an die konfigurierten internen Empfänger." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontSize=13;" vertex="1" parent="1"><mxGeometry x="940" y="780" width="500" height="105" as="geometry"/></mxCell>
+        <mxCell id="15" value="Notfall" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontSize=13;" vertex="1" parent="1"><mxGeometry x="60" y="800" width="280" height="65" as="geometry"/></mxCell>
+        <mxCell id="16" value="Soforthinweis zuerst. Keine automatische CRM-Aktion vor der Warnung." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#666666;fontSize=13;" vertex="1" parent="1"><mxGeometry x="50" y="910" width="300" height="90" as="geometry"/></mxCell>
+        <mxCell id="100" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="4" target="6"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="101" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="6" target="8"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="102" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="8" target="9"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="103" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="9" target="10"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="104" value="Ja" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="10" target="11"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="105" value="Nein" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="10" target="12"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="106" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="13" target="14"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="107" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="15" target="16"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
