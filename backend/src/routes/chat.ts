@@ -30,6 +30,7 @@ import {
   buildVerificationMessage,
   ensureNextMissingQuestion,
   isExplicitVerificationConfirmation,
+  inferExplicitLeadContext,
   inferExplicitServiceContext,
   isFurtherConcernConfirmation,
   isLeadReady,
@@ -349,6 +350,22 @@ export function createChatRoute(deps: ChatDeps): Hono {
         collectedData: normalizeCollectedData(mergeCollectedData(
           explicitServiceContext.collectedData,
           intakeState.collectedData as Record<string, unknown>,
+        )),
+      };
+    }
+
+    const explicitLeadContext = explicitServiceContext
+      ? undefined
+      : inferExplicitLeadContext(message);
+    if (explicitLeadContext
+      && intakeState.mode !== 'service'
+      && !['ordered_not_installed', 'installed_lift'].includes(String(intakeState.collectedData.requestSituation))) {
+      intakeState = {
+        ...intakeState,
+        mode: explicitLeadContext.mode,
+        collectedData: normalizeCollectedData(mergeCollectedData(
+          intakeState.collectedData,
+          explicitLeadContext.collectedData as Record<string, unknown>,
         )),
       };
     }

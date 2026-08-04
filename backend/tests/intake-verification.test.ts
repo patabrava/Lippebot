@@ -5,6 +5,7 @@ import {
   buildVerificationMessage,
   containsVerificationQuestion,
   ensureNextMissingQuestion,
+  inferExplicitLeadContext,
   inferExplicitServiceContext,
   isExplicitVerificationConfirmation,
   isFurtherConcernConfirmation,
@@ -97,6 +98,28 @@ describe('intake verification', () => {
     expect(inferExplicitServiceContext('Ich brauche Hilfe und möchte etwas melden.')).toBeUndefined();
   });
 
+  it('retains a clearly stated new-lift requirement as authoritative lead context', () => {
+    expect(inferExplicitLeadContext(
+      'Wir benötigen einen Senkrechtaufzug für den Außenbereich. Höhe des Podestes ist ca. 118 cm.',
+    )).toEqual({
+      mode: 'anfrage',
+      collectedData: {
+        requestSituation: 'new_lift',
+        ownsLift: 'no',
+        message: 'Wir benötigen einen Senkrechtaufzug für den Außenbereich. Höhe des Podestes ist ca. 118 cm.',
+      },
+    });
+  });
+
+  it.each([
+    'Welcher Lift passt zu mir?',
+    'Ich benötige Hilfe mit meinem vorhandenen Lift.',
+    'Wir haben bereits einen Lift bestellt.',
+    'Mein Sitzlift ist kaputt.',
+  ])('does not turn advice or existing-lift context into a new opportunity: %s', (message) => {
+    expect(inferExplicitLeadContext(message)).toBeUndefined();
+  });
+
   it('does not mistake a pasted category menu for the customer issue', () => {
     expect(inferExplicitServiceContext(
       'Geht es eher um Technik, Rechnung, Vertrag oder Ersatzteile und Montage?',
@@ -171,6 +194,15 @@ describe('intake verification', () => {
       email: 'patrick@example.de',
       issueDescription: 'Lift ist kaputt.',
     })).toBe('Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?');
+  });
+
+  it('asks for the request situation while lift ownership is still unknown', () => {
+    expect(buildNextMissingQuestion('anfrage', {
+      ownsLift: 'unknown',
+      firstName: 'Ivonne',
+      lastName: 'Sprott',
+      phone: '01604180074',
+    })).toBe('Geht es um einen neuen Lift, einen bereits bestellten Lift oder einen bereits eingebauten Lift?');
   });
 
   it('adds the required next question when the model only acknowledges a field', () => {

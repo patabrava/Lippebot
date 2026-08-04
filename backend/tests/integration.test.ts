@@ -186,6 +186,73 @@ describe('POST /api/chat', () => {
     expect(text).not.toContain('Geht es bei dem Problem eher um die Technik');
   });
 
+  it('retains an explicit new-lift requirement when Gemini omits it from later state reports', async () => {
+    const streamChat = vi.fn(async function* (
+      sessionId: string,
+      message: string,
+      _history: unknown[],
+      authoritativeContext?: string,
+    ) {
+      if (message.startsWith('Wir benötigen')) {
+        expect(authoritativeContext).toContain('"requestSituation":"new_lift"');
+        expect(authoritativeContext).toContain('"ownsLift":"no"');
+        expect(authoritativeContext).toContain('"message":"Wir benötigen einen Senkrechtaufzug für den Außenbereich. Höhe des Podestes ist ca. 118 cm."');
+        yield { type: 'token' as const, content: 'Alles klar. Wie ist dein vollständiger Name?' };
+        return;
+      }
+
+      expect(authoritativeContext).toContain('"message":"Wir benötigen einen Senkrechtaufzug für den Außenbereich. Höhe des Podestes ist ca. 118 cm."');
+      yield {
+        type: 'state' as const,
+        state: {
+          sessionId,
+          mode: 'anfrage' as const,
+          collectedData: {
+            priorContact: 'no' as const,
+            customerSegment: 'privatperson' as const,
+            stairLocation: 'aussen',
+            buildingType: 'einfamilienhaus',
+            liftType: 'rollstuhlgeeignet',
+            firstName: 'Ivonne',
+            lastName: 'Sprott',
+            phone: '01604180074',
+            street: 'Hagenstraße 51c',
+            postalCode: '39356',
+            city: 'Hörsingen',
+            availability: '08:00 - 12:00',
+          },
+        },
+      };
+    });
+    const chatRoute = createChatRoute({
+      gemini: { streamChat } as unknown as GeminiService,
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      requestOrchestrator: { execute: vi.fn() },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const request = (message: string) => testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'remember-lead-session',
+        requestId: 'remember-lead-request',
+        message,
+        history: [],
+      }),
+    });
+
+    await request('Wir benötigen einen Senkrechtaufzug für den Außenbereich. Höhe des Podestes ist ca. 118 cm.');
+    const review = await (await request('Am besten von 8-12')).text();
+
+    expect(review).toContain('• Anfrage: Wir benötigen einen Senkrechtaufzug für den Außenbereich. Höhe des Podestes ist ca. 118 cm.');
+    expect(review).toContain('Sind alle Angaben korrekt?');
+    expect(review).not.toContain('Beschreibe mir bitte kurz, worum es bei deiner Anfrage geht.');
+  });
+
   it('shows exactly one review when Gemini omits the status for a provided factory number', async () => {
     const prematureReview = [
       '**Name:** Patrick Berg **E-Mail:** patrick-berg@online.de',

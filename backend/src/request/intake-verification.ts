@@ -20,6 +20,8 @@ const salesIssuePattern = /\b(?:vertrag|vertragsbestätigung|vertragsbestaetigun
 const installationIssuePattern = /\b(?:ersatzteil|montage|installation|einbau|gewährleistung|gewaehrleistung|garantie)\b/i;
 const liftContextPattern = /\b(?:sitzlift|treppenlift|plattformlift|lift)\b/i;
 const negatedRepairPattern = /\b(?:nicht|kein(?:e|en|er|es)?)\s+(?:kaputt|defekt|beschädigt|beschaedigt)\b/i;
+const explicitNewLiftDemandPattern = /\b(?:benötig\w*|benoetig\w*|brauch\w*|such\w*|möcht\w*|moecht\w*)\b[^.!?\n]{0,100}\b(?:einen|eine|ein)\s+(?:(?:neuen?|passenden?|geeigneten?|rollstuhlgeeigneten?)\s+)*(?:senkrechtaufzug|aufzug|sitzlift|treppenlift|plattformlift|hublift|lift)\b/i;
+const explicitExistingLiftPattern = /\b(?:bereits|schon)\b[^.!?\n]{0,100}\b(?:bestellt|gekauft|eingebaut|montiert)\b|\b(?:vorhanden\w*|eingebaut\w*|bestellt\w*)\s+(?:aufzug|sitzlift|treppenlift|plattformlift|hublift|lift)\b/i;
 
 function issueCandidates(message: string): string[] {
   return message
@@ -38,6 +40,29 @@ function isCategoryMenu(candidate: string): boolean {
     installationIssuePattern,
   ].filter((pattern) => pattern.test(candidate)).length;
   return categoryMatches >= 3;
+}
+
+export function inferExplicitLeadContext(message: string): {
+  mode: 'anfrage';
+  collectedData: CollectedRequestData;
+} | undefined {
+  const normalized = message.trim();
+  if (!normalized || explicitExistingLiftPattern.test(normalized)) return undefined;
+
+  const candidate = issueCandidates(normalized).find((part) => explicitNewLiftDemandPattern.test(part));
+  if (!candidate) return undefined;
+
+  const concern = normalized.includes('\n')
+    ? candidate
+    : normalized.replace(/\s+/g, ' ');
+  return {
+    mode: 'anfrage',
+    collectedData: {
+      requestSituation: 'new_lift',
+      ownsLift: 'no',
+      message: concern.slice(0, 500),
+    },
+  };
 }
 
 export function inferExplicitServiceContext(message: string): {
@@ -155,7 +180,7 @@ export function buildNextMissingQuestion(
   data: CollectedRequestData,
   options: { priorContactReferenceAsked?: boolean } = {},
 ): string {
-  if (!data.requestSituation && !data.ownsLift) {
+  if ((!data.requestSituation && !data.ownsLift) || data.ownsLift === 'unknown') {
     return 'Geht es um einen neuen Lift, einen bereits bestellten Lift oder einen bereits eingebauten Lift?';
   }
 
