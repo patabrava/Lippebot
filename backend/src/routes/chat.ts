@@ -32,6 +32,7 @@ import {
   isExplicitVerificationConfirmation,
   inferExplicitLeadContext,
   inferExplicitServiceContext,
+  inferLeadStairType,
   isFurtherConcernConfirmation,
   isLeadReady,
   isNoFurtherConcern,
@@ -367,6 +368,16 @@ export function createChatRoute(deps: ChatDeps): Hono {
           intakeState.collectedData,
           explicitLeadContext.collectedData as Record<string, unknown>,
         )),
+      };
+    }
+
+    const inferredStairType = inferLeadStairType(message);
+    if (inferredStairType && intakeState.mode === 'anfrage') {
+      intakeState = {
+        ...intakeState,
+        collectedData: mergeCollectedData(intakeState.collectedData, {
+          stairType: inferredStairType,
+        }),
       };
     }
 

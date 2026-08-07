@@ -67,6 +67,11 @@ const requestSituationProperty = {
   enum: ['new_lift', 'ordered_not_installed', 'installed_lift'],
 };
 
+const stairTypeProperty = {
+  type: FunctionDeclarationSchemaType.STRING,
+  enum: ['gerade', 'kurvig', 'keine_treppe'],
+};
+
 const reportStateFn: FunctionDeclaration = {
   name: 'report_state',
   description: 'Report the current conversation mode and any collected data after every response.',
@@ -92,7 +97,7 @@ const reportStateFn: FunctionDeclaration = {
           priorContactReference: { type: FunctionDeclarationSchemaType.STRING },
           customerSegment: { type: FunctionDeclarationSchemaType.STRING },
           stairLocation: { type: FunctionDeclarationSchemaType.STRING },
-          stairType: { type: FunctionDeclarationSchemaType.STRING },
+          stairType: stairTypeProperty,
           buildingType: { type: FunctionDeclarationSchemaType.STRING },
           liftType: { type: FunctionDeclarationSchemaType.STRING },
           firstName: { type: FunctionDeclarationSchemaType.STRING },
@@ -143,7 +148,7 @@ const submitLeadFn: FunctionDeclaration = {
       priorContactReference: { type: FunctionDeclarationSchemaType.STRING },
       customerSegment: { type: FunctionDeclarationSchemaType.STRING },
       stairLocation: { type: FunctionDeclarationSchemaType.STRING },
-      stairType: { type: FunctionDeclarationSchemaType.STRING },
+      stairType: stairTypeProperty,
       buildingType: { type: FunctionDeclarationSchemaType.STRING },
       liftType: { type: FunctionDeclarationSchemaType.STRING },
       firstName: { type: FunctionDeclarationSchemaType.STRING },

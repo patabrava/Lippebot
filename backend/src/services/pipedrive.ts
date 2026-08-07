@@ -54,7 +54,7 @@ const buildingTypeMappings: Record<NonNullable<LeadData['buildingType']>, number
   mehrfamilienhaus: 123,
 };
 
-const stairTypeMappings: Record<NonNullable<LeadData['stairType']>, number> = {
+const stairTypeMappings: Partial<Record<NonNullable<LeadData['stairType']>, number>> = {
   kurvig: 120,
   gerade: 121,
 };

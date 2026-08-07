@@ -68,7 +68,7 @@ export interface LeadData {
   priorContactReference?: string;
   customerSegment?: 'privatperson' | 'firma';
   stairLocation?: 'innen' | 'aussen';
-  stairType?: 'gerade' | 'kurvig';
+  stairType?: 'gerade' | 'kurvig' | 'keine_treppe';
   buildingType?: 'einfamilienhaus' | 'mehrfamilienhaus';
   liftType?: 'sitzlift' | 'rollstuhlgeeignet';
   firstName?: string;

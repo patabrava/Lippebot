@@ -197,6 +197,7 @@ describe('POST /api/chat', () => {
         expect(authoritativeContext).toContain('"requestSituation":"new_lift"');
         expect(authoritativeContext).toContain('"ownsLift":"no"');
         expect(authoritativeContext).toContain('"message":"Wir benötigen einen Senkrechtaufzug für den Außenbereich. Höhe des Podestes ist ca. 118 cm."');
+        expect(authoritativeContext).toContain('"stairType":"keine_treppe"');
         yield { type: 'token' as const, content: 'Alles klar. Wie ist dein vollständiger Name?' };
         return;
       }
@@ -249,8 +250,75 @@ describe('POST /api/chat', () => {
     const review = await (await request('Am besten von 8-12')).text();
 
     expect(review).toContain('• Anfrage: Wir benötigen einen Senkrechtaufzug für den Außenbereich. Höhe des Podestes ist ca. 118 cm.');
+    expect(review).toContain('• Treppenverlauf: Keine Treppe');
     expect(review).toContain('Sind alle Angaben korrekt?');
+    expect(review).not.toContain('Ist deine Treppe gerade oder kurvig?');
     expect(review).not.toContain('Beschreibe mir bitte kurz, worum es bei deiner Anfrage geht.');
+  });
+
+  it('does not repeat the staircase geometry question after the customer says there is no staircase', async () => {
+    const streamChat = vi.fn(async function* (
+      sessionId: string,
+      message: string,
+      _history: unknown[],
+      authoritativeContext?: string,
+    ) {
+      if (message === 'Neue Hublift-Anfrage') {
+        yield {
+          type: 'state' as const,
+          state: {
+            sessionId,
+            mode: 'anfrage' as const,
+            collectedData: {
+              requestSituation: 'new_lift' as const,
+              ownsLift: 'no' as const,
+              firstName: 'Petra',
+              lastName: 'Balzer',
+              email: 'petra@example.de',
+              message: 'Lift vom Balkon in den Garten',
+              priorContact: 'no' as const,
+              stairLocation: 'aussen' as const,
+            },
+          },
+        };
+        yield { type: 'token' as const, content: 'Ist deine Treppe gerade oder kurvig?' };
+        return;
+      }
+
+      expect(authoritativeContext).toContain('"stairType":"keine_treppe"');
+      yield { type: 'token' as const, content: 'Verstanden, es gibt keine Treppe.' };
+      yield {
+        type: 'state' as const,
+        state: { sessionId, mode: 'anfrage' as const, collectedData: {} },
+      };
+    });
+    const chatRoute = createChatRoute({
+      gemini: { streamChat } as unknown as GeminiService,
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      requestOrchestrator: { execute: vi.fn() },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const request = (message: string) => testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'no-staircase-session',
+        requestId: 'no-staircase-request',
+        message,
+        history: [],
+      }),
+    });
+
+    await (await request('Neue Hublift-Anfrage')).text();
+    const response = await (await request('Es ist keine Treppe vorhanden')).text();
+
+    expect(response).toContain('Brauchst du einen Sitzlift oder einen rollstuhlgeeigneten Lift?');
+    expect(response).not.toContain('Ist deine Treppe gerade oder kurvig?');
+    expect(response).toContain('"stairType":"keine_treppe"');
   });
 
   it('shows exactly one review when Gemini omits the status for a provided factory number', async () => {

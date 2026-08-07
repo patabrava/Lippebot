@@ -179,6 +179,16 @@ describe('createGeminiService', () => {
       'ordered_not_installed',
       'installed_lift',
     ]);
+    expect(stateDeclaration.parameters.properties.collectedData.properties.stairType.enum).toEqual([
+      'gerade',
+      'kurvig',
+      'keine_treppe',
+    ]);
+    expect(leadDeclaration.parameters.properties.stairType.enum).toEqual([
+      'gerade',
+      'kurvig',
+      'keine_treppe',
+    ]);
     expect(leadDeclaration.parameters.properties.requestSituation).toBeDefined();
     expect(serviceDeclaration.parameters.properties.requestSituation).toBeDefined();
     expect(stateDeclaration.parameters.properties.collectedData.properties.priorContact.enum).toEqual(['yes', 'no', 'unknown']);

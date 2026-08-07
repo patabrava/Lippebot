@@ -24,6 +24,10 @@ const stairLocationAliases: Record<string, NonNullable<LeadData['stairLocation']
 const stairTypeAliases: Record<string, NonNullable<LeadData['stairType']>> = {
   kurvig: 'kurvig',
   gerade: 'gerade',
+  keine_treppe: 'keine_treppe',
+  keinetreppe: 'keine_treppe',
+  ohnetreppe: 'keine_treppe',
+  nichtzutreffend: 'keine_treppe',
 };
 
 const buildingTypeAliases: Record<string, NonNullable<LeadData['buildingType']>> = {
@@ -81,6 +85,7 @@ export function stairTypeLabel(value: unknown): string | undefined {
   const normalized = normalizeStairType(value);
   if (normalized === 'gerade') return 'Gerade';
   if (normalized === 'kurvig') return 'Kurvig';
+  if (normalized === 'keine_treppe') return 'Keine Treppe';
   return undefined;
 }
 

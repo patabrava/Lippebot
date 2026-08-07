@@ -7,6 +7,7 @@ import {
   ensureNextMissingQuestion,
   inferExplicitLeadContext,
   inferExplicitServiceContext,
+  inferLeadStairType,
   isExplicitVerificationConfirmation,
   isFurtherConcernConfirmation,
   isNoFurtherConcern,
@@ -107,8 +108,27 @@ describe('intake verification', () => {
         requestSituation: 'new_lift',
         ownsLift: 'no',
         message: 'Wir benötigen einen Senkrechtaufzug für den Außenbereich. Höhe des Podestes ist ca. 118 cm.',
+        stairType: 'keine_treppe',
       },
     });
+  });
+
+  it.each([
+    'Es ist keine Treppe vorhanden',
+    'Keine klassische Treppe',
+    'Der Lift führt ohne Treppe vom Balkon in den Garten',
+    'Wir benötigen einen Hublift für draußen',
+    'Gesucht wird ein Vertikallift',
+  ])('recognizes that stair geometry does not apply: %s', (message) => {
+    expect(inferLeadStairType(message)).toBe('keine_treppe');
+  });
+
+  it.each([
+    'Die Treppe ist gerade',
+    'Wir haben eine kurvige Außentreppe',
+    'Es geht um einen normalen Sitzlift',
+  ])('does not suppress stair geometry for an ordinary staircase: %s', (message) => {
+    expect(inferLeadStairType(message)).toBeUndefined();
   });
 
   it.each([
@@ -205,6 +225,37 @@ describe('intake verification', () => {
     })).toBe('Geht es um einen neuen Lift, einen bereits bestellten Lift oder einen bereits eingebauten Lift?');
   });
 
+  it('skips the straight-or-curved question when there is no staircase', () => {
+    expect(buildNextMissingQuestion('anfrage', {
+      requestSituation: 'new_lift',
+      ownsLift: 'no',
+      firstName: 'Petra',
+      lastName: 'Balzer',
+      email: 'petra@example.de',
+      message: 'Hublift vom Balkon in den Garten',
+      priorContact: 'no',
+      stairLocation: 'aussen',
+      stairType: 'keine_treppe',
+    })).toBe('Brauchst du einen Sitzlift oder einen rollstuhlgeeigneten Lift?');
+  });
+
+  it.each(['gerade', 'kurvig'] as const)(
+    'keeps ordinary %s staircase enquiries on the normal path',
+    (stairType) => {
+      expect(buildNextMissingQuestion('anfrage', {
+        requestSituation: 'new_lift',
+        ownsLift: 'no',
+        firstName: 'Petra',
+        lastName: 'Balzer',
+        email: 'petra@example.de',
+        message: 'Treppenlift benötigt',
+        priorContact: 'no',
+        stairLocation: 'aussen',
+        stairType,
+      })).toBe('Brauchst du einen Sitzlift oder einen rollstuhlgeeigneten Lift?');
+    },
+  );
+
   it('adds the required next question when the model only acknowledges a field', () => {
     expect(ensureNextMissingQuestion(
       'Verstanden, die E-Mail-Adresse ist patrick-berg@online.de.',
@@ -300,5 +351,15 @@ describe('intake verification', () => {
 
     expect(message).toContain('• E-Mail: qa@example.de');
     expect(message).toContain('• Telefon: +49 151 00000000');
+  });
+
+  it('shows a no-staircase decision in the verification summary', () => {
+    const message = buildVerificationMessage('anfrage', {
+      firstName: 'Petra',
+      lastName: 'Balzer',
+      stairType: 'keine_treppe',
+    });
+
+    expect(message).toContain('• Treppenverlauf: Keine Treppe');
   });
 });

@@ -1,6 +1,7 @@
 import type { LeadData, Mode, SupportData } from '../types/index.js';
 import { hasContactMethod } from '../contact/contact-method.js';
 import { hasPriorContactStatus } from '../contact/prior-contact.js';
+import { stairTypeLabel } from '../lead/lead-options.js';
 
 export type CollectedRequestData = Partial<LeadData & SupportData>;
 
@@ -22,6 +23,15 @@ const liftContextPattern = /\b(?:sitzlift|treppenlift|plattformlift|lift)\b/i;
 const negatedRepairPattern = /\b(?:nicht|kein(?:e|en|er|es)?)\s+(?:kaputt|defekt|beschädigt|beschaedigt)\b/i;
 const explicitNewLiftDemandPattern = /\b(?:benötig\w*|benoetig\w*|brauch\w*|such\w*|möcht\w*|moecht\w*)\b[^.!?\n]{0,100}\b(?:einen|eine|ein)\s+(?:(?:neuen?|passenden?|geeigneten?|rollstuhlgeeigneten?)\s+)*(?:senkrechtaufzug|aufzug|sitzlift|treppenlift|plattformlift|hublift|lift)\b/i;
 const explicitExistingLiftPattern = /\b(?:bereits|schon)\b[^.!?\n]{0,100}\b(?:bestellt|gekauft|eingebaut|montiert)\b|\b(?:vorhanden\w*|eingebaut\w*|bestellt\w*)\s+(?:aufzug|sitzlift|treppenlift|plattformlift|hublift|lift)\b/i;
+const noStaircasePattern = /\b(?:keine?\s+(?:klassische\s+)?treppe(?:\s+vorhanden)?|ohne\s+(?:klassische\s+)?treppe|treppe\s+(?:ist\s+)?nicht\s+vorhanden)\b/i;
+const verticalLiftPattern = /\b(?:hublift|senkrechtlift|senkrechtaufzug|vertikallift)\b/i;
+
+export function inferLeadStairType(message: string): LeadData['stairType'] | undefined {
+  if (noStaircasePattern.test(message) || verticalLiftPattern.test(message)) {
+    return 'keine_treppe';
+  }
+  return undefined;
+}
 
 function issueCandidates(message: string): string[] {
   return message
@@ -55,12 +65,14 @@ export function inferExplicitLeadContext(message: string): {
   const concern = normalized.includes('\n')
     ? candidate
     : normalized.replace(/\s+/g, ' ');
+  const stairType = inferLeadStairType(concern);
   return {
     mode: 'anfrage',
     collectedData: {
       requestSituation: 'new_lift',
       ownsLift: 'no',
       message: concern.slice(0, 500),
+      ...(stairType ? { stairType } : {}),
     },
   };
 }
@@ -340,7 +352,7 @@ export function buildVerificationMessage(mode: Mode, data: CollectedRequestData)
     addLine(lines, 'Anfrage', data.message);
     addLine(lines, 'Kundengruppe', data.customerSegment === 'firma' ? 'Geschäftlich' : 'Privat');
     addLine(lines, 'Treppenstandort', data.stairLocation);
-    addLine(lines, 'Treppenverlauf', data.stairType);
+    addLine(lines, 'Treppenverlauf', stairTypeLabel(data.stairType));
     addLine(lines, 'Lifttyp', data.liftType);
     addLine(lines, 'Gebäudetyp', data.buildingType);
     addLine(lines, 'Vorheriger Kontakt', priorContactLabel(data));
