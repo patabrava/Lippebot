@@ -1,4 +1,4 @@
-import type { LeadData, Mode, SupportData } from '../types/index.js';
+import type { ChatMessage, LeadData, Mode, SupportData } from '../types/index.js';
 import { hasContactMethod } from '../contact/contact-method.js';
 import { hasPriorContactStatus } from '../contact/prior-contact.js';
 import { stairTypeLabel } from '../lead/lead-options.js';
@@ -160,6 +160,57 @@ export function containsVerificationQuestion(message: string): boolean {
   return /\b(?:ist (?:das(?: alles)?|alles)(?: so)? korrekt|ist das alles so richtig|stimmt das so|sind (?:alle |die )?(?:angaben|daten)(?: so)? korrekt|sind alle angaben richtig)\b/.test(normalized);
 }
 
+function normalizeShortReply(message: string): string {
+  return message
+    .trim()
+    .toLocaleLowerCase('de-DE')
+    .replace(/^[\s"'„“‚‘’«».,!?]+|[\s"'„“‚‘’«».,!?]+$/g, '')
+    .replace(/,\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function containsPriorContactQuestion(message: string): boolean {
+  const normalized = message
+    .replace(/[*_`]/g, '')
+    .toLocaleLowerCase('de-DE')
+    .replace(/\s+/g, ' ');
+  return normalized.includes('hattest du wegen dieses anliegens schon einmal kontakt mit uns')
+    || normalized.includes('hattest du wegen dieses anliegens schon kontakt mit uns');
+}
+
+function parsePriorContactReply(message: string): LeadData['priorContact'] | undefined {
+  const normalized = normalizeShortReply(message);
+  if (/^(ja|jep|jo)$/.test(normalized)) return 'yes';
+  if (/^(nein|nien|nö|nee|ne)$/.test(normalized)) return 'no';
+  return undefined;
+}
+
+export function inferPriorContactFromHistory(
+  history: ChatMessage[],
+  currentMessage?: string,
+): LeadData['priorContact'] | undefined {
+  const messages = currentMessage === undefined
+    ? history
+    : [...history, { role: 'user' as const, content: currentMessage, timestamp: Date.now() }];
+  let inferred: LeadData['priorContact'] | undefined;
+
+  for (let index = 0; index < messages.length - 1; index += 1) {
+    const question = messages[index];
+    const answer = messages[index + 1];
+    if (question.role !== 'assistant'
+      || answer.role !== 'user'
+      || !containsPriorContactQuestion(question.content)) continue;
+    inferred = parsePriorContactReply(answer.content) ?? inferred;
+  }
+  return inferred;
+}
+
+export function historyAwaitsVerification(history: ChatMessage[]): boolean {
+  const latestAssistant = [...history].reverse().find((entry) => entry.role === 'assistant');
+  return !!latestAssistant && containsVerificationQuestion(latestAssistant.content);
+}
+
 function hasPriorContactReference(data: CollectedRequestData): boolean {
   return [
     data.priorContactReference,
@@ -251,12 +302,7 @@ export function buildNextMissingQuestion(
 }
 
 export function isExplicitVerificationConfirmation(message: string): boolean {
-  const normalized = message
-    .trim()
-    .toLocaleLowerCase('de-DE')
-    .replace(/[.!?]+$/g, '')
-    .replace(/,\s*/g, ' ')
-    .replace(/\s+/g, ' ');
+  const normalized = normalizeShortReply(message);
 
   if (/^(ja|jep|jo|sieht gut aus)$/.test(normalized)) {
     return true;
@@ -266,22 +312,13 @@ export function isExplicitVerificationConfirmation(message: string): boolean {
 }
 
 export function isNoFurtherConcern(message: string): boolean {
-  const normalized = message
-    .trim()
-    .toLocaleLowerCase('de-DE')
-    .replace(/[.!?]+$/g, '')
-    .replace(/\s+/g, ' ');
+  const normalized = normalizeShortReply(message);
 
   return /^(nein|nien|nö|nee|ne|nein danke|nien danke|nö danke|das war alles|sonst nichts|kein weiteres anliegen)$/.test(normalized);
 }
 
 export function isFurtherConcernConfirmation(message: string): boolean {
-  const normalized = message
-    .trim()
-    .toLocaleLowerCase('de-DE')
-    .replace(/[.!?]+$/g, '')
-    .replace(/,\s*/g, ' ')
-    .replace(/\s+/g, ' ');
+  const normalized = normalizeShortReply(message);
 
   return /^(ja|jep|jo|ja bitte|ja gerne|ich habe noch (eine frage|ein anliegen)|noch eine frage|noch ein anliegen)$/.test(normalized);
 }

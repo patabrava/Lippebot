@@ -7,7 +7,9 @@ import {
   ensureNextMissingQuestion,
   inferExplicitLeadContext,
   inferExplicitServiceContext,
+  inferPriorContactFromHistory,
   inferLeadStairType,
+  historyAwaitsVerification,
   isExplicitVerificationConfirmation,
   isFurtherConcernConfirmation,
   isNoFurtherConcern,
@@ -31,12 +33,29 @@ describe('intake verification', () => {
     'alles richtig',
     'die Angaben stimmen',
     'sieht gut aus',
+    '"Ja"',
+    '„Ja“',
+    '„Ja“.',
   ])(
     'accepts an explicit confirmation: %s',
     (message) => {
       expect(isExplicitVerificationConfirmation(message)).toBe(true);
     },
   );
+
+  it('recovers prior-contact status from a completed question-and-answer pair', () => {
+    expect(inferPriorContactFromHistory([
+      { role: 'assistant', content: 'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?', timestamp: 1 },
+      { role: 'user', content: 'Nein', timestamp: 2 },
+      { role: 'assistant', content: 'An welcher Adresse brauchst du den Lift?', timestamp: 3 },
+    ])).toBe('no');
+  });
+
+  it('recognizes from history that the latest assistant turn requested verification', () => {
+    expect(historyAwaitsVerification([
+      { role: 'assistant', content: 'Sind alle Angaben korrekt? Antworte bitte mit „Ja“.', timestamp: 1 },
+    ])).toBe(true);
+  });
 
   it.each(['okay', 'weiter', 'danke', 'nein', 'ja, aber die E-Mail ist falsch'])(
     'does not mistake an ambiguous or corrective reply for confirmation: %s',

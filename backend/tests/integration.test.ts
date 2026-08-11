@@ -832,6 +832,117 @@ describe('POST /api/chat', () => {
     expect(execute).toHaveBeenCalledOnce();
   });
 
+  it('accepts a quoted confirmation after recovering verification state from history', async () => {
+    const leadData = {
+      requestSituation: 'new_lift' as const,
+      ownsLift: 'no' as const,
+      priorContact: 'no' as const,
+      customerSegment: 'privatperson' as const,
+      firstName: 'Simon',
+      lastName: 'Vestner',
+      email: 'simon@example.de',
+      street: 'Musterstraße',
+      postalCode: '65657',
+      city: 'Musterstadt',
+      availability: '08:00 - 12:00' as const,
+    };
+    const execute = vi.fn(async (input) => ({
+      requestId: input.requestId,
+      kind: 'opportunity' as const,
+      completed: true as const,
+      recipient: 'sales@lippelift.de',
+    }));
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: leadData } };
+        },
+      },
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      requestOrchestrator: { execute },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const response = await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'recovered-verification-session',
+        requestId: 'recovered-verification-request',
+        message: '"Ja"',
+        history: [
+          { role: 'assistant', content: 'Sind alle Angaben korrekt? Antworte bitte mit „Ja“.', timestamp: 1 },
+        ],
+      }),
+    })).text();
+
+    expect(response).toContain('"action":"request_completed"');
+    expect(response).toContain('wurde an das zuständige Team weitergegeben');
+    expect(response).not.toContain('Sind alle Angaben korrekt?');
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it('coalesces overlapping confirmations for the same request', async () => {
+    const leadData = {
+      ownsLift: 'no' as const,
+      priorContact: 'no' as const,
+      customerSegment: 'privatperson' as const,
+      firstName: 'Simon',
+      lastName: 'Vestner',
+      email: 'simon@example.de',
+      street: 'Musterstraße',
+      postalCode: '65657',
+      city: 'Musterstadt',
+      availability: '08:00 - 12:00' as const,
+    };
+    let releaseExecution!: () => void;
+    const executionGate = new Promise<void>((resolve) => { releaseExecution = resolve; });
+    const execute = vi.fn(async (input) => {
+      await executionGate;
+      return {
+        requestId: input.requestId,
+        kind: 'opportunity' as const,
+        completed: true as const,
+        recipient: 'sales@lippelift.de',
+      };
+    });
+    const chatRoute = createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'state' as const, state: { sessionId, mode: 'anfrage' as const, collectedData: leadData } };
+        },
+      },
+      pipedrive: createMockPipedrive(), email: createMockEmail(), requestOrchestrator: { execute },
+      notificationEmailTo: '', serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const body = (message: string) => JSON.stringify({
+      sessionId: 'overlap-session', requestId: 'overlap-request', message, history: [],
+    });
+    await (await testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body('Neue Anfrage'),
+    })).text();
+
+    const first = testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body('Ja'),
+    }).then((response) => response.text());
+    const second = testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body('„Ja“'),
+    }).then((response) => response.text());
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    releaseExecution();
+    const responses = await Promise.all([first, second]);
+
+    expect(responses.every((response) => response.includes('"action":"request_completed"'))).toBe(true);
+    expect(responses.every((response) => !response.includes('Sind alle Angaben korrekt?'))).toBe(true);
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
   it('does not rotate or execute another request after a mistyped or ambiguous no-further-concern reply', async () => {
     const baseLeadData = {
       ownsLift: 'no' as const,

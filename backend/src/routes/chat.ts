@@ -32,7 +32,9 @@ import {
   isExplicitVerificationConfirmation,
   inferExplicitLeadContext,
   inferExplicitServiceContext,
+  inferPriorContactFromHistory,
   inferLeadStairType,
+  historyAwaitsVerification,
   isFurtherConcernConfirmation,
   isLeadReady,
   isNoFurtherConcern,
@@ -316,6 +318,31 @@ export function createChatRoute(deps: ChatDeps): Hono {
   const pendingAbandonedSummaryRecipients = new Map<string, string[]>();
   const factoryHelpShownRequests = new Set<string>();
   const intakeStates = new Map<string, IntakeState>();
+  type RequestExecutionResult = Awaited<ReturnType<RequestOrchestrator['execute']>>;
+  const completedRequestExecutions = new Map<string, RequestExecutionResult>();
+  const inFlightRequestExecutions = new Map<string, Promise<RequestExecutionResult>>();
+
+  async function executeRequestOnce(
+    key: string,
+    execute: () => Promise<RequestExecutionResult>,
+  ): Promise<RequestExecutionResult> {
+    const completed = completedRequestExecutions.get(key);
+    if (completed) return completed;
+    const running = inFlightRequestExecutions.get(key);
+    if (running) return running;
+
+    const promise = execute();
+    inFlightRequestExecutions.set(key, promise);
+    try {
+      const result = await promise;
+      completedRequestExecutions.set(key, result);
+      return result;
+    } finally {
+      if (inFlightRequestExecutions.get(key) === promise) {
+        inFlightRequestExecutions.delete(key);
+      }
+    }
+  }
 
   async function runRequestScopedFlow(
     stream: Parameters<Parameters<typeof streamSSE>[1]>[0],
@@ -342,6 +369,19 @@ export function createChatRoute(deps: ChatDeps): Hono {
       completed: false,
       priorContactReferenceAsked: false,
     };
+
+    const inferredPriorContact = inferPriorContactFromHistory(history, message);
+    if (!hasPriorContactStatus(intakeState.collectedData) && inferredPriorContact) {
+      intakeState = {
+        ...intakeState,
+        collectedData: mergeCollectedData(intakeState.collectedData, {
+          priorContact: inferredPriorContact,
+        }),
+      };
+    }
+
+    const verificationReply = isExplicitVerificationConfirmation(message)
+      && (intakeState.awaitingVerification || historyAwaitsVerification(history));
 
     const explicitServiceContext = inferExplicitServiceContext(message);
     if (explicitServiceContext && intakeState.mode !== 'anfrage') {
@@ -382,6 +422,21 @@ export function createChatRoute(deps: ChatDeps): Hono {
     }
 
     if (intakeState.completed) {
+      if (verificationReply) {
+        await stream.writeSSE({
+          data: JSON.stringify({
+            type: 'action',
+            action: 'request_completed',
+            data: { requestId, kind: intakeState.mode === 'service' ? 'service' : 'opportunity' },
+            duplicate: true,
+          }),
+        });
+        await stream.writeSSE({ data: JSON.stringify({ type: 'token', content: REQUEST_COMPLETION_MESSAGE }) });
+        await stream.writeSSE({
+          data: JSON.stringify({ type: 'done', mode: intakeState.mode, collectedData: intakeState.collectedData }),
+        });
+        return;
+      }
       if (isNoFurtherConcern(message)) {
         const content = 'Alles klar, danke für deine Nachricht. Ich wünsche dir einen schönen Tag!';
         await stream.writeSSE({
@@ -437,8 +492,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
     let leadData: LeadData | undefined;
     let supportData: SupportData | undefined;
     let assistantText = '';
-    const verificationConfirmed = intakeState.awaitingVerification
-      && isExplicitVerificationConfirmation(message)
+    let verificationConfirmed = verificationReply
       && isRequestReady(intakeState.mode, intakeState.collectedData);
 
     if (!verificationConfirmed) {
@@ -499,6 +553,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
     };
 
     const ready = isRequestReady(intakeState.mode, intakeState.collectedData);
+    verificationConfirmed = verificationReply && ready;
     if (!verificationConfirmed && needsPriorContactReferenceQuestion(intakeState)) {
       intakeState.awaitingVerification = false;
       intakeState.priorContactReferenceAsked = true;
@@ -585,13 +640,13 @@ export function createChatRoute(deps: ChatDeps): Hono {
       currentUserTimestamp,
       assistantTimestamp,
     });
-    const result = await deps.requestOrchestrator!.execute({
+    const result = await executeRequestOnce(`${sessionId}\u0000${requestId}`, () => deps.requestOrchestrator!.execute({
       sessionId,
       requestId,
       mode: leadData ? 'anfrage' : 'service',
       transcript,
       ...(leadData ? { leadData } : { supportData }),
-    });
+    }));
     await stream.writeSSE({
       data: JSON.stringify({ type: 'action', action: 'request_completed', data: { requestId, kind: result.kind } }),
     });
