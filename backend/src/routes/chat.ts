@@ -47,11 +47,13 @@ import {
 } from '../request/intake-verification.js';
 
 const OPPORTUNITY_EMAIL_TO = 'sales@lippelift.de';
+const TECHNICAL_COPY_EMAIL_TO = 'lossau@lippelift.de';
 const REQUEST_COMPLETION_MESSAGE = 'Danke. Dein Anliegen wurde an das zuständige Team weitergegeben. Hast du noch ein weiteres Anliegen?';
 
 function routedEmailRecipients(primaryRecipient: string, configuredInternalRecipients: string): string {
   return parseEmailRecipients(
     primaryRecipient,
+    primaryRecipient === 'technik@lippelift.de' ? TECHNICAL_COPY_EMAIL_TO : undefined,
     resolveInternalEmailRecipients(configuredInternalRecipients),
   ).join(',');
 }

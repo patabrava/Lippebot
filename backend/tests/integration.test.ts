@@ -1186,7 +1186,7 @@ describe('POST /api/chat', () => {
 
     expect(sendSupportNotification).not.toHaveBeenCalled();
     expect(sendCompletedChatSummary).toHaveBeenCalledWith(
-      'technik@lippelift.de,support@example.com,berg@lippelift.de,caechma@gmail.com',
+      'technik@lippelift.de,lossau@lippelift.de,support@example.com,berg@lippelift.de,caechma@gmail.com',
       expect.objectContaining({
       kind: 'case',
       supportData,
@@ -2360,7 +2360,7 @@ describe('POST /api/chat', () => {
     expect(resolveSupportPerson).toHaveBeenCalledWith(supportData);
     expect(createSupportNote).not.toHaveBeenCalled();
     expect(createServiceActivity).not.toHaveBeenCalled();
-    expect(sendCompletedChatSummary).toHaveBeenCalledWith('technik@lippelift.de,caechma@gmail.com,berg@lippelift.de', expect.objectContaining({
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('technik@lippelift.de,lossau@lippelift.de,caechma@gmail.com,berg@lippelift.de', expect.objectContaining({
       kind: 'case',
       supportData,
       supportContext: expect.objectContaining({
@@ -2429,7 +2429,7 @@ describe('POST /api/chat', () => {
       matchState: 'unique', personId: 501, candidateCount: 1,
     });
     expect(createSupportNote).not.toHaveBeenCalled();
-    expect(sendCompletedChatSummary).toHaveBeenCalledWith('technik@lippelift.de,caechma@gmail.com,berg@lippelift.de', expect.objectContaining({
+    expect(sendCompletedChatSummary).toHaveBeenCalledWith('technik@lippelift.de,lossau@lippelift.de,caechma@gmail.com,berg@lippelift.de', expect.objectContaining({
       kind: 'case', supportData,
     }));
     expect(text).toContain('"status":"accepted"');
@@ -2612,7 +2612,7 @@ describe('POST /api/chat', () => {
       'support-ambiguous-review', 702, 802, expect.any(String),
     );
     expect(sendCompletedChatSummary).toHaveBeenCalledWith(
-      'technik@lippelift.de,berg@lippelift.de,caechma@gmail.com',
+      'technik@lippelift.de,lossau@lippelift.de,berg@lippelift.de,caechma@gmail.com',
       expect.objectContaining({
         kind: 'case',
         supportContext: expect.objectContaining({
@@ -3142,7 +3142,7 @@ describe('POST /api/chat', () => {
         dealId: 7006,
         createdPerson: false,
         intendedInbox: 'technik@lippelift.de',
-        emailRecipient: 'technik@lippelift.de,berg@lippelift.de,caechma@gmail.com',
+        emailRecipient: 'technik@lippelift.de,lossau@lippelift.de,berg@lippelift.de,caechma@gmail.com',
         noteStatus: 'created',
         noteError: undefined,
       },
@@ -3205,7 +3205,7 @@ describe('POST /api/chat', () => {
       sessionId: 'tracked-support-email-fail',
       eventType: 'completed_summary_email_failed',
       payload: expect.objectContaining({
-        recipient: 'technik@lippelift.de,technik@example.test,berg@lippelift.de,caechma@gmail.com', kind: 'case', error: 'SMTP unavailable',
+        recipient: 'technik@lippelift.de,lossau@lippelift.de,technik@example.test,berg@lippelift.de,caechma@gmail.com', kind: 'case', error: 'SMTP unavailable',
       }),
     });
     expect(errorSpy).toHaveBeenCalledWith('Chat stream error:', expect.any(Error));
