@@ -251,7 +251,7 @@ describe('intake verification', () => {
       firstName: 'Max',
       lastName: 'Muster',
     })).toBe(
-      'Wie können wir dich am besten erreichen? Für eine persönliche, kostenlose und unverbindliche Beratung ist eine Telefonnummer ideal – wenn du lieber schriftlich kontaktiert werden möchtest, kannst du uns auch deine E-Mail-Adresse schicken.',
+      'Wie können wir dich erreichen? Für eine persönliche Beratung am besten per Telefon – alternativ per E-Mail.',
     );
   });
 

@@ -255,7 +255,7 @@ export function buildNextMissingQuestion(
   if (mode === 'anfrage') {
     if (!data.firstName || !data.lastName) return 'Wie ist dein vollständiger Name?';
     if (!hasContactMethod(data)) {
-      return 'Wie können wir dich am besten erreichen? Für eine persönliche, kostenlose und unverbindliche Beratung ist eine Telefonnummer ideal – wenn du lieber schriftlich kontaktiert werden möchtest, kannst du uns auch deine E-Mail-Adresse schicken.';
+      return 'Wie können wir dich erreichen? Für eine persönliche Beratung am besten per Telefon – alternativ per E-Mail.';
     }
     if (!data.message) return 'Beschreibe mir bitte kurz, worum es bei deiner Anfrage geht.';
     if (!hasPriorContactStatus(data)) return 'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?';

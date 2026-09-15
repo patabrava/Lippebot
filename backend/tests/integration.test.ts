@@ -513,14 +513,14 @@ describe('POST /api/chat', () => {
     });
 
     const contactQuestion = await (await request('Neue Liftanfrage')).text();
-    expect(contactQuestion).toContain('Wie können wir dich am besten erreichen?');
+    expect(contactQuestion).toContain('Wie können wir dich erreichen?');
 
     const review = await (await request('sarah-email-only-224ca8f@example.com')).text();
 
     expect(review).toContain('• E-Mail: sarah-email-only-224ca8f@example.com');
     expect(review).toContain('Sind alle Angaben korrekt?');
     expect(review).not.toContain('Wann bist du am besten erreichbar');
-    expect(review.match(/Wie können wir dich am besten erreichen/g)).toBeNull();
+    expect(review.match(/Wie können wir dich erreichen/g)).toBeNull();
     expect(execute).not.toHaveBeenCalled();
   });
 

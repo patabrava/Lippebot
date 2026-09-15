@@ -56,7 +56,8 @@ describe('buildSystemPrompt', () => {
 
   it('asks for availability only when the customer supplied a phone number', () => {
     const prompt = buildSystemPrompt();
-    expect(prompt).toContain('Für eine persönliche, kostenlose und unverbindliche Beratung ist eine Telefonnummer ideal');
+    expect(prompt).toContain('Wie können wir dich erreichen? Für eine persönliche Beratung am besten per Telefon – alternativ per E-Mail.');
+    expect(prompt).toContain('ohne Einleitung, Zusammenfassung oder weitere Erklärung wortgetreu');
     expect(prompt).toContain('Pflicht nur bei vorhandener Telefonnummer');
     expect(prompt).toContain('Bei einer reinen E-Mail-Anfrage darfst du nicht nach Erreichbarkeit oder einer Anrufzeit fragen');
   });
