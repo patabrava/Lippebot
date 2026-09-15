@@ -244,6 +244,37 @@ describe('intake verification', () => {
     })).toBe('Geht es um einen neuen Lift, einen bereits bestellten Lift oder einen bereits eingebauten Lift?');
   });
 
+  it('explains why a phone number is ideal while still allowing email contact', () => {
+    expect(buildNextMissingQuestion('anfrage', {
+      requestSituation: 'new_lift',
+      ownsLift: 'no',
+      firstName: 'Max',
+      lastName: 'Muster',
+    })).toBe(
+      'Wie können wir dich am besten erreichen? Für eine persönliche, kostenlose und unverbindliche Beratung ist eine Telefonnummer ideal – wenn du lieber schriftlich kontaktiert werden möchtest, kannst du uns auch deine E-Mail-Adresse schicken.',
+    );
+  });
+
+  it('still requires an availability window when a phone number is provided', () => {
+    expect(buildNextMissingQuestion('anfrage', {
+      requestSituation: 'new_lift',
+      ownsLift: 'no',
+      priorContact: 'no',
+      customerSegment: 'privatperson',
+      stairLocation: 'innen',
+      stairType: 'gerade',
+      buildingType: 'einfamilienhaus',
+      liftType: 'sitzlift',
+      firstName: 'Max',
+      lastName: 'Muster',
+      phone: '05261 96660',
+      street: 'Teststraße 1',
+      postalCode: '32657',
+      city: 'Lemgo',
+      message: 'Ich brauche einen neuen Sitzlift.',
+    })).toBe('Wann bist du am besten erreichbar: 08:00–12:00, 12:00–16:00 oder 16:00–20:00 Uhr?');
+  });
+
   it('skips the straight-or-curved question when there is no staircase', () => {
     expect(buildNextMissingQuestion('anfrage', {
       requestSituation: 'new_lift',

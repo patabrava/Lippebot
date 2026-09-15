@@ -54,6 +54,13 @@ describe('buildSystemPrompt', () => {
     expect(prompt).not.toContain('Vorname, Nachname, Telefonnummer (Pflicht)');
   });
 
+  it('asks for availability only when the customer supplied a phone number', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('Für eine persönliche, kostenlose und unverbindliche Beratung ist eine Telefonnummer ideal');
+    expect(prompt).toContain('Pflicht nur bei vorhandener Telefonnummer');
+    expect(prompt).toContain('Bei einer reinen E-Mail-Anfrage darfst du nicht nach Erreichbarkeit oder einer Anrufzeit fragen');
+  });
+
   it('asks both funnels about prior contact and follows a yes with a reference before contact details', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('Diese Regeln gelten fuer den Anfrage- und Service-Modus');

@@ -394,6 +394,75 @@ describe('POST /api/chat', () => {
     expect(completion).toContain('"action":"request_completed"');
   });
 
+  it('completes an email-only lead without asking for telephone availability', async () => {
+    const leadData = {
+      requestSituation: 'new_lift' as const,
+      ownsLift: 'no' as const,
+      priorContact: 'no' as const,
+      customerSegment: 'privatperson' as const,
+      stairLocation: 'innen' as const,
+      stairType: 'gerade' as const,
+      buildingType: 'einfamilienhaus' as const,
+      liftType: 'sitzlift' as const,
+      firstName: 'Max',
+      lastName: 'Muster',
+      email: 'max@example.de',
+      street: 'Teststraße 1',
+      postalCode: '32657',
+      city: 'Lemgo',
+      message: 'Ich brauche einen neuen Sitzlift.',
+    };
+    const streamChat = vi.fn(async function* (sessionId: string) {
+      yield {
+        type: 'state' as const,
+        state: { sessionId, mode: 'anfrage' as const, collectedData: leadData },
+      };
+    });
+    const execute = vi.fn().mockResolvedValue({
+      requestId: 'email-only-request',
+      kind: 'opportunity',
+      completed: true,
+      recipient: 'sales@lippelift.de',
+    });
+    const chatRoute = createChatRoute({
+      gemini: { streamChat } as unknown as GeminiService,
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      requestOrchestrator: { execute },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const request = (message: string) => testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'email-only-session',
+        requestId: 'email-only-request',
+        message,
+        history: [],
+      }),
+    });
+
+    const review = await (await request('max@example.de')).text();
+
+    expect(review).toContain('Sind alle Angaben korrekt?');
+    expect(review).not.toContain('Wann bist du am besten erreichbar');
+    expect(review).not.toContain('• Erreichbarkeit:');
+    expect(execute).not.toHaveBeenCalled();
+
+    const completion = await (await request('Ja, alles korrekt')).text();
+
+    expect(streamChat).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      leadData: expect.objectContaining({ email: 'max@example.de' }),
+    }));
+    expect(execute.mock.calls[0][0].leadData).not.toHaveProperty('availability');
+    expect(completion).toContain('"action":"request_completed"');
+  });
+
   it('never ends an incomplete ordered-lift turn without the next required question', async () => {
     const baseData = {
       requestSituation: 'ordered_not_installed' as const,

@@ -213,7 +213,9 @@ describe('createGeminiService', () => {
     expect(leadDeclaration.parameters.properties.email).toBeDefined();
     expect(leadDeclaration.parameters.required).not.toContain('phone');
     expect(leadDeclaration.parameters.required).not.toContain('email');
+    expect(leadDeclaration.parameters.required).not.toContain('availability');
     expect(leadDeclaration.description).toContain('at least one contact method (phone or email)');
+    expect(leadDeclaration.description).toContain('Availability is required only when a phone number is provided');
     expect(serviceDeclaration.description).toContain('at least one contact method (phone or email)');
   });
 

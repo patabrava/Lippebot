@@ -138,7 +138,7 @@ const reportStateFn: FunctionDeclaration = {
 
 const submitLeadFn: FunctionDeclaration = {
   name: 'submit_lead',
-  description: 'Submit a qualified new-lift opportunity only when ownsLift is no, all required information, prior-contact status, and at least one contact method (phone or email) have been collected. Do not confirm completion; the backend owns the final confirmation.',
+  description: 'Submit a qualified new-lift opportunity only when ownsLift is no, all required information, prior-contact status, and at least one contact method (phone or email) have been collected. Availability is required only when a phone number is provided. Do not confirm completion; the backend owns the final confirmation.',
   parameters: {
     type: FunctionDeclarationSchemaType.OBJECT,
     properties: {
@@ -162,7 +162,7 @@ const submitLeadFn: FunctionDeclaration = {
       message: { type: FunctionDeclarationSchemaType.STRING },
       newsletter: { type: FunctionDeclarationSchemaType.STRING },
     },
-    required: ['ownsLift', 'customerSegment', 'firstName', 'lastName', 'street', 'postalCode', 'city', 'availability', 'priorContact'],
+    required: ['ownsLift', 'customerSegment', 'firstName', 'lastName', 'street', 'postalCode', 'city', 'priorContact'],
   },
 };
 

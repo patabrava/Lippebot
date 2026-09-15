@@ -21,7 +21,7 @@ function isUsableEmail(value: unknown): boolean {
   return labels.every((label) => /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label));
 }
 
-function isUsablePhone(value: unknown): boolean {
+export function isUsablePhone(value: unknown): boolean {
   if (typeof value !== 'string') return false;
   const trimmed = value.trim();
   if (!/^[+\d\s()./-]+$/.test(trimmed)) return false;
@@ -29,6 +29,11 @@ function isUsablePhone(value: unknown): boolean {
   const digits = trimmed.replace(/\D/g, '');
   if (digits.length < 6 || digits.length > 15) return false;
   return new Set(digits).size >= 2;
+}
+
+export function hasPhoneContactMethod(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  return isUsablePhone((value as ContactData).phone);
 }
 
 export function hasContactMethod(value: unknown): boolean {

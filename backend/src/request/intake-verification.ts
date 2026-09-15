@@ -1,5 +1,5 @@
 import type { ChatMessage, LeadData, Mode, SupportData } from '../types/index.js';
-import { hasContactMethod } from '../contact/contact-method.js';
+import { hasContactMethod, hasPhoneContactMethod } from '../contact/contact-method.js';
 import { hasPriorContactStatus } from '../contact/prior-contact.js';
 import { stairTypeLabel } from '../lead/lead-options.js';
 
@@ -250,7 +250,7 @@ export function buildNextMissingQuestion(
   if (mode === 'anfrage') {
     if (!data.firstName || !data.lastName) return 'Wie ist dein vollständiger Name?';
     if (!hasContactMethod(data)) {
-      return 'Wie können wir dich am besten erreichen? Schick mir bitte entweder deine Telefonnummer oder deine E-Mail-Adresse.';
+      return 'Wie können wir dich am besten erreichen? Für eine persönliche, kostenlose und unverbindliche Beratung ist eine Telefonnummer ideal – wenn du lieber schriftlich kontaktiert werden möchtest, kannst du uns auch deine E-Mail-Adresse schicken.';
     }
     if (!data.message) return 'Beschreibe mir bitte kurz, worum es bei deiner Anfrage geht.';
     if (!hasPriorContactStatus(data)) return 'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?';
@@ -265,7 +265,9 @@ export function buildNextMissingQuestion(
     if (!data.buildingType) return 'Geht es um ein Einfamilienhaus oder ein Mehrfamilienhaus?';
     if (!data.customerSegment) return 'Geht es um eine private Anfrage oder fragst du geschäftlich an?';
     if (!data.street || !data.postalCode || !data.city) return 'An welcher vollständigen Adresse brauchst du den Lift?';
-    if (!data.availability) return 'Wann bist du am besten erreichbar: 08:00–12:00, 12:00–16:00 oder 16:00–20:00 Uhr?';
+    if (hasPhoneContactMethod(data) && !data.availability) {
+      return 'Wann bist du am besten erreichbar: 08:00–12:00, 12:00–16:00 oder 16:00–20:00 Uhr?';
+    }
   }
 
   if (mode === 'service') {
@@ -333,7 +335,7 @@ export function isLeadReady(data: CollectedRequestData): data is LeadData {
     && !!data.street
     && !!data.postalCode
     && !!data.city
-    && !!data.availability;
+    && (!hasPhoneContactMethod(data) || !!data.availability);
 }
 
 export function isServiceReady(data: CollectedRequestData): data is SupportData {

@@ -14,7 +14,7 @@ import type {
   SupportNoteStatus,
 } from '../types/index.js';
 import { getSupportInbox, resolveSupportCategory } from '../support/support-routing.js';
-import { hasContactMethod } from '../contact/contact-method.js';
+import { hasContactMethod, hasPhoneContactMethod } from '../contact/contact-method.js';
 import { hasPriorContactStatus } from '../contact/prior-contact.js';
 import { buildPipedriveTranscriptNote } from '../chat/transcript.js';
 import { formatBerlinDateTime } from '../time/berlin.js';
@@ -75,7 +75,7 @@ function hasRequiredLeadFields(data: unknown): data is LeadData {
     && data.street
     && data.postalCode
     && data.city
-    && data.availability
+    && (!hasPhoneContactMethod(data) || data.availability)
   );
 }
 
