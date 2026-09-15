@@ -31,6 +31,7 @@ import {
   ensureNextMissingQuestion,
   isExplicitVerificationConfirmation,
   inferExplicitLeadContext,
+  inferContactDataFromMessage,
   inferExplicitServiceContext,
   inferPriorContactFromHistory,
   inferLeadStairType,
@@ -490,7 +491,10 @@ export function createChatRoute(deps: ChatDeps): Hono {
 
     const currentUserTimestamp = Date.now();
     let lastMode: 'berater' | 'anfrage' | 'service' | 'undetermined' = intakeState.mode;
-    let lastCollectedData: Record<string, unknown> = normalizeCollectedData(intakeState.collectedData);
+    let lastCollectedData: Record<string, unknown> = normalizeCollectedData(mergeCollectedData(
+      intakeState.collectedData,
+      inferContactDataFromMessage(message),
+    )) as Record<string, unknown>;
     let leadData: LeadData | undefined;
     let supportData: SupportData | undefined;
     let assistantText = '';

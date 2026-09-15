@@ -463,6 +463,67 @@ describe('POST /api/chat', () => {
     expect(completion).toContain('"action":"request_completed"');
   });
 
+  it('retains an email from the user message when Gemini acknowledges but omits it from state', async () => {
+    const leadDataWithoutContact = {
+      requestSituation: 'new_lift' as const,
+      ownsLift: 'no' as const,
+      priorContact: 'no' as const,
+      customerSegment: 'privatperson' as const,
+      stairLocation: 'innen' as const,
+      stairType: 'gerade' as const,
+      buildingType: 'einfamilienhaus' as const,
+      liftType: 'sitzlift' as const,
+      firstName: 'LIPPEBOT',
+      lastName: 'Test',
+      street: 'Teststraße 1',
+      postalCode: '32657',
+      city: 'Lemgo',
+      message: 'Ich brauche einen neuen Sitzlift.',
+    };
+    const streamChat = vi.fn(async function* (sessionId: string, message: string) {
+      yield {
+        type: 'token' as const,
+        content: message.includes('@') ? 'Danke, die E-Mail-Adresse habe ich notiert.' : 'Alles klar.',
+      };
+      yield {
+        type: 'state' as const,
+        state: { sessionId, mode: 'anfrage' as const, collectedData: leadDataWithoutContact },
+      };
+    });
+    const execute = vi.fn();
+    const chatRoute = createChatRoute({
+      gemini: { streamChat } as unknown as GeminiService,
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      requestOrchestrator: { execute },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+    const request = (message: string) => testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'model-omits-email-session',
+        requestId: 'model-omits-email-request',
+        message,
+        history: [],
+      }),
+    });
+
+    const contactQuestion = await (await request('Neue Liftanfrage')).text();
+    expect(contactQuestion).toContain('Wie können wir dich am besten erreichen?');
+
+    const review = await (await request('sarah-email-only-224ca8f@example.com')).text();
+
+    expect(review).toContain('• E-Mail: sarah-email-only-224ca8f@example.com');
+    expect(review).toContain('Sind alle Angaben korrekt?');
+    expect(review).not.toContain('Wann bist du am besten erreichbar');
+    expect(review.match(/Wie können wir dich am besten erreichen/g)).toBeNull();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it('never ends an incomplete ordered-lift turn without the next required question', async () => {
     const baseData = {
       requestSituation: 'ordered_not_installed' as const,

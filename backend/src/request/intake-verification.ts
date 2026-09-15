@@ -1,5 +1,5 @@
 import type { ChatMessage, LeadData, Mode, SupportData } from '../types/index.js';
-import { hasContactMethod, hasPhoneContactMethod } from '../contact/contact-method.js';
+import { hasContactMethod, hasPhoneContactMethod, isUsableEmail } from '../contact/contact-method.js';
 import { hasPriorContactStatus } from '../contact/prior-contact.js';
 import { stairTypeLabel } from '../lead/lead-options.js';
 
@@ -31,6 +31,11 @@ export function inferLeadStairType(message: string): LeadData['stairType'] | und
     return 'keine_treppe';
   }
   return undefined;
+}
+
+export function inferContactDataFromMessage(message: string): Pick<LeadData, 'email'> {
+  const email = message.match(/[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]*[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]*[A-Z0-9])?)+/i)?.[0];
+  return email && isUsableEmail(email) ? { email } : {};
 }
 
 function issueCandidates(message: string): string[] {

@@ -3,7 +3,7 @@ type ContactData = {
   email?: unknown;
 };
 
-function isUsableEmail(value: unknown): boolean {
+export function isUsableEmail(value: unknown): boolean {
   if (typeof value !== 'string') return false;
   const trimmed = value.trim();
   if (trimmed.length > 254 || trimmed.includes('..')) return false;
