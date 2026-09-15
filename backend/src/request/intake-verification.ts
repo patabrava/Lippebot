@@ -236,7 +236,10 @@ export function needsPriorContactReferenceQuestion(state: IntakeState): boolean 
     && !hasPriorContactReference(state.collectedData);
 }
 
+const LEAD_CONTACT_QUESTION = 'Wie können wir dich erreichen? Für eine persönliche Beratung am besten per Telefon – alternativ per E-Mail.';
+
 export function ensureNextMissingQuestion(assistantText: string, nextQuestion: string): string {
+  if (nextQuestion === LEAD_CONTACT_QUESTION) return nextQuestion;
   const trimmed = assistantText.trim();
   if (!trimmed || containsVerificationQuestion(trimmed)) return nextQuestion;
   if (trimmed.includes(nextQuestion) || trimmed.includes('?')) return trimmed;
@@ -255,7 +258,7 @@ export function buildNextMissingQuestion(
   if (mode === 'anfrage') {
     if (!data.firstName || !data.lastName) return 'Wie ist dein vollständiger Name?';
     if (!hasContactMethod(data)) {
-      return 'Wie können wir dich erreichen? Für eine persönliche Beratung am besten per Telefon – alternativ per E-Mail.';
+      return LEAD_CONTACT_QUESTION;
     }
     if (!data.message) return 'Beschreibe mir bitte kurz, worum es bei deiner Anfrage geht.';
     if (!hasPriorContactStatus(data)) return 'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?';

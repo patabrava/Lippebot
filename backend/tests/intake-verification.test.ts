@@ -317,6 +317,15 @@ describe('intake verification', () => {
     ].join('\n'));
   });
 
+  it('shows the compact lead contact question without a model-generated introduction', () => {
+    const contactQuestion = 'Wie können wir dich erreichen? Für eine persönliche Beratung am besten per Telefon – alternativ per E-Mail.';
+
+    expect(ensureNextMissingQuestion(
+      'Alles klar. Super, dass du dich an uns wendest!',
+      contactQuestion,
+    )).toBe(contactQuestion);
+  });
+
   it('uses the required next question when the model emits no visible text', () => {
     expect(ensureNextMissingQuestion(
       '',
