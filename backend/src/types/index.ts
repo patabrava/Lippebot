@@ -75,6 +75,7 @@ export interface LeadData {
   lastName?: string;
   phone?: string;
   email?: string;
+  phoneContactStatus?: 'provided' | 'declined';
   street?: string;
   postalCode?: string;
   city?: string;
@@ -106,6 +107,7 @@ export interface SupportData {
   customerName?: string;
   phone?: string;
   email?: string;
+  phoneContactStatus?: 'provided' | 'declined';
   category?: SupportCategory;
   issueDescription?: string;
   liftModel?: string;

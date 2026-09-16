@@ -14,7 +14,7 @@ import type {
   SupportNoteStatus,
 } from '../types/index.js';
 import { getSupportInbox, resolveSupportCategory } from '../support/support-routing.js';
-import { hasContactMethod, hasPhoneContactMethod } from '../contact/contact-method.js';
+import { hasPhoneContactMethod, hasRequiredContactDetails } from '../contact/contact-method.js';
 import { hasPriorContactStatus } from '../contact/prior-contact.js';
 import { buildPipedriveTranscriptNote } from '../chat/transcript.js';
 import { formatBerlinDateTime } from '../time/berlin.js';
@@ -32,6 +32,7 @@ import {
   isExplicitVerificationConfirmation,
   inferExplicitLeadContext,
   inferContactDataFromMessage,
+  inferPhoneContactStatusFromMessage,
   inferExplicitServiceContext,
   inferPriorContactFromHistory,
   inferLeadStairType,
@@ -72,7 +73,7 @@ function hasRequiredLeadFields(data: unknown): data is LeadData {
     data.customerSegment
     && data.firstName
     && data.lastName
-    && hasContactMethod(data)
+    && hasRequiredContactDetails(data)
     && data.street
     && data.postalCode
     && data.city
@@ -89,7 +90,7 @@ function hasRequiredServiceFields(data: unknown): data is SupportData {
     data.customerName
     && data.category
     && data.issueDescription
-    && hasContactMethod(data)
+    && hasRequiredContactDetails(data)
   );
 }
 
@@ -493,7 +494,10 @@ export function createChatRoute(deps: ChatDeps): Hono {
     let lastMode: 'berater' | 'anfrage' | 'service' | 'undetermined' = intakeState.mode;
     let lastCollectedData: Record<string, unknown> = normalizeCollectedData(mergeCollectedData(
       intakeState.collectedData,
-      inferContactDataFromMessage(message),
+      {
+        ...inferContactDataFromMessage(message),
+        ...inferPhoneContactStatusFromMessage(message),
+      },
     )) as Record<string, unknown>;
     let leadData: LeadData | undefined;
     let supportData: SupportData | undefined;

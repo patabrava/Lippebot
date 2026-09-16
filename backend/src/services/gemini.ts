@@ -7,7 +7,7 @@ import {
 } from '@google/genai';
 import type { ChatMessage, Mode, LeadData, ServiceData, ConversationState } from '../types/index.js';
 import { buildSystemPrompt } from '../prompts/system-prompt.js';
-import { hasContactMethod } from '../contact/contact-method.js';
+import { hasRequiredContactDetails } from '../contact/contact-method.js';
 import { hasPriorContactStatus } from '../contact/prior-contact.js';
 
 const API_KEY_PRIMARY_MODEL = 'gemini-2.5-flash';
@@ -104,6 +104,10 @@ const reportStateFn: FunctionDeclaration = {
           lastName: { type: FunctionDeclarationSchemaType.STRING },
           phone: { type: FunctionDeclarationSchemaType.STRING },
           email: { type: FunctionDeclarationSchemaType.STRING },
+          phoneContactStatus: {
+            type: FunctionDeclarationSchemaType.STRING,
+            enum: ['provided', 'declined'],
+          },
           street: { type: FunctionDeclarationSchemaType.STRING },
           postalCode: { type: FunctionDeclarationSchemaType.STRING },
           city: { type: FunctionDeclarationSchemaType.STRING },
@@ -138,7 +142,7 @@ const reportStateFn: FunctionDeclaration = {
 
 const submitLeadFn: FunctionDeclaration = {
   name: 'submit_lead',
-  description: 'Submit a qualified new-lift opportunity only when ownsLift is no, all required information, prior-contact status, and at least one contact method (phone or email) have been collected. Availability is required only when a phone number is provided. Do not confirm completion; the backend owns the final confirmation.',
+  description: 'Submit a qualified new-lift opportunity only when ownsLift is no, all required information, prior-contact status, a valid email address, and either a phone number or an explicit phone-number refusal have been collected. Availability is required only when a phone number is provided. Do not confirm completion; the backend owns the final confirmation.',
   parameters: {
     type: FunctionDeclarationSchemaType.OBJECT,
     properties: {
@@ -155,6 +159,10 @@ const submitLeadFn: FunctionDeclaration = {
       lastName: { type: FunctionDeclarationSchemaType.STRING },
       phone: { type: FunctionDeclarationSchemaType.STRING },
       email: { type: FunctionDeclarationSchemaType.STRING },
+      phoneContactStatus: {
+        type: FunctionDeclarationSchemaType.STRING,
+        enum: ['provided', 'declined'],
+      },
       street: { type: FunctionDeclarationSchemaType.STRING },
       postalCode: { type: FunctionDeclarationSchemaType.STRING },
       city: { type: FunctionDeclarationSchemaType.STRING },
@@ -168,7 +176,7 @@ const submitLeadFn: FunctionDeclaration = {
 
 const submitServiceRequestFn: FunctionDeclaration = {
   name: 'submit_service_request',
-  description: 'Submit an owned-lift service request only after Sarah has ownership, manufacturer, service type, customer name, one primary category, a short issue summary, prior-contact status, and at least one contact method (phone or email). A LIPPE lift also needs a provided factory number or explicit unavailability. Do not confirm completion; the backend owns the final confirmation.',
+  description: 'Submit an owned-lift service request only after Sarah has ownership, manufacturer, service type, customer name, one primary category, a short issue summary, prior-contact status, a valid email address, and either a phone number or an explicit phone-number refusal. A LIPPE lift also needs a provided factory number or explicit unavailability. Do not confirm completion; the backend owns the final confirmation.',
   parameters: {
     type: FunctionDeclarationSchemaType.OBJECT,
     properties: {
@@ -183,6 +191,10 @@ const submitServiceRequestFn: FunctionDeclaration = {
       customerName: { type: FunctionDeclarationSchemaType.STRING },
       phone: { type: FunctionDeclarationSchemaType.STRING },
       email: { type: FunctionDeclarationSchemaType.STRING },
+      phoneContactStatus: {
+        type: FunctionDeclarationSchemaType.STRING,
+        enum: ['provided', 'declined'],
+      },
       category: {
         type: FunctionDeclarationSchemaType.STRING,
         enum: ['technik', 'finance', 'sales', 'lossau'],
@@ -209,7 +221,7 @@ const submitServiceRequestFn: FunctionDeclaration = {
 const allFunctionDeclarations = [reportStateFn, submitLeadFn, submitServiceRequestFn];
 
 function isValidLeadSubmission(args: Record<string, unknown>): boolean {
-  return args.ownsLift === 'no' && hasPriorContactStatus(args) && hasContactMethod(args);
+  return args.ownsLift === 'no' && hasPriorContactStatus(args) && hasRequiredContactDetails(args);
 }
 
 function isValidServiceSubmission(args: Record<string, unknown>): boolean {
@@ -217,7 +229,7 @@ function isValidServiceSubmission(args: Record<string, unknown>): boolean {
     return args.ownsLift === 'no'
       && args.serviceRequestType === 'sales_contract_order'
       && hasPriorContactStatus(args)
-      && hasContactMethod(args);
+      && hasRequiredContactDetails(args);
   }
   if (args.ownsLift !== 'yes' || !['lippe', 'other'].includes(String(args.liftManufacturer))) {
     return false;
@@ -226,7 +238,7 @@ function isValidServiceSubmission(args: Record<string, unknown>): boolean {
     return false;
   }
   if (!hasPriorContactStatus(args)) return false;
-  if (!hasContactMethod(args)) return false;
+  if (!hasRequiredContactDetails(args)) return false;
   if (args.liftManufacturer === 'other') return true;
   if (args.factoryNumberStatus === 'unavailable') return true;
   return args.factoryNumberStatus === 'provided'
@@ -428,14 +440,14 @@ export function createGeminiService(config: VertexChatConfig) {
           });
           continue;
         }
-        if (!hasContactMethod(call.args)) {
+        if (!hasRequiredContactDetails(call.args)) {
           functionResponses.push({
             functionResponse: {
               name: 'submit_lead',
               response: {
                 success: false,
                 needsContact: true,
-                message: 'Es fehlt eine gültige Kontaktmöglichkeit. Frage natürlich nach entweder Telefonnummer oder E-Mail-Adresse und bestätige noch keine Übergabe.',
+                message: 'Es fehlen vollständige Kontaktdaten. Frage nach einer gültigen E-Mail-Adresse und einer Telefonnummer. Wenn die Person ausdrücklich keine Telefonnummer angeben möchte, setze phoneContactStatus=declined und erkläre kurz, dass die Rückmeldung dann per E-Mail erfolgt.',
               },
             },
           });
@@ -480,14 +492,14 @@ export function createGeminiService(config: VertexChatConfig) {
           });
           continue;
         }
-        if (!hasContactMethod(call.args)) {
+        if (!hasRequiredContactDetails(call.args)) {
           functionResponses.push({
             functionResponse: {
               name: 'submit_service_request',
               response: {
                 success: false,
                 needsContact: true,
-                message: 'Es fehlt eine gültige Kontaktmöglichkeit. Frage natürlich nach entweder Telefonnummer oder E-Mail-Adresse und bestätige noch keine Übergabe.',
+                message: 'Es fehlen vollständige Kontaktdaten. Frage nach einer gültigen E-Mail-Adresse und einer Telefonnummer. Wenn die Person ausdrücklich keine Telefonnummer angeben möchte, setze phoneContactStatus=declined und erkläre kurz, dass die Rückmeldung dann per E-Mail erfolgt.',
               },
             },
           });

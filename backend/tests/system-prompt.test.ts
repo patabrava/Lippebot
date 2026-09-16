@@ -45,18 +45,19 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('An welcher Adresse brauchst du den Lift?');
   });
 
-  it('requests one preferred contact method and stops after either value is known', () => {
+  it('requests both email and phone, with an email fallback after an explicit phone refusal', () => {
     const prompt = buildSystemPrompt();
-    expect(prompt).toContain('Telefon oder E-Mail (Pflicht; genau eine Kontaktmöglichkeit genügt)');
-    expect(prompt).toContain('Schick mir bitte entweder deine Telefonnummer oder deine E-Mail-Adresse.');
-    expect(prompt).toContain('Sobald Telefonnummer oder E-Mail-Adresse vorhanden ist, frage nicht nach der anderen Kontaktmöglichkeit');
-    expect(prompt).toContain('Wenn der Nutzer eine Kontaktmöglichkeit bereits freiwillig genannt hat, frage keine weitere ab');
+    expect(prompt).toContain('E-Mail-Adresse (Pflicht)');
+    expect(prompt).toContain('Wie lauten deine E-Mail-Adresse und Telefonnummer?');
+    expect(prompt).toContain('Für eine persönliche Beratung brauchen wir deine Telefonnummer.');
+    expect(prompt).toContain('Wenn du keine angeben möchtest, schreiben wir dir per E-Mail.');
+    expect(prompt).toContain('phoneContactStatus = declined');
     expect(prompt).not.toContain('Vorname, Nachname, Telefonnummer (Pflicht)');
   });
 
   it('asks for availability only when the customer supplied a phone number', () => {
     const prompt = buildSystemPrompt();
-    expect(prompt).toContain('Wie können wir dich erreichen? Für eine persönliche Beratung am besten per Telefon – alternativ per E-Mail.');
+    expect(prompt).toContain('Wie lauten deine E-Mail-Adresse und Telefonnummer?');
     expect(prompt).toContain('ohne Einleitung, Zusammenfassung oder weitere Erklärung wortgetreu');
     expect(prompt).toContain('Pflicht nur bei vorhandener Telefonnummer');
     expect(prompt).toContain('Bei einer reinen E-Mail-Anfrage darfst du nicht nach Erreichbarkeit oder einer Anrufzeit fragen');
@@ -67,7 +68,7 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('Diese Regeln gelten fuer den Anfrage- und Service-Modus');
     expect(prompt).toContain('Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?');
     expect(prompt).toContain('Hast du dazu eine Angebots-, Auftrags- oder Vorgangsnummer zur Hand?');
-    expect(prompt).toContain('Welche E-Mail-Adresse oder Telefonnummer hast du damals verwendet?');
+    expect(prompt).toContain('damals verwendeten E-Mail-Adresse und Telefonnummer');
     expect(prompt).toContain('Frage nicht erneut, wenn');
     expect(prompt).toContain('priorContact = unknown');
     expect(prompt).toContain('Eine Antwort mit nein verhindert niemals die bestehende CRM-Dublettenprüfung');
@@ -163,7 +164,7 @@ describe('buildSystemPrompt', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('gemeinsame Basis');
     expect(prompt).toContain('vollstaendiger Name');
-    expect(prompt).toContain('genau eine Kontaktmoeglichkeit');
+    expect(prompt).toContain('E-Mail-Adresse, Telefonnummer');
     expect(prompt).toContain('Kontroll-Zusammenfassung gehoert ausschliesslich dem Backend');
     expect(prompt).toContain('frage niemals selbst "Ist das korrekt?"');
     expect(prompt).toContain('genau einmal seine verbindliche Zusammenfassung');
@@ -234,8 +235,8 @@ describe('buildSystemPrompt', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('Erwaehne niemals Pipedrive');
     expect(prompt).toContain('Erwaehne niemals CRM');
-    expect(prompt).toContain('Kundennamen und genau einer Kontaktmoeglichkeit');
-    expect(prompt).toContain('Auch im Service-Modus genügt genau eine Kontaktmöglichkeit');
+    expect(prompt).toContain('Kundenname, E-Mail-Adresse und Telefonnummer');
+    expect(prompt).toContain('Rückmeldung sonst per E-Mail erfolgt');
     expect(prompt).toContain('Stelle keine unnoetigen Zusatzfragen');
   });
 
@@ -244,7 +245,7 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('Rufe `submit_service_request` erst nach ausdruecklicher Bestaetigung');
     expect(prompt).toContain('Telefonnummer');
     expect(prompt).toContain('E-Mail-Adresse');
-    expect(prompt).toContain('mindestens eine Kontaktmoeglichkeit vorhanden sein');
+    expect(prompt).toContain('E-Mail-Adresse und entweder Telefonnummer oder phoneContactStatus = declined');
   });
 
   it('scopes free-consultation wording to advisor and inquiry modes', () => {

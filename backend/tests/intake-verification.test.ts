@@ -7,6 +7,8 @@ import {
   ensureNextMissingQuestion,
   inferExplicitLeadContext,
   inferExplicitServiceContext,
+  inferContactDataFromMessage,
+  inferPhoneContactStatusFromMessage,
   inferPriorContactFromHistory,
   inferLeadStairType,
   historyAwaitsVerification,
@@ -231,6 +233,7 @@ describe('intake verification', () => {
       ownsLift: 'yes',
       customerName: 'Patrick Berg',
       email: 'patrick@example.de',
+      phoneContactStatus: 'declined',
       issueDescription: 'Lift ist kaputt.',
     })).toBe('Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?');
   });
@@ -244,15 +247,48 @@ describe('intake verification', () => {
     })).toBe('Geht es um einen neuen Lift, einen bereits bestellten Lift oder einen bereits eingebauten Lift?');
   });
 
-  it('explains why a phone number is ideal while still allowing email contact', () => {
+  it('asks for both email and phone when neither is known', () => {
     expect(buildNextMissingQuestion('anfrage', {
       requestSituation: 'new_lift',
       ownsLift: 'no',
       firstName: 'Max',
       lastName: 'Muster',
     })).toBe(
-      'Wie können wir dich erreichen? Für eine persönliche Beratung am besten per Telefon – alternativ per E-Mail.',
+      'Wie lauten deine E-Mail-Adresse und Telefonnummer?',
     );
+  });
+
+  it('explains the personal-consultation requirement when only email is known', () => {
+    expect(buildNextMissingQuestion('anfrage', {
+      requestSituation: 'new_lift', ownsLift: 'no', firstName: 'Max', lastName: 'Muster',
+      email: 'max@example.de',
+    })).toBe('Für eine persönliche Beratung brauchen wir deine Telefonnummer. Wenn du keine angeben möchtest, schreiben wir dir per E-Mail. Wie lautet deine Telefonnummer?');
+  });
+
+  it('asks for email when only a phone number is known', () => {
+    expect(buildNextMissingQuestion('anfrage', {
+      requestSituation: 'new_lift', ownsLift: 'no', firstName: 'Max', lastName: 'Muster',
+      phone: '05261 96660',
+    })).toBe('Wie lautet deine E-Mail-Adresse?');
+  });
+
+  it.each([
+    'Ich möchte meine Telefonnummer nicht angeben.',
+    'Bitte nur per E-Mail.',
+    'Keine Telefonnummer.',
+  ])('detects an explicit phone refusal: %s', (message) => {
+    expect(inferPhoneContactStatusFromMessage(message)).toEqual({ phoneContactStatus: 'declined' });
+  });
+
+  it('extracts email and a labelled phone number from the same message', () => {
+    expect(inferContactDataFromMessage(
+      'E-Mail: beide@example.de, Telefon: 05261 5550123',
+    )).toEqual({ email: 'beide@example.de', phone: '05261 5550123' });
+  });
+
+  it('extracts a standalone phone reply without mistaking prose for a number', () => {
+    expect(inferContactDataFromMessage('05261 5550123')).toEqual({ phone: '05261 5550123' });
+    expect(inferContactDataFromMessage('Meine Adresse ist Teststraße 5, 32657 Lemgo.')).toEqual({});
   });
 
   it('still requires an availability window when a phone number is provided', () => {
@@ -268,6 +304,7 @@ describe('intake verification', () => {
       firstName: 'Max',
       lastName: 'Muster',
       phone: '05261 96660',
+      email: 'max@example.de',
       street: 'Teststraße 1',
       postalCode: '32657',
       city: 'Lemgo',
@@ -282,6 +319,7 @@ describe('intake verification', () => {
       firstName: 'Petra',
       lastName: 'Balzer',
       email: 'petra@example.de',
+      phoneContactStatus: 'declined',
       message: 'Hublift vom Balkon in den Garten',
       priorContact: 'no',
       stairLocation: 'aussen',
@@ -298,6 +336,7 @@ describe('intake verification', () => {
         firstName: 'Petra',
         lastName: 'Balzer',
         email: 'petra@example.de',
+        phoneContactStatus: 'declined',
         message: 'Treppenlift benötigt',
         priorContact: 'no',
         stairLocation: 'aussen',
@@ -318,7 +357,7 @@ describe('intake verification', () => {
   });
 
   it('shows the compact lead contact question without a model-generated introduction', () => {
-    const contactQuestion = 'Wie können wir dich erreichen? Für eine persönliche Beratung am besten per Telefon – alternativ per E-Mail.';
+    const contactQuestion = 'Wie lauten deine E-Mail-Adresse und Telefonnummer?';
 
     expect(ensureNextMissingQuestion(
       'Alles klar. Super, dass du dich an uns wendest!',
@@ -341,6 +380,7 @@ describe('intake verification', () => {
       priorContact: 'yes' as const,
       customerName: 'Patrick Berg',
       email: 'patrick-berg@online.de',
+      phoneContactStatus: 'declined' as const,
       category: 'sales' as const,
       issueDescription: 'Ich höre nichts mehr zum Status.',
     };
@@ -371,6 +411,7 @@ describe('intake verification', () => {
       serviceRequestType: 'sales_contract_order',
       customerName: 'Patrick Berg',
       email: 'patrick@example.de',
+      phoneContactStatus: 'declined',
       category: 'sales',
       issueDescription: 'Wartet auf seinen bestellten Treppenlift.',
       priorContact: 'yes',

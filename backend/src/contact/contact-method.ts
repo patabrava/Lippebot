@@ -1,6 +1,7 @@
 type ContactData = {
   phone?: unknown;
   email?: unknown;
+  phoneContactStatus?: unknown;
 };
 
 export function isUsableEmail(value: unknown): boolean {
@@ -34,6 +35,18 @@ export function isUsablePhone(value: unknown): boolean {
 export function hasPhoneContactMethod(value: unknown): boolean {
   if (typeof value !== 'object' || value === null) return false;
   return isUsablePhone((value as ContactData).phone);
+}
+
+export function hasEmailContactMethod(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  return isUsableEmail((value as ContactData).email);
+}
+
+export function hasRequiredContactDetails(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const data = value as ContactData;
+  return isUsableEmail(data.email)
+    && (isUsablePhone(data.phone) || data.phoneContactStatus === 'declined');
 }
 
 export function hasContactMethod(value: unknown): boolean {

@@ -1,5 +1,11 @@
 import type { ChatMessage, LeadData, Mode, SupportData } from '../types/index.js';
-import { hasContactMethod, hasPhoneContactMethod, isUsableEmail } from '../contact/contact-method.js';
+import {
+  hasEmailContactMethod,
+  hasPhoneContactMethod,
+  hasRequiredContactDetails,
+  isUsableEmail,
+  isUsablePhone,
+} from '../contact/contact-method.js';
 import { hasPriorContactStatus } from '../contact/prior-contact.js';
 import { stairTypeLabel } from '../lead/lead-options.js';
 
@@ -33,9 +39,27 @@ export function inferLeadStairType(message: string): LeadData['stairType'] | und
   return undefined;
 }
 
-export function inferContactDataFromMessage(message: string): Pick<LeadData, 'email'> {
+export function inferContactDataFromMessage(message: string): Pick<LeadData, 'email' | 'phone'> {
   const email = message.match(/[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]*[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]*[A-Z0-9])?)+/i)?.[0];
-  return email && isUsableEmail(email) ? { email } : {};
+  const labelledPhone = message.match(/\b(?:telefon|tel\.?|handy|mobil)\s*:?\s*((?:\+?\d)[\d\s()./-]{4,}\d)/i)?.[1]?.trim();
+  const trimmed = message.trim();
+  const standalonePhone = /^[+\d\s()./-]+$/.test(trimmed) ? trimmed : undefined;
+  const phone = [labelledPhone, standalonePhone].find((candidate) => isUsablePhone(candidate));
+  return {
+    ...(email && isUsableEmail(email) ? { email } : {}),
+    ...(phone ? { phone } : {}),
+  };
+}
+
+export function inferPhoneContactStatusFromMessage(
+  message: string,
+): Pick<LeadData, 'phoneContactStatus'> {
+  const normalized = message.trim().toLocaleLowerCase('de-DE').replace(/\s+/g, ' ');
+  const explicitlyDeclinesPhone = /\b(?:keine|ohne)\s+telefon(?:nummer)?\b/.test(normalized)
+    || /\btelefon(?:nummer)?\s+(?:nicht|keine)\s+(?:angeben|nennen|mitteilen)\b/.test(normalized)
+    || /\b(?:möchte|moechte|will)\s+(?:ich\s+)?(?:meine\s+)?telefonnummer\s+nicht\s+(?:angeben|nennen|mitteilen)\b/.test(normalized)
+    || /\b(?:nur|ausschließlich|ausschliesslich)\s+(?:per|über|ueber)\s+e-?mail\b/.test(normalized);
+  return explicitlyDeclinesPhone ? { phoneContactStatus: 'declined' } : {};
 }
 
 function issueCandidates(message: string): string[] {
@@ -146,14 +170,18 @@ export function mergeCollectedData(
 }
 
 export function normalizeCollectedData(data: CollectedRequestData): CollectedRequestData {
+  let normalized = data;
+  if (hasPhoneContactMethod(data) && data.phoneContactStatus !== 'provided') {
+    normalized = { ...normalized, phoneContactStatus: 'provided' };
+  }
   if (
     typeof data.factoryNumber === 'string'
     && data.factoryNumber.trim()
     && data.factoryNumberStatus !== 'unavailable'
   ) {
-    return { ...data, factoryNumberStatus: 'provided' };
+    normalized = { ...normalized, factoryNumberStatus: 'provided' };
   }
-  return data;
+  return normalized;
 }
 
 export function containsVerificationQuestion(message: string): boolean {
@@ -236,10 +264,12 @@ export function needsPriorContactReferenceQuestion(state: IntakeState): boolean 
     && !hasPriorContactReference(state.collectedData);
 }
 
-const LEAD_CONTACT_QUESTION = 'Wie können wir dich erreichen? Für eine persönliche Beratung am besten per Telefon – alternativ per E-Mail.';
+const CONTACT_DETAILS_QUESTION = 'Wie lauten deine E-Mail-Adresse und Telefonnummer?';
+const EMAIL_QUESTION = 'Wie lautet deine E-Mail-Adresse?';
+const PHONE_QUESTION = 'Für eine persönliche Beratung brauchen wir deine Telefonnummer. Wenn du keine angeben möchtest, schreiben wir dir per E-Mail. Wie lautet deine Telefonnummer?';
 
 export function ensureNextMissingQuestion(assistantText: string, nextQuestion: string): string {
-  if (nextQuestion === LEAD_CONTACT_QUESTION) return nextQuestion;
+  if ([CONTACT_DETAILS_QUESTION, EMAIL_QUESTION, PHONE_QUESTION].includes(nextQuestion)) return nextQuestion;
   const trimmed = assistantText.trim();
   if (!trimmed || containsVerificationQuestion(trimmed)) return nextQuestion;
   if (trimmed.includes(nextQuestion) || trimmed.includes('?')) return trimmed;
@@ -257,9 +287,9 @@ export function buildNextMissingQuestion(
 
   if (mode === 'anfrage') {
     if (!data.firstName || !data.lastName) return 'Wie ist dein vollständiger Name?';
-    if (!hasContactMethod(data)) {
-      return LEAD_CONTACT_QUESTION;
-    }
+    if (!hasEmailContactMethod(data) && !hasPhoneContactMethod(data)) return CONTACT_DETAILS_QUESTION;
+    if (!hasEmailContactMethod(data)) return EMAIL_QUESTION;
+    if (!hasPhoneContactMethod(data) && data.phoneContactStatus !== 'declined') return PHONE_QUESTION;
     if (!data.message) return 'Beschreibe mir bitte kurz, worum es bei deiner Anfrage geht.';
     if (!hasPriorContactStatus(data)) return 'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?';
     if (data.priorContact === 'yes'
@@ -280,9 +310,9 @@ export function buildNextMissingQuestion(
 
   if (mode === 'service') {
     if (!data.customerName) return 'Wie ist dein vollständiger Name?';
-    if (!hasContactMethod(data)) {
-      return 'Wie können wir dich am besten erreichen? Schick mir bitte entweder deine Telefonnummer oder deine E-Mail-Adresse.';
-    }
+    if (!hasEmailContactMethod(data) && !hasPhoneContactMethod(data)) return CONTACT_DETAILS_QUESTION;
+    if (!hasEmailContactMethod(data)) return EMAIL_QUESTION;
+    if (!hasPhoneContactMethod(data) && data.phoneContactStatus !== 'declined') return PHONE_QUESTION;
     if (!data.issueDescription) return 'Beschreibe mir bitte kurz, worum es bei deinem Anliegen geht.';
     if (!hasPriorContactStatus(data)) return 'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?';
     if (data.priorContact === 'yes'
@@ -339,7 +369,7 @@ export function isLeadReady(data: CollectedRequestData): data is LeadData {
     && !!data.customerSegment
     && !!data.firstName
     && !!data.lastName
-    && hasContactMethod(data)
+    && hasRequiredContactDetails(data)
     && !!data.street
     && !!data.postalCode
     && !!data.city
@@ -362,7 +392,7 @@ export function isServiceReady(data: CollectedRequestData): data is SupportData 
     && !!data.category
     && !!data.issueDescription
     && hasPriorContactStatus(data)
-    && hasContactMethod(data);
+    && hasRequiredContactDetails(data);
 }
 
 export function isRequestReady(mode: Mode, data: CollectedRequestData): boolean {

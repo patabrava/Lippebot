@@ -201,7 +201,7 @@ describe('createGeminiService', () => {
     expect(serviceDeclaration.parameters.required).toContain('priorContact');
   });
 
-  it('registers phone-or-email submission contracts without requiring phone specifically', async () => {
+  it('registers email-and-phone submission contracts with an explicit phone-refusal fallback', async () => {
     const { createGeminiService } = await import('../src/services/gemini.js');
     createGeminiService({ projectId: 'test-project', location: 'us-central1' });
 
@@ -211,12 +211,15 @@ describe('createGeminiService', () => {
 
     expect(leadDeclaration.parameters.properties.phone).toBeDefined();
     expect(leadDeclaration.parameters.properties.email).toBeDefined();
+    expect(leadDeclaration.parameters.properties.phoneContactStatus.enum).toEqual(['provided', 'declined']);
     expect(leadDeclaration.parameters.required).not.toContain('phone');
     expect(leadDeclaration.parameters.required).not.toContain('email');
     expect(leadDeclaration.parameters.required).not.toContain('availability');
-    expect(leadDeclaration.description).toContain('at least one contact method (phone or email)');
+    expect(leadDeclaration.description).toContain('a valid email address');
+    expect(leadDeclaration.description).toContain('an explicit phone-number refusal');
     expect(leadDeclaration.description).toContain('Availability is required only when a phone number is provided');
-    expect(serviceDeclaration.description).toContain('at least one contact method (phone or email)');
+    expect(serviceDeclaration.description).toContain('a valid email address');
+    expect(serviceDeclaration.description).toContain('an explicit phone-number refusal');
   });
 
   it('registers ownership, manufacturer, factory-number, and service-type contracts', async () => {

@@ -217,6 +217,7 @@ describe('POST /api/chat', () => {
             firstName: 'Ivonne',
             lastName: 'Sprott',
             phone: '01604180074',
+            email: 'contact-test@example.de',
             street: 'Hagenstraße 51c',
             postalCode: '39356',
             city: 'Hörsingen',
@@ -275,6 +276,7 @@ describe('POST /api/chat', () => {
               firstName: 'Petra',
               lastName: 'Balzer',
               email: 'petra@example.de',
+              phoneContactStatus: 'declined' as const,
               message: 'Lift vom Balkon in den Garten',
               priorContact: 'no' as const,
               stairLocation: 'aussen' as const,
@@ -337,6 +339,7 @@ describe('POST /api/chat', () => {
       priorContact: 'no' as const,
       customerName: 'Patrick Berg',
       email: 'patrick-berg@online.de',
+      phoneContactStatus: 'declined' as const,
       category: 'technik' as const,
       issueDescription: 'Hi mein Lift ist kaputt',
     };
@@ -394,7 +397,7 @@ describe('POST /api/chat', () => {
     expect(completion).toContain('"action":"request_completed"');
   });
 
-  it('completes an email-only lead without asking for telephone availability', async () => {
+  it('completes an email-only lead after an explicit phone refusal without asking for telephone availability', async () => {
     const leadData = {
       requestSituation: 'new_lift' as const,
       ownsLift: 'no' as const,
@@ -407,6 +410,7 @@ describe('POST /api/chat', () => {
       firstName: 'Max',
       lastName: 'Muster',
       email: 'max@example.de',
+      phoneContactStatus: 'declined' as const,
       street: 'Teststraße 1',
       postalCode: '32657',
       city: 'Lemgo',
@@ -513,14 +517,20 @@ describe('POST /api/chat', () => {
     });
 
     const contactQuestion = await (await request('Neue Liftanfrage')).text();
-    expect(contactQuestion).toContain('Wie können wir dich erreichen?');
+    expect(contactQuestion).toContain('Wie lauten deine E-Mail-Adresse und Telefonnummer?');
 
-    const review = await (await request('sarah-email-only-224ca8f@example.com')).text();
+    const phoneQuestion = await (await request('sarah-email-only-224ca8f@example.com')).text();
+
+    expect(phoneQuestion).toContain('Für eine persönliche Beratung brauchen wir deine Telefonnummer.');
+    expect(phoneQuestion).toContain('schreiben wir dir per E-Mail');
+    expect(phoneQuestion).not.toContain('Sind alle Angaben korrekt?');
+
+    const review = await (await request('Ich möchte keine Telefonnummer angeben.')).text();
 
     expect(review).toContain('• E-Mail: sarah-email-only-224ca8f@example.com');
     expect(review).toContain('Sind alle Angaben korrekt?');
     expect(review).not.toContain('Wann bist du am besten erreichbar');
-    expect(review.match(/Wie können wir dich erreichen/g)).toBeNull();
+    expect(review.match(/Wie lauten deine E-Mail-Adresse und Telefonnummer/g)).toBeNull();
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -531,6 +541,7 @@ describe('POST /api/chat', () => {
       serviceRequestType: 'sales_contract_order' as const,
       customerName: 'Patrick Berg',
       email: 'patrick-berg@online.de',
+      phoneContactStatus: 'declined' as const,
       category: 'sales' as const,
       issueDescription: 'Ich habe einen Lift bestellt, höre aber nichts mehr.',
     };
@@ -603,7 +614,7 @@ describe('POST /api/chat', () => {
     const supportData = {
       ownsLift: 'yes' as const, liftManufacturer: 'lippe' as const, factoryNumber: 'FN-42', factoryNumberStatus: 'provided' as const,
       serviceRequestType: 'technical' as const, priorContact: 'no' as const,
-      customerName: 'Erika Muster', email: 'erika@example.de', category: 'technik' as const, issueDescription: 'Fehler',
+      customerName: 'Erika Muster', email: 'erika@example.de', phoneContactStatus: 'declined' as const, category: 'technik' as const, issueDescription: 'Fehler',
     };
     const execute = vi.fn().mockResolvedValue({ requestId: 'req-service', kind: 'service', completed: true, recipient: 'technik@lippelift.de' });
     const chatRoute = createChatRoute({
@@ -652,6 +663,7 @@ describe('POST /api/chat', () => {
       serviceRequestType: 'technical' as const,
       customerName: 'Erika Muster',
       email: 'erika@example.de',
+      phoneContactStatus: 'declined' as const,
       category: 'technik' as const,
       issueDescription: 'Lift bleibt stehen.',
     };
@@ -681,7 +693,7 @@ describe('POST /api/chat', () => {
   it('emits an error and no completion or done when a required side effect fails', async () => {
     const leadData = {
       ownsLift: 'no' as const, priorContact: 'no' as const, customerSegment: 'privatperson' as const,
-      firstName: 'Max', lastName: 'Muster', email: 'max@example.de', street: 'Test 1', postalCode: '32657', city: 'Lemgo', availability: '08:00 - 12:00' as const,
+      firstName: 'Max', lastName: 'Muster', email: 'max@example.de', phoneContactStatus: 'declined' as const, street: 'Test 1', postalCode: '32657', city: 'Lemgo', availability: '08:00 - 12:00' as const,
     };
     const execute = vi.fn().mockRejectedValue(new Error('smtp unavailable'));
     const chatRoute = createChatRoute({
@@ -720,6 +732,7 @@ describe('POST /api/chat', () => {
       firstName: 'Max',
       lastName: 'Muster',
       email: 'max@example.de',
+      phoneContactStatus: 'declined' as const,
       street: 'Test 1',
       postalCode: '32657',
       city: 'Lemgo',
@@ -893,6 +906,7 @@ describe('POST /api/chat', () => {
       firstName: 'Max',
       lastName: 'Muster',
       email: 'falsch@example.de',
+      phoneContactStatus: 'declined' as const,
       street: 'Test 1',
       postalCode: '32657',
       city: 'Lemgo',
@@ -971,6 +985,7 @@ describe('POST /api/chat', () => {
       firstName: 'Simon',
       lastName: 'Vestner',
       email: 'simon@example.de',
+      phoneContactStatus: 'declined' as const,
       street: 'Musterstraße',
       postalCode: '65657',
       city: 'Musterstadt',
@@ -1024,6 +1039,7 @@ describe('POST /api/chat', () => {
       firstName: 'Simon',
       lastName: 'Vestner',
       email: 'simon@example.de',
+      phoneContactStatus: 'declined' as const,
       street: 'Musterstraße',
       postalCode: '65657',
       city: 'Musterstadt',
@@ -1081,6 +1097,7 @@ describe('POST /api/chat', () => {
       firstName: 'Patrick',
       lastName: 'Berg',
       email: 'patrick@example.de',
+      phoneContactStatus: 'declined' as const,
       street: 'Musterweg 15',
       postalCode: '5557',
       city: 'Detmand',
@@ -1133,6 +1150,7 @@ describe('POST /api/chat', () => {
       serviceRequestType: 'sales_contract_order' as const,
       customerName: 'Patrick Berg',
       email: 'patrick-berg@online.de',
+      phoneContactStatus: 'declined' as const,
       category: 'sales' as const,
       issueDescription: 'Wartet auf seinen bestellten Treppenlift.',
       priorContact: 'yes' as const,
@@ -1230,6 +1248,7 @@ describe('POST /api/chat', () => {
       firstName: 'Max',
       lastName: 'Mustermann',
       email: 'max@example.de',
+      phoneContactStatus: 'declined' as const,
       street: 'Musterstrasse 1',
       postalCode: '32657',
       city: 'Lemgo',
@@ -1282,6 +1301,7 @@ describe('POST /api/chat', () => {
       priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
       email: 'maria@example.de',
+      phoneContactStatus: 'declined' as const,
       category: 'technik' as const,
       issueDescription: 'Der Lift bleibt im Erdgeschoss stehen.',
     };
@@ -1340,6 +1360,7 @@ describe('POST /api/chat', () => {
       firstName: 'Retry',
       lastName: 'Test',
       email: 'retry@example.de',
+      phoneContactStatus: 'declined' as const,
       street: 'Musterstrasse 1',
       postalCode: '32657',
       city: 'Lemgo',
@@ -1394,7 +1415,7 @@ describe('POST /api/chat', () => {
     const leadData = {
       priorContact: 'unknown' as const,
       customerSegment: 'privatperson' as const,
-      firstName: 'Partial', lastName: 'Delivery', email: 'partial@example.de',
+      firstName: 'Partial', lastName: 'Delivery', email: 'partial@example.de', phoneContactStatus: 'declined' as const,
       street: 'Musterstrasse 1', postalCode: '32657', city: 'Lemgo', availability: '08:00 - 12:00' as const,
     };
     const chatRoute = createChatRoute({
@@ -1436,6 +1457,7 @@ describe('POST /api/chat', () => {
       firstName: 'Config',
       lastName: 'Test',
       email: 'config@example.de',
+      phoneContactStatus: 'declined' as const,
       street: 'Musterstrasse 1',
       postalCode: '32657',
       city: 'Lemgo',
@@ -1489,6 +1511,7 @@ describe('POST /api/chat', () => {
       firstName: 'Dedupe',
       lastName: 'Test',
       email: 'dedupe@example.de',
+      phoneContactStatus: 'declined' as const,
       street: 'Musterstrasse 1',
       postalCode: '32657',
       city: 'Lemgo',
@@ -1543,6 +1566,7 @@ describe('POST /api/chat', () => {
             firstName: 'Max',
             lastName: 'Mustermann',
             phone: '05261 96660',
+            email: 'contact-test@example.de',
             street: 'Musterstrasse 1',
             postalCode: '32657',
             city: 'Lemgo',
@@ -1638,6 +1662,7 @@ describe('POST /api/chat', () => {
       firstName: 'Max',
       lastName: 'Mustermann',
       email: 'max@example.de',
+      phoneContactStatus: 'declined' as const,
       street: 'Musterstrasse 1',
       postalCode: '32657',
       city: 'Lemgo',
@@ -1739,6 +1764,7 @@ describe('POST /api/chat', () => {
       firstName: 'Max',
       lastName: 'Mustermann',
       phone: '05261 96660',
+      email: 'contact-test@example.de',
       street: 'Musterstrasse 1',
       postalCode: '32657',
       city: 'Lemgo',
@@ -1795,6 +1821,7 @@ describe('POST /api/chat', () => {
       firstName: 'Max',
       lastName: 'Mustermann',
       email: 'max@example.de',
+      phoneContactStatus: 'declined' as const,
       street: 'Musterstrasse 1',
       postalCode: '32657',
       city: 'Lemgo',
@@ -1890,6 +1917,7 @@ describe('POST /api/chat', () => {
       firstName: 'Max',
       lastName: 'Mustermann',
       phone: '05261 96660',
+      email: 'contact-test@example.de',
       street: 'Musterstrasse 1',
       postalCode: '32657',
       city: 'Lemgo',
@@ -1955,6 +1983,7 @@ describe('POST /api/chat', () => {
       firstName: 'Max',
       lastName: 'Mustermann',
       email: 'max@example.de',
+      phoneContactStatus: 'declined' as const,
       street: 'Musterstrasse 1',
       postalCode: '32657',
       city: 'Lemgo',
@@ -2022,6 +2051,7 @@ describe('POST /api/chat', () => {
       firstName: 'Review',
       lastName: 'Test',
       email: 'review@example.de',
+      phoneContactStatus: 'declined' as const,
       street: 'Musterstrasse 1',
       postalCode: '32657',
       city: 'Lemgo',
@@ -2083,6 +2113,7 @@ describe('POST /api/chat', () => {
       firstName: 'Erika',
       lastName: 'Test',
       phone: '05261 96660',
+      email: 'contact-test@example.de',
       street: 'Musterstrasse 2',
       postalCode: '32657',
       city: 'Lemgo',
@@ -2145,6 +2176,7 @@ describe('POST /api/chat', () => {
       firstName: 'Max',
       lastName: 'Mustermann',
       email: 'max.transcript@example.de',
+      phoneContactStatus: 'declined' as const,
       street: 'Musterstrasse 1',
       postalCode: '32657',
       city: 'Lemgo',
@@ -2214,6 +2246,7 @@ describe('POST /api/chat', () => {
       priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
       phone: '05261 96660',
+      email: 'contact-test@example.de',
       category: 'technik' as const,
       issueDescription: 'Der Lift bleibt stehen.',
     };
@@ -2274,6 +2307,7 @@ describe('POST /api/chat', () => {
       firstName: 'Retry',
       lastName: 'Test',
       phone: '05261 96660',
+      email: 'contact-test@example.de',
       street: 'Musterstrasse 2',
       postalCode: '32657',
       city: 'Lemgo',
@@ -2326,6 +2360,7 @@ describe('POST /api/chat', () => {
       firstName: 'Concurrent',
       lastName: 'Test',
       phone: '05261 96660',
+      email: 'contact-test@example.de',
       street: 'Musterstrasse 4',
       postalCode: '32657',
       city: 'Lemgo',
@@ -2389,6 +2424,7 @@ describe('POST /api/chat', () => {
       firstName: 'Failure',
       lastName: 'Test',
       phone: '05261 96660',
+      email: 'contact-test@example.de',
       street: 'Musterstrasse 3',
       postalCode: '32657',
       city: 'Lemgo',
@@ -2450,6 +2486,7 @@ describe('POST /api/chat', () => {
       priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
       phone: '05261 96660',
+      email: 'contact-test@example.de',
       category: 'technik' as const,
       issueDescription: 'Lift bleibt im Erdgeschoss stehen.',
     };
@@ -2509,7 +2546,7 @@ describe('POST /api/chat', () => {
     expect(text).not.toContain('"dealId"');
   });
 
-  it('accepts an email-only support handoff without requesting a phone number', async () => {
+  it('accepts an email-only support handoff after an explicit phone refusal', async () => {
     const resolveSupportPerson = vi.fn().mockResolvedValue({ matchState: 'unique', personId: 501, candidateCount: 1 });
     const createSupportCase = vi.fn().mockResolvedValue({ personId: 501, dealId: 7002, createdPerson: false });
     const createSupportNote = vi.fn().mockResolvedValue({ noteId: 9001 });
@@ -2518,6 +2555,7 @@ describe('POST /api/chat', () => {
       priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
       email: 'maria@example.de',
+      phoneContactStatus: 'declined' as const,
       category: 'technik' as const,
       issueDescription: 'Lift bleibt im Erdgeschoss stehen.',
     };
@@ -2579,6 +2617,7 @@ describe('POST /api/chat', () => {
       priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
       email: 'maria@example.de',
+      phoneContactStatus: 'declined' as const,
       category: 'sales' as const,
       issueDescription: 'TEST NOTE',
       offerNumber: '14.28',
@@ -2631,6 +2670,7 @@ describe('POST /api/chat', () => {
       priorContact: 'unknown' as const,
       customerName: 'Unbekannter Kunde',
       phone: '05261 96660',
+      email: 'contact-test@example.de',
       category: 'finance' as const,
       issueDescription: 'Frage zu einer Rechnung.',
     };
@@ -2702,6 +2742,7 @@ describe('POST /api/chat', () => {
       priorContact: 'yes' as const,
       customerName: 'Maria Schmidt',
       email: 'new-address@example.de',
+      phoneContactStatus: 'declined' as const,
       category: 'technik' as const,
       issueDescription: 'Der Lift bleibt stehen.',
     };
@@ -2763,6 +2804,7 @@ describe('POST /api/chat', () => {
       priorContact: 'unknown' as const,
       customerName: 'Camilo Test',
       email: 'camilo.test@example.de',
+      phoneContactStatus: 'declined' as const,
       category: 'lossau' as const,
       issueDescription: 'Installation ausstehend.',
     };
@@ -2864,6 +2906,7 @@ describe('POST /api/chat', () => {
       category: 'technik' as const,
       issueDescription: 'Lift bleibt stehen.',
       email: 'maria@example.de',
+    phoneContactStatus: 'declined' as const,
     };
     const chatRoute = createChatRoute({
       gemini: {
@@ -2905,6 +2948,7 @@ describe('POST /api/chat', () => {
       priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
       email: 'maria@example.de',
+      phoneContactStatus: 'declined' as const,
       category: 'lossau' as const,
       issueDescription: 'Ersatzteil fuer die Schiene benoetigt.',
     };
@@ -2964,6 +3008,7 @@ describe('POST /api/chat', () => {
       priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
       phone: '05261 96660',
+      email: 'contact-test@example.de',
       category: 'technik' as const,
       issueDescription: 'Lift bleibt stehen.',
     };
@@ -3033,6 +3078,7 @@ describe('POST /api/chat', () => {
       priorContact: 'unknown' as const,
       customerName: 'Maria Schmidt',
       email: 'maria@example.de',
+      phoneContactStatus: 'declined' as const,
       category: 'technik' as const,
       issueDescription: 'Lift bleibt stehen.',
     };
@@ -3174,6 +3220,7 @@ describe('POST /api/chat', () => {
       firstName: 'Max',
       lastName: 'Mustermann',
       phone: '05261 96660',
+      email: 'contact-test@example.de',
       street: 'Musterstrasse 1',
       postalCode: '32657',
       city: 'Lemgo',
@@ -3231,6 +3278,7 @@ describe('POST /api/chat', () => {
       category: 'technik' as const,
       issueDescription: 'Lift piept.',
       phone: '05261 96660',
+      email: 'contact-test@example.de',
     };
     const chatRoute = createChatRoute({
       gemini: {
@@ -3295,6 +3343,7 @@ describe('POST /api/chat', () => {
       category: 'technik' as const,
       issueDescription: 'Lift piept.',
       phone: '05261 96660',
+      email: 'contact-test@example.de',
     };
     const chatRoute = createChatRoute({
       gemini: {

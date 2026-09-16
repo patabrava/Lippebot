@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasContactMethod } from '../src/contact/contact-method.js';
+import { hasContactMethod, hasRequiredContactDetails } from '../src/contact/contact-method.js';
 
 describe('hasContactMethod', () => {
   it.each([
@@ -23,5 +23,23 @@ describe('hasContactMethod', () => {
     { email: 'max@example..de' },
   ])('rejects missing or unusable contact data: $phone $email', (data) => {
     expect(hasContactMethod(data)).toBe(false);
+  });
+});
+
+describe('hasRequiredContactDetails', () => {
+  it.each([
+    { email: 'max@example.de', phone: '05261 96660' },
+    { email: 'max@example.de', phoneContactStatus: 'declined' },
+  ])('accepts email plus a phone or explicit phone refusal', (data) => {
+    expect(hasRequiredContactDetails(data)).toBe(true);
+  });
+
+  it.each([
+    { email: 'max@example.de' },
+    { phone: '05261 96660' },
+    { phone: '05261 96660', phoneContactStatus: 'provided' },
+    { email: 'invalid', phoneContactStatus: 'declined' },
+  ])('rejects incomplete required contact details', (data) => {
+    expect(hasRequiredContactDetails(data)).toBe(false);
   });
 });
