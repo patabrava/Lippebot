@@ -214,8 +214,9 @@ describe('buildSystemPrompt', () => {
   it('requires one-inbox support routing with precedence rules', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('Waehle genau eine primaere Kategorie');
-    expect(prompt).toContain('Technik gewinnt bei Stoerungen');
-    expect(prompt).toContain('Lossau gewinnt bei Ersatzteilen');
+    expect(prompt).toContain('Technik gilt eng fuer Konstruktion');
+    expect(prompt).toContain('Lossau gewinnt bei Wartung');
+    expect(prompt).toContain('Fragen zur Fertigstellung, Installation oder zum Montagetermin gehen an Lossau');
     expect(prompt).toContain('Finance gewinnt bei Rechnungen');
     expect(prompt).toContain('Sales gewinnt bei Vertragsbestaetigungen');
     expect(prompt).not.toContain('technik@lippelift.de');

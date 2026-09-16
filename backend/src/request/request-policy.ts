@@ -34,8 +34,8 @@ export interface RequestPolicy {
 }
 
 const recipients: Record<ServiceRequestType, SupportInbox> = {
-  maintenance: 'technik@lippelift.de',
-  repair: 'technik@lippelift.de',
+  maintenance: 'lossau@lippelift.de',
+  repair: 'lossau@lippelift.de',
   technical: 'technik@lippelift.de',
   invoice_payment: 'finance@lippelift.de',
   sales_contract_order: 'sales@lippelift.de',
@@ -48,10 +48,11 @@ export function getServiceRecipient(serviceRequestType: ServiceRequestType): Sup
 
 export function classifyRequestPolicy(input: RequestPolicyInput): RequestPolicy {
   if (input.requestSituation === 'ordered_not_installed') {
+    const serviceRequestType = input.serviceRequestType ?? 'sales_contract_order';
     return {
       kind: 'service',
       crm: 'forbidden',
-      recipient: 'sales@lippelift.de',
+      recipient: getServiceRecipient(serviceRequestType),
       needsFactoryNumber: false,
     };
   }

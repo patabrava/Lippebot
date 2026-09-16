@@ -9,14 +9,19 @@ import {
 import type { SupportData } from '../src/types/index.js';
 
 describe('support routing helpers', () => {
-  it('routes malfunctions to technik even when another category is mentioned', () => {
-    expect(inferSupportCategory('Die Rechnung ist okay, aber der Lift zeigt einen Fehlercode und bleibt stehen')).toBe('technik');
-    expect(getSupportInbox('technik')).toBe('technik@lippelift.de');
+  it('routes malfunctions to Lossau even when another category is mentioned', () => {
+    expect(inferSupportCategory('Die Rechnung ist okay, aber der Lift zeigt einen Fehlercode und bleibt stehen')).toBe('lossau');
+    expect(getSupportInbox('lossau')).toBe('lossau@lippelift.de');
   });
 
   it('routes spare parts and installation defects to lossau', () => {
     expect(inferSupportCategory('Ich brauche ein Ersatzteil fuer die Montage, eine Schiene ist defekt')).toBe('lossau');
     expect(getSupportInbox('lossau')).toBe('lossau@lippelift.de');
+  });
+
+  it('reserves Technik for construction and engineering questions', () => {
+    expect(inferSupportCategory('Technische Frage zur Konstruktion und Steifigkeit der Schiene')).toBe('technik');
+    expect(getSupportInbox('technik')).toBe('technik@lippelift.de');
   });
 
   it('routes invoice and admin paperwork to finance', () => {

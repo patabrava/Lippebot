@@ -110,10 +110,19 @@ describe('intake verification', () => {
       mode: 'service',
       collectedData: {
         serviceRequestType: 'repair',
-        category: 'technik',
+        category: 'lossau',
         issueDescription: 'Hi mein Sitzlift ist kaputt',
       },
     });
+  });
+
+  it('distinguishes construction engineering from after-sales topics', () => {
+    expect(inferExplicitServiceContext('Ich habe eine technische Frage zur Steifigkeit der Schiene.'))
+      .toMatchObject({ collectedData: { serviceRequestType: 'technical', category: 'technik' } });
+    expect(inferExplicitServiceContext('Wann wird mein bereits bestellter Lift montiert?'))
+      .toMatchObject({ collectedData: { serviceRequestType: 'spare_parts_installation_warranty', category: 'lossau' } });
+    expect(inferExplicitServiceContext('Mein Lift hat eine Störung und bleibt stehen.'))
+      .toMatchObject({ collectedData: { serviceRequestType: 'repair', category: 'lossau' } });
   });
 
   it('does not infer a service category from an unclear generic message', () => {

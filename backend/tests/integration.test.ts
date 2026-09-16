@@ -149,7 +149,7 @@ describe('POST /api/chat', () => {
       authoritativeContext?: string,
     ) {
       expect(authoritativeContext).toContain('"serviceRequestType":"repair"');
-      expect(authoritativeContext).toContain('"category":"technik"');
+      expect(authoritativeContext).toContain('"category":"lossau"');
       expect(authoritativeContext).toContain('"issueDescription":"Hi mein Sitzlift ist kaputt"');
       expect(authoritativeContext).toContain('frage NICHT erneut');
       yield { type: 'token' as const, content: 'Verstanden, dein Sitzlift ist kaputt. Wie ist dein Name?' };

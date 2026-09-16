@@ -139,17 +139,6 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
     ].filter(Boolean).join('\n');
   }
 
-  function serviceRecipient(
-    policyRecipient: string,
-    sourceCase: FactoryCaseResult | undefined,
-  ): string {
-    if (sourceCase?.matchState !== 'unique') return 'sales@lippelift.de';
-    if (sourceCase.hasMontageDate === true) return 'lossau@lippelift.de';
-    if (sourceCase.hasMontageDate === false) return 'sales@lippelift.de';
-    // Compatibility for durable checkpoints written before Montagedatum routing existed.
-    return policyRecipient;
-  }
-
   async function createOpportunityNote(
     input: RequestExecutionInput,
     leadData: LeadData,
@@ -295,9 +284,16 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
 
   async function executeService(input: RequestExecutionInput): Promise<RequestExecutionResult> {
     if (!input.supportData) throw new Error('Service request is missing supportData');
-    const supportData = input.supportData;
-    const policy = classifyRequestPolicy(supportData);
+    const policy = classifyRequestPolicy(input.supportData);
     if (!policy.recipient) throw new Error('Service request has no recipient');
+    const category = policy.recipient === 'technik@lippelift.de'
+      ? 'technik'
+      : policy.recipient === 'finance@lippelift.de'
+        ? 'finance'
+        : policy.recipient === 'sales@lippelift.de'
+          ? 'sales'
+          : 'lossau';
+    const supportData: SupportData = { ...input.supportData, category };
 
     let sourceCase: FactoryCaseResult | undefined;
     let crm: ServiceRequestCrmResult | undefined;
@@ -399,7 +395,9 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
     crm = crmCheckpoint.crm as ServiceRequestCrmResult | undefined;
     salesOpportunity = crmCheckpoint.salesOpportunity as LeadCrmResult | undefined;
 
-    const intendedInbox = serviceRecipient(policy.recipient, sourceCase);
+    // The customer's topic determines the destination. CRM match and montage status
+    // affect persistence, but must not silently redirect the email to another team.
+    const intendedInbox = policy.recipient;
     const matchState: SupportMatchState = salesOpportunity?.outcome === 'reused'
       ? 'unique'
       : sourceCase.matchState;
@@ -435,9 +433,11 @@ export function createRequestOrchestrator(dependencies: RequestOrchestratorDepen
     const dealId = salesOpportunity?.dealId
       ?? crm?.dealId
       ?? (sourceCase?.matchState === 'unique' ? sourceCase.dealId : undefined);
-    const recipients = serviceCopyRecipients
-      ? parseEmailRecipients(serviceCopyRecipients)
-      : parseEmailRecipients(intendedInbox);
+    const recipients = parseEmailRecipients(
+      intendedInbox,
+      intendedInbox === 'technik@lippelift.de' ? 'lossau@lippelift.de' : undefined,
+      serviceCopyRecipients,
+    );
     await sendToRecipients(
       input,
       recipients.filter((recipient) => !previouslySentSet.has(recipient.toLowerCase())),

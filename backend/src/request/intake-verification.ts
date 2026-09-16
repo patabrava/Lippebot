@@ -20,11 +20,12 @@ export interface IntakeState {
 }
 
 const repairIssuePattern = /\b(?:kaputt|defekt|reparatur|reparieren|beschädigt|beschaedigt)\b/i;
-const technicalIssuePattern = /\b(?:störung|stoerung|fehler(?:code)?|ausfall|piept|funktioniert\s+nicht|bleibt\s+stehen)\b/i;
+const afterSalesIssuePattern = /\b(?:störung|stoerung|fehler(?:code)?|ausfall|piept|funktioniert\s+nicht|bleibt\s+stehen|mangel|mängel|maengel)\b/i;
+const technicalIssuePattern = /\b(?:konstruktion|konstruiert|konstruktionszeichnung|zeichnung|gezeichnet|auslegung|steifigkeit|spezifikation|technische?\s+frage|fertigungszeichnung|fertigungsvorbereitung|fuer\s+die\s+fertigung|für\s+die\s+fertigung)\b/i;
 const maintenanceIssuePattern = /\b(?:wartung|warten\s+lassen|inspektion)\b/i;
 const invoiceIssuePattern = /\b(?:rechnung|zahlung|mahnung|zahlungsreferenz)\b/i;
 const salesIssuePattern = /\b(?:vertrag|vertragsbestätigung|vertragsbestaetigung|bestellung|auftragsstatus)\b/i;
-const installationIssuePattern = /\b(?:ersatzteil|montage|installation|einbau|gewährleistung|gewaehrleistung|garantie)\b/i;
+const installationIssuePattern = /\b(?:ersatzteil|montage|montier\w*|installation|einbau|fertigstellung|fertiggestellt|gewährleistung|gewaehrleistung|garantie)\b/i;
 const liftContextPattern = /\b(?:sitzlift|treppenlift|plattformlift|lift)\b/i;
 const negatedRepairPattern = /\b(?:nicht|kein(?:e|en|er|es)?)\s+(?:kaputt|defekt|beschädigt|beschaedigt)\b/i;
 const explicitNewLiftDemandPattern = /\b(?:benötig\w*|benoetig\w*|brauch\w*|such\w*|möcht\w*|moecht\w*)\b[^.!?\n]{0,100}\b(?:einen|eine|ein)\s+(?:(?:neuen?|passenden?|geeigneten?|rollstuhlgeeigneten?)\s+)*(?:senkrechtaufzug|aufzug|sitzlift|treppenlift|plattformlift|hublift|lift)\b/i;
@@ -72,6 +73,7 @@ function issueCandidates(message: string): string[] {
 function isCategoryMenu(candidate: string): boolean {
   const categoryMatches = [
     repairIssuePattern,
+    afterSalesIssuePattern,
     technicalIssuePattern,
     maintenanceIssuePattern,
     invoiceIssuePattern,
@@ -125,12 +127,15 @@ export function inferExplicitServiceContext(message: string): {
       && !negatedRepairPattern.test(candidate)
     ) {
       serviceRequestType = 'repair';
-      category = 'technik';
-    } else if (technicalIssuePattern.test(candidate) && liftContextPattern.test(candidate)) {
-      serviceRequestType = 'technical';
-      category = 'technik';
+      category = 'lossau';
+    } else if (afterSalesIssuePattern.test(candidate) && liftContextPattern.test(candidate)) {
+      serviceRequestType = 'repair';
+      category = 'lossau';
     } else if (maintenanceIssuePattern.test(candidate) && liftContextPattern.test(candidate)) {
       serviceRequestType = 'maintenance';
+      category = 'lossau';
+    } else if (technicalIssuePattern.test(candidate)) {
+      serviceRequestType = 'technical';
       category = 'technik';
     } else if (invoiceIssuePattern.test(candidate)) {
       serviceRequestType = 'invoice_payment';

@@ -51,7 +51,7 @@ describe('request policy', () => {
       })).toEqual({
         kind: 'service',
         crm: 'read_only',
-        recipient: 'technik@lippelift.de',
+        recipient: 'lossau@lippelift.de',
         needsFactoryNumber: false,
       });
     },
@@ -110,14 +110,22 @@ describe('request policy', () => {
 
 describe('service recipients', () => {
   it.each([
-    ['maintenance', 'technik@lippelift.de'],
-    ['repair', 'technik@lippelift.de'],
+    ['maintenance', 'lossau@lippelift.de'],
+    ['repair', 'lossau@lippelift.de'],
     ['technical', 'technik@lippelift.de'],
     ['invoice_payment', 'finance@lippelift.de'],
     ['sales_contract_order', 'sales@lippelift.de'],
     ['spare_parts_installation_warranty', 'lossau@lippelift.de'],
   ] as const)('maps %s to %s', (serviceRequestType, expected) => {
     expect(getServiceRecipient(serviceRequestType)).toBe(expected);
+  });
+
+  it('routes installation scheduling for an ordered lift to Lossau', () => {
+    expect(classifyRequestPolicy({
+      requestSituation: 'ordered_not_installed',
+      ownsLift: 'no',
+      serviceRequestType: 'spare_parts_installation_warranty',
+    })).toMatchObject({ recipient: 'lossau@lippelift.de', needsFactoryNumber: false });
   });
 });
 

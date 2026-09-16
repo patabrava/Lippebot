@@ -371,7 +371,7 @@ describe('createRequestOrchestrator', () => {
       data: { ownsLift: 'yes' as const, liftManufacturer: 'lippe' as const, factoryNumberStatus: 'unavailable' as const, serviceRequestType: 'invoice_payment' as const },
       recipient: 'finance@lippelift.de',
     },
-  ])('creates a Sales opportunity and note when $label has no unique original deal', async ({ label, data }) => {
+  ])('creates a Sales CRM opportunity but preserves the topic destination when $label has no unique original deal', async ({ label, data, recipient }) => {
     const deps = baseDependencies();
     const { journal } = durableJournal();
     const orchestrator = createRequestOrchestrator({
@@ -393,25 +393,26 @@ describe('createRequestOrchestrator', () => {
       expect.any(String),
       31,
       52,
-      expect.stringContaining('Zielteam: sales@lippelift.de'),
+      expect.stringContaining(`Zielteam: ${recipient}`),
     );
     expect(deps.pipedrive.createChatTranscriptNote.mock.calls[0]?.[3])
       .toContain('CRM-Treffer: unresolved');
-    expect(deps.email.sendSupportNotification.mock.calls.map(([address]) => address)).toEqual([
-      'berg@lippelift.de',
-      'caechma@gmail.com',
-    ]);
+    expect(deps.email.sendSupportNotification.mock.calls.map(([address]) => address)).toEqual(
+      recipient === 'technik@lippelift.de'
+        ? ['technik@lippelift.de', 'lossau@lippelift.de', 'berg@lippelift.de', 'caechma@gmail.com']
+        : [recipient, 'berg@lippelift.de', 'caechma@gmail.com'],
+    );
     expect(deps.email.sendSupportNotification).toHaveBeenLastCalledWith(
       'caechma@gmail.com',
       expect.objectContaining({
-        intendedInbox: 'sales@lippelift.de',
+        intendedInbox: recipient,
         matchState: 'unresolved',
       }),
     );
     expect(result).toMatchObject({
       kind: 'service',
       completed: true,
-      recipient: 'sales@lippelift.de',
+      recipient,
       crm: { outcome: 'created', dealId: 52 },
     });
   });
@@ -505,9 +506,9 @@ describe('createRequestOrchestrator', () => {
 
   it.each([
     { hasMontageDate: true, intendedInbox: 'lossau@lippelift.de' },
-    { hasMontageDate: false, intendedInbox: 'sales@lippelift.de' },
+    { hasMontageDate: false, intendedInbox: 'lossau@lippelift.de' },
   ])(
-    'routes a uniquely matched original deal with Montagedatum=$hasMontageDate to $intendedInbox',
+    'keeps maintenance with Lossau regardless of Montagedatum=$hasMontageDate',
     async ({ hasMontageDate, intendedInbox }) => {
       const deps = baseDependencies();
       deps.pipedrive.resolveFactoryCase.mockResolvedValue({
@@ -551,6 +552,7 @@ describe('createRequestOrchestrator', () => {
         expect.stringContaining(`Zielteam: ${intendedInbox}`),
       );
       expect(deps.email.sendSupportNotification.mock.calls.map(([recipient]) => recipient)).toEqual([
+        'lossau@lippelift.de',
         'berg@lippelift.de',
         'caechma@gmail.com',
       ]);
@@ -561,6 +563,36 @@ describe('createRequestOrchestrator', () => {
       expect(result).toMatchObject({ recipient: intendedInbox, sourceCase: { dealId: 41 } });
     },
   );
+
+  it('keeps an engineering question with Technik after installation and copies Lossau and the internal recipients', async () => {
+    const deps = baseDependencies();
+    deps.pipedrive.resolveFactoryCase.mockResolvedValue({
+      matchState: 'unique', personId: 31, dealId: 41, factoryNumber: 'FN-42', hasMontageDate: true,
+    });
+    const orchestrator = createRequestOrchestrator({
+      ...deps,
+      journal: durableJournal().journal,
+      opportunityRecipient: 'sales@lippelift.de',
+      serviceCopyRecipients: 'berg@lippelift.de,caechma@gmail.com',
+    });
+
+    const result = await orchestrator.execute({
+      sessionId: 'installed-engineering', requestId: 'installed-engineering-request', mode: 'service', transcript: 'Konstruktionsfrage',
+      supportData: {
+        ownsLift: 'yes', liftManufacturer: 'lippe', factoryNumber: 'FN-42', factoryNumberStatus: 'provided',
+        serviceRequestType: 'technical', customerName: 'Erika Muster', email: 'erika@example.de', category: 'technik',
+        issueDescription: 'Frage zur Steifigkeit der Schiene.',
+      },
+    });
+
+    expect(result.recipient).toBe('technik@lippelift.de');
+    expect(deps.email.sendSupportNotification.mock.calls.map(([recipient]) => recipient)).toEqual([
+      'technik@lippelift.de',
+      'lossau@lippelift.de',
+      'berg@lippelift.de',
+      'caechma@gmail.com',
+    ]);
+  });
 
   it('routes separate-session prior-contact follow-ups to the same exact support case', async () => {
     const deps = baseDependencies();
@@ -747,7 +779,11 @@ describe('createRequestOrchestrator', () => {
     expect(deps.pipedrive.resolveFactoryCase).toHaveBeenCalledTimes(1);
     expect(deps.pipedrive.resolveSupportReferenceCase).toHaveBeenCalledTimes(1);
     expect(deps.pipedrive.appendServiceRequestToExistingCase).toHaveBeenCalledTimes(1);
-    expect(deps.email.sendSupportNotification).toHaveBeenCalledTimes(2);
+    expect(deps.email.sendSupportNotification.mock.calls.map(([recipient]) => recipient)).toEqual([
+      'technik@lippelift.de',
+      'lossau@lippelift.de',
+      'technik@lippelift.de',
+    ]);
   });
 
   it('retries only email after SMTP failure and never duplicates the Serviceanfrage', async () => {
@@ -769,7 +805,11 @@ describe('createRequestOrchestrator', () => {
     await expect(orchestrator.execute(input)).resolves.toMatchObject({ completed: true, crm: { dealId: 51 } });
     expect(deps.pipedrive.resolveFactoryCase).toHaveBeenCalledTimes(1);
     expect(deps.pipedrive.createServiceRequest).toHaveBeenCalledTimes(1);
-    expect(deps.email.sendSupportNotification).toHaveBeenCalledTimes(2);
+    expect(deps.email.sendSupportNotification.mock.calls.map(([recipient]) => recipient)).toEqual([
+      'technik@lippelift.de',
+      'lossau@lippelift.de',
+      'technik@lippelift.de',
+    ]);
   });
 
   it('retries only the failed copy recipient without duplicating successful emails or CRM writes', async () => {
@@ -805,6 +845,8 @@ describe('createRequestOrchestrator', () => {
     expect(deps.pipedrive.resolveFactoryCase).toHaveBeenCalledTimes(1);
     expect(deps.pipedrive.createServiceRequest).toHaveBeenCalledTimes(1);
     expect(deps.email.sendSupportNotification.mock.calls.map(([recipient]) => recipient)).toEqual([
+      'technik@lippelift.de',
+      'lossau@lippelift.de',
       'berg@lippelift.de',
       'caechma@gmail.com',
       'caechma@gmail.com',
@@ -835,6 +877,7 @@ describe('createRequestOrchestrator', () => {
     });
 
     expect(deps.email.sendSupportNotification.mock.calls.map(([recipient]) => recipient)).toEqual([
+      'lossau@lippelift.de',
       'berg@lippelift.de',
       'caechma@gmail.com',
     ]);
