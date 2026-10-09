@@ -323,6 +323,53 @@ describe('POST /api/chat', () => {
     expect(response).toContain('"stairType":"keine_treppe"');
   });
 
+  it('replaces a repeated captured-field question with the next required question', async () => {
+    const sessionId = 'repeat-question-session';
+    const streamChat = vi.fn(async function* () {
+      yield { type: 'token' as const, content: 'Wie lautet deine E-Mail-Adresse?' };
+      yield {
+        type: 'state' as const,
+        state: {
+          sessionId,
+          mode: 'anfrage' as const,
+          collectedData: {
+            requestSituation: 'new_lift' as const,
+            ownsLift: 'no' as const,
+            firstName: 'Petra',
+            lastName: 'Balzer',
+            email: 'petra@example.de',
+            phoneContactStatus: 'declined' as const,
+            message: 'Ich möchte einen neuen Lift.',
+          },
+        },
+      };
+    });
+    const chatRoute = createChatRoute({
+      gemini: { streamChat } as unknown as GeminiService,
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      requestOrchestrator: { execute: vi.fn() },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    });
+    const testApp = new Hono();
+    testApp.route('/', chatRoute);
+
+    const response = await (await testApp.request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId,
+        requestId: 'repeat-question-request',
+        message: 'Ich möchte einen neuen Lift.',
+        history: [],
+      }),
+    })).text();
+
+    expect(response).toContain('Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?');
+    expect(response).not.toContain('Wie lautet deine E-Mail-Adresse?');
+  });
+
   it('shows exactly one review when Gemini omits the status for a provided factory number', async () => {
     const prematureReview = [
       '**Name:** Patrick Berg **E-Mail:** patrick-berg@online.de',

@@ -273,11 +273,65 @@ const CONTACT_DETAILS_QUESTION = 'Wie lauten deine E-Mail-Adresse und Telefonnum
 const EMAIL_QUESTION = 'Wie lautet deine E-Mail-Adresse?';
 const PHONE_QUESTION = 'Für eine persönliche Beratung brauchen wir deine Telefonnummer. Wenn du keine angeben möchtest, schreiben wir dir per E-Mail. Wie lautet deine Telefonnummer?';
 
-export function ensureNextMissingQuestion(assistantText: string, nextQuestion: string): string {
-  if ([CONTACT_DETAILS_QUESTION, EMAIL_QUESTION, PHONE_QUESTION].includes(nextQuestion)) return nextQuestion;
+type IntakeQuestionIntent =
+  | 'situation' | 'name' | 'contact' | 'email' | 'phone' | 'issue' | 'prior_contact'
+  | 'reference' | 'location' | 'stair_type' | 'lift_type' | 'building' | 'segment'
+  | 'address' | 'availability' | 'manufacturer' | 'factory_number' | 'service_type' | 'other';
+
+function intakeQuestionIntent(text: string): IntakeQuestionIntent {
+  const normalized = text.replace(/[*_`]/g, '').toLocaleLowerCase('de-DE');
+  if (/neuen lift|bereits bestellt|bereits eingebaut|bestehendes anliegen|neue anfrage/.test(normalized)) return 'situation';
+  if (/vollständigen name|vollstaendigen name|wie ist dein name|wie heißt du|wie heisst du/.test(normalized)) return 'name';
+  if (/e-mail-adresse und telefonnummer|email-adresse und telefonnummer|kontaktdaten/.test(normalized)) return 'contact';
+  if (/e-?mail|email/.test(normalized)) return 'email';
+  if (/telefon|handy|mobilnummer|rückruf|rueckruf/.test(normalized)) return 'phone';
+  if (/vorherigen kontakt|kontakt mit uns|schon einmal kontakt/.test(normalized)) return 'prior_contact';
+  if (/referenz|angebotsnummer|auftragsnummer|vorgangsnummer/.test(normalized)) return 'reference';
+  if (/anliegen|problem|beschreib/.test(normalized)) return 'issue';
+  if (/drinnen|draußen|draussen|innen oder außen|innen oder aussen/.test(normalized)) return 'location';
+  if (/treppe|gerade oder kurvig|treppenverlauf/.test(normalized)) return 'stair_type';
+  if (/sitzlift|rollstuhlgeeignet|lifttyp/.test(normalized)) return 'lift_type';
+  if (/einfamilienhaus|mehrfamilienhaus|gebäude|gebaeude/.test(normalized)) return 'building';
+  if (/private anfrage|geschäftlich|geschaeftlich|firmenkunde/.test(normalized)) return 'segment';
+  if (/adresse|straße|strasse|postleitzahl|plz|stadt/.test(normalized)) return 'address';
+  if (/erreichbar|uhrzeit|zeitfenster|vormittag|nachmittag/.test(normalized)) return 'availability';
+  if (/hersteller|lippe lift oder/.test(normalized)) return 'manufacturer';
+  if (/fabriknummer|etikett/.test(normalized)) return 'factory_number';
+  if (/technik, rechnung|rechnung, vertrag|ersatzteile und montage/.test(normalized)) return 'service_type';
+  return 'other';
+}
+
+function questionIntents(text: string): IntakeQuestionIntent[] {
+  return text.split(/(?<=[?])\s+/).filter((part) => part.includes('?')).map(intakeQuestionIntent);
+}
+
+const INTAKE_REPEAT_RECOVERY = 'Ich knüpfe an deine bisherigen Angaben an. Ergänze einfach noch, was dir wichtig ist.';
+
+export function ensureNextMissingQuestion(
+  assistantText: string,
+  nextQuestion: string,
+  history: ChatMessage[] = [],
+): string {
+  const expectedIntent = intakeQuestionIntent(nextQuestion);
+  const alreadyAsked = history.some((message) => message.role === 'assistant'
+    && questionIntents(message.content).includes(expectedIntent));
+  if (alreadyAsked) return INTAKE_REPEAT_RECOVERY;
+
   const trimmed = assistantText.trim();
   if (!trimmed || containsVerificationQuestion(trimmed)) return nextQuestion;
-  if (trimmed.includes(nextQuestion) || trimmed.includes('?')) return trimmed;
+  if ([CONTACT_DETAILS_QUESTION, EMAIL_QUESTION, PHONE_QUESTION].includes(nextQuestion)) return nextQuestion;
+
+  const currentQuestions = questionIntents(trimmed);
+  const matchingQuestion = currentQuestions.includes(expectedIntent);
+  if (currentQuestions.length > 0 && (!matchingQuestion || currentQuestions.length > 1)) {
+    const acknowledgment = trimmed
+      .split(/(?<=[.!?])\s+/)
+      .filter((sentence) => !sentence.includes('?'))
+      .join(' ')
+      .trim();
+    return acknowledgment ? `${acknowledgment}\n\n${nextQuestion}` : nextQuestion;
+  }
+  if (matchingQuestion) return trimmed;
   return `${trimmed}\n\n${nextQuestion}`;
 }
 

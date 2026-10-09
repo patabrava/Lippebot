@@ -576,7 +576,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
       await stream.writeSSE({
         data: JSON.stringify({
           type: 'token',
-          content: ensureNextMissingQuestion(assistantText, nextQuestion),
+          content: ensureNextMissingQuestion(assistantText, nextQuestion, history),
         }),
       });
       await stream.writeSSE({
@@ -612,7 +612,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
         intakeState.collectedData,
         { priorContactReferenceAsked: intakeState.priorContactReferenceAsked },
       );
-      const content = ensureNextMissingQuestion(assistantText, nextQuestion);
+      const content = ensureNextMissingQuestion(assistantText, nextQuestion, history);
       await stream.writeSSE({ data: JSON.stringify({ type: 'token', content }) });
       await stream.writeSSE({
         data: JSON.stringify({

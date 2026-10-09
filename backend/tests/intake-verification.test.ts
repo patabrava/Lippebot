@@ -365,6 +365,36 @@ describe('intake verification', () => {
     ].join('\n'));
   });
 
+  it('replaces a model question about an already captured field with the next missing field', () => {
+    expect(ensureNextMissingQuestion(
+      'Wie lautet deine E-Mail-Adresse?',
+      'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?',
+    )).toBe('Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?');
+  });
+
+  it('does not repeat a question when the same intent was asked earlier in different words', () => {
+    expect(ensureNextMissingQuestion(
+      'Alles klar.',
+      'Ist der Lift für drinnen oder draußen?',
+      [{ role: 'assistant', content: 'Soll der Lift innen oder außen eingesetzt werden?', timestamp: 1 }],
+    )).toBe('Ich knüpfe an deine bisherigen Angaben an. Ergänze einfach noch, was dir wichtig ist.');
+  });
+
+  it('keeps a model question when it matches the next missing field and is new', () => {
+    expect(ensureNextMissingQuestion(
+      'Danke für die Info. Wie ist dein vollständiger Name?',
+      'Wie ist dein vollständiger Name?',
+      [],
+    )).toBe('Danke für die Info. Wie ist dein vollständiger Name?');
+  });
+
+  it('reduces multiple model questions to the single next required question', () => {
+    expect(ensureNextMissingQuestion(
+      'Wie ist dein Name? Und wie lautet deine E-Mail-Adresse?',
+      'Wie ist dein vollständiger Name?',
+    )).toBe('Wie ist dein vollständiger Name?');
+  });
+
   it('shows the compact lead contact question without a model-generated introduction', () => {
     const contactQuestion = 'Wie lauten deine E-Mail-Adresse und Telefonnummer?';
 
