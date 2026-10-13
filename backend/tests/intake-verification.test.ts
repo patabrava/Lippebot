@@ -372,12 +372,31 @@ describe('intake verification', () => {
     )).toBe('Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?');
   });
 
-  it('does not repeat a question when the same intent was asked earlier in different words', () => {
+  it('keeps an unanswered required field actionable rather than returning vague filler', () => {
     expect(ensureNextMissingQuestion(
       'Alles klar.',
       'Ist der Lift für drinnen oder draußen?',
       [{ role: 'assistant', content: 'Soll der Lift innen oder außen eingesetzt werden?', timestamp: 1 }],
-    )).toBe('Ich knüpfe an deine bisherigen Angaben an. Ergänze einfach noch, was dir wichtig ist.');
+    )).toBe('Alles klar.\n\nIst der Lift für drinnen oder draußen?');
+  });
+
+  it('removes a repeated imperative inquiry prompt even without a question mark', () => {
+    expect(ensureNextMissingQuestion(
+      'Alles klar, es geht um die technische Planung. Beschreibe mir bitte kurz, worum es bei deiner Anfrage geht.',
+      'Hattest du wegen dieses Anliegens schon einmal Kontakt mit uns?',
+    )).toBe('Alles klar, es geht um die technische Planung.\n\nHattest du wegen dieses Anliegens schon einmal Kontakt mit uns?');
+  });
+
+  it('classifies the actual question rather than an email mentioned in its acknowledgment', () => {
+    const text = 'Deine E-Mail ist notiert. Wie ist dein vollständiger Name?';
+    expect(ensureNextMissingQuestion(text, 'Wie ist dein vollständiger Name?')).toBe(text);
+  });
+
+  it('does not append another name question to an embedded request for name and contact details', () => {
+    expect(ensureNextMissingQuestion(
+      'Alles klar. Damit ein Berater dir die Unterlagen senden kann, nenne mir bitte deinen vollständigen Namen, deine E-Mail-Adresse und Telefonnummer.',
+      'Wie ist dein vollständiger Name?',
+    )).toBe('Alles klar.\n\nWie ist dein vollständiger Name?');
   });
 
   it('keeps a model question when it matches the next missing field and is new', () => {

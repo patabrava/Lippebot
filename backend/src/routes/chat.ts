@@ -19,6 +19,7 @@ import { hasPriorContactStatus } from '../contact/prior-contact.js';
 import { buildPipedriveTranscriptNote } from '../chat/transcript.js';
 import { formatBerlinDateTime } from '../time/berlin.js';
 import { detectEmergency } from '../request/request-policy.js';
+import { currentRequestHistory, reconcileIntakeContext } from '../request/intake-context.js';
 import type { RequestOrchestrator } from '../request/request-orchestrator.js';
 import {
   parseEmailRecipients,
@@ -374,7 +375,8 @@ export function createChatRoute(deps: ChatDeps): Hono {
       priorContactReferenceAsked: false,
     };
 
-    const inferredPriorContact = inferPriorContactFromHistory(history, message);
+    if (!intakeState.completed) intakeState = reconcileIntakeContext(intakeState, history, message);
+    const inferredPriorContact = inferPriorContactFromHistory(currentRequestHistory(history), message);
     if (!hasPriorContactStatus(intakeState.collectedData) && inferredPriorContact) {
       intakeState = {
         ...intakeState,
@@ -509,7 +511,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
       const gen = deps.gemini.streamChat(
         sessionId,
         message,
-        history,
+        currentRequestHistory(history),
         buildAuthoritativeStateContext(intakeState),
       );
 
@@ -554,13 +556,13 @@ export function createChatRoute(deps: ChatDeps): Hono {
       }
     }
 
-    intakeState = {
+    intakeState = reconcileIntakeContext({
       mode: lastMode,
       collectedData: normalizeCollectedData(mergeCollectedData(intakeState.collectedData, lastCollectedData)),
       awaitingVerification: intakeState.awaitingVerification,
       completed: false,
       priorContactReferenceAsked: intakeState.priorContactReferenceAsked ?? false,
-    };
+    }, history, message);
 
     const ready = isRequestReady(intakeState.mode, intakeState.collectedData);
     verificationConfirmed = verificationReply && ready;

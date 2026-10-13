@@ -28,10 +28,11 @@ const salesIssuePattern = /\b(?:vertrag|vertragsbestätigung|vertragsbestaetigun
 const installationIssuePattern = /\b(?:ersatzteil|montage|montier\w*|installation|einbau|fertigstellung|fertiggestellt|gewährleistung|gewaehrleistung|garantie)\b/i;
 const liftContextPattern = /\b(?:sitzlift|treppenlift|plattformlift|lift)\b/i;
 const negatedRepairPattern = /\b(?:nicht|kein(?:e|en|er|es)?)\s+(?:kaputt|defekt|beschädigt|beschaedigt)\b/i;
-const explicitNewLiftDemandPattern = /\b(?:benötig\w*|benoetig\w*|brauch\w*|such\w*|möcht\w*|moecht\w*)\b[^.!?\n]{0,100}\b(?:einen|eine|ein)\s+(?:(?:neuen?|passenden?|geeigneten?|rollstuhlgeeigneten?)\s+)*(?:senkrechtaufzug|aufzug|sitzlift|treppenlift|plattformlift|hublift|lift)\b/i;
+const explicitNewLiftDemandPattern = /\b(?:benötig\w*|benoetig\w*|brauch\w*|such\w*|möcht\w*|moecht\w*|hätt\w*|haett\w*|will|plan\w*)\b[^.!?\n]{0,100}\b(?:einen|eine|ein)\s+(?:(?:neuen?|passenden?|geeigneten?|rollstuhlgeeigneten?|vertikalen?)\s+)*(?:senkrechtaufzug|aufzug|sitzlift|treppenlift|plattformlift|hublift|lift)\b/i;
 const explicitExistingLiftPattern = /\b(?:bereits|schon)\b[^.!?\n]{0,100}\b(?:bestellt|gekauft|eingebaut|montiert)\b|\b(?:vorhanden\w*|eingebaut\w*|bestellt\w*)\s+(?:aufzug|sitzlift|treppenlift|plattformlift|hublift|lift)\b/i;
 const noStaircasePattern = /\b(?:keine?\s+(?:klassische\s+)?treppe(?:\s+vorhanden)?|ohne\s+(?:klassische\s+)?treppe|treppe\s+(?:ist\s+)?nicht\s+vorhanden)\b/i;
-const verticalLiftPattern = /\b(?:hublift|senkrechtlift|senkrechtaufzug|vertikallift)\b/i;
+const verticalLiftPattern = /\b(?:hublift|senkrechtlift|senkrechtaufzug|vertikallift)\b|\bvertikal\w*\s+plattform(?:lift|hublift)\w*\b/i;
+const plannedLiftPattern = /\bplan\w*\b[^.!?\n]{0,160}\b(?:einbau|installation)\b[^.!?\n]{0,160}\b(?:plattformlift|plattformhublift|hublift|sitzlift|treppenlift|lift)\w*\b/i;
 
 export function inferLeadStairType(message: string): LeadData['stairType'] | undefined {
   if (noStaircasePattern.test(message) || verticalLiftPattern.test(message)) {
@@ -90,19 +91,17 @@ export function inferExplicitLeadContext(message: string): {
   const normalized = message.trim();
   if (!normalized || explicitExistingLiftPattern.test(normalized)) return undefined;
 
-  const candidate = issueCandidates(normalized).find((part) => explicitNewLiftDemandPattern.test(part));
+  const candidate = issueCandidates(normalized).find((part) => explicitNewLiftDemandPattern.test(part) || plannedLiftPattern.test(part));
   if (!candidate) return undefined;
 
-  const concern = normalized.includes('\n')
-    ? candidate
-    : normalized.replace(/\s+/g, ' ');
+  const concern = normalized;
   const stairType = inferLeadStairType(concern);
   return {
     mode: 'anfrage',
     collectedData: {
       requestSituation: 'new_lift',
       ownsLift: 'no',
-      message: concern.slice(0, 500),
+      message: concern,
       ...(stairType ? { stairType } : {}),
     },
   };
@@ -302,20 +301,19 @@ function intakeQuestionIntent(text: string): IntakeQuestionIntent {
 }
 
 function questionIntents(text: string): IntakeQuestionIntent[] {
-  return text.split(/(?<=[?])\s+/).filter((part) => part.includes('?')).map(intakeQuestionIntent);
+  return text.split(/(?<=[.!?])\s+|\n+/)
+    .filter((part) => part.includes('?')
+      || /\b(?:beschreibe|schreibe|nenne|teile|sag)\s+(?:mir|uns|bitte|die|deine?|kurz)\b/i.test(part)
+      || /\b(?:brauche|benötige|benoetige)\s+(?:ich|wir)\b/i.test(part))
+    .map(intakeQuestionIntent);
 }
-
-const INTAKE_REPEAT_RECOVERY = 'Ich knüpfe an deine bisherigen Angaben an. Ergänze einfach noch, was dir wichtig ist.';
 
 export function ensureNextMissingQuestion(
   assistantText: string,
   nextQuestion: string,
-  history: ChatMessage[] = [],
+  _history: ChatMessage[] = [],
 ): string {
-  const expectedIntent = intakeQuestionIntent(nextQuestion);
-  const alreadyAsked = history.some((message) => message.role === 'assistant'
-    && questionIntents(message.content).includes(expectedIntent));
-  if (alreadyAsked) return INTAKE_REPEAT_RECOVERY;
+  const expectedIntent = questionIntents(nextQuestion).at(-1) ?? intakeQuestionIntent(nextQuestion);
 
   const trimmed = assistantText.trim();
   if (!trimmed || containsVerificationQuestion(trimmed)) return nextQuestion;
@@ -324,11 +322,11 @@ export function ensureNextMissingQuestion(
   const currentQuestions = questionIntents(trimmed);
   const matchingQuestion = currentQuestions.includes(expectedIntent);
   if (currentQuestions.length > 0 && (!matchingQuestion || currentQuestions.length > 1)) {
-    const acknowledgment = trimmed
-      .split(/(?<=[.!?])\s+/)
-      .filter((sentence) => !sentence.includes('?'))
-      .join(' ')
-      .trim();
+    const firstSentence = trimmed.split(/(?<=[.!?])\s+|\n+/)[0];
+    const acknowledgment = questionIntents(firstSentence).length === 0
+      && /^(?:verstanden|danke|alles klar|verstehe|klar|super)\b/i.test(firstSentence)
+      && !/\b(?:meinte|fehlt|brauche|benötige)\b/i.test(firstSentence)
+      ? firstSentence : '';
     return acknowledgment ? `${acknowledgment}\n\n${nextQuestion}` : nextQuestion;
   }
   if (matchingQuestion) return trimmed;
@@ -536,7 +534,7 @@ export function buildVerificationMessage(mode: Mode, data: CollectedRequestData)
 
 export function buildAuthoritativeStateContext(state: IntakeState): string {
   const hasExplicitIssue = !!(
-    state.collectedData.issueDescription
+    state.mode === 'service' && state.collectedData.issueDescription
     && state.collectedData.category
     && state.collectedData.serviceRequestType
   );
@@ -545,6 +543,9 @@ export function buildAuthoritativeStateContext(state: IntakeState): string {
     `Modus: ${state.mode}`,
     `Bereits erfasste Daten: ${JSON.stringify(state.collectedData)}`,
     'Bereits erfasste Werte nicht erneut abfragen. Neue oder korrigierte Angaben im report_state vollständig übernehmen.',
+    state.mode === 'anfrage' && state.collectedData.message
+      ? 'Das Neukauf-Anliegen ist bereits in message erfasst, einschließlich technischer Zeichnungen, Projektplanung und Einbaumaße. Frage NICHT erneut, worum es bei der Anfrage geht. Technische Begriffe ändern die bereits geklärte Situation new_lift nicht in eine Serviceanfrage.'
+      : '',
     hasExplicitIssue
       ? 'Das Anliegen, der Service-Typ und die Kategorie sind bereits eindeutig. Erkenne das konkrete Anliegen kurz an und frage NICHT erneut, ob es um Technik, Rechnung, Vertrag, Ersatzteile oder Montage geht.'
       : 'Wenn die aktuelle Nachricht oder eingefügter Text das Anliegen eindeutig beschreibt, übernimm Beschreibung, Service-Typ und Kategorie sofort und frage nicht allgemein nach der Art des Anliegens.',
