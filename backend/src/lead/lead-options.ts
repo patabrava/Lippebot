@@ -40,6 +40,14 @@ const liftTypeAliases: Record<string, NonNullable<LeadData['liftType']>> = {
   rollstuhl: 'rollstuhlgeeignet',
   plattformlift: 'rollstuhlgeeignet',
   sitzlift: 'sitzlift',
+  sitztreppenlift: 'sitzlift',
+};
+
+const customerSegmentAliases: Record<string, NonNullable<LeadData['customerSegment']>> = {
+  privatperson: 'privatperson', privat: 'privatperson', privateanfrage: 'privatperson',
+  privateperson: 'privatperson',
+  firma: 'firma', firmenkunde: 'firma', firmenkundin: 'firma', geschäftlich: 'firma', geschaeftlich: 'firma',
+  geschäftskunde: 'firma', geschaeftskunde: 'firma', b2b: 'firma', unternehmen: 'firma',
 };
 
 function resolveAlias<T extends string>(
@@ -72,6 +80,10 @@ export function normalizeLiftType(
   value: unknown,
 ): NonNullable<LeadData['liftType']> | undefined {
   return resolveAlias(liftTypeAliases, value);
+}
+
+export function normalizeCustomerSegment(value: unknown): NonNullable<LeadData['customerSegment']> | undefined {
+  return resolveAlias(customerSegmentAliases, value);
 }
 
 export function stairLocationLabel(value: unknown): string | undefined {

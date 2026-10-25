@@ -130,6 +130,17 @@ describe('service recipients', () => {
 });
 
 describe('emergency interruption', () => {
+  it.each(['Niemand ist eingeschlossen.', 'Mein Lift ist kaputt. Niemand ist im Lift eingeschlossen.', 'Keine Person wurde verletzt.'])(
+    'does not interrupt for an explicit denial: %s', (message) => {
+      expect(detectEmergency(message)).toEqual({ emergency: false, show112: false });
+    },
+  );
+
+  it.each(['Niemand ist eingeschlossen, aber Rauch kommt aus dem Lift.', 'Niemand ist verletzt. Meine Mutter ist im Lift eingeschlossen.'])(
+    'retains a separate positive hazard: %s', (message) => {
+      expect(detectEmergency(message)).toEqual({ emergency: true, show112: true });
+    },
+  );
   it.each([
     'Eine Person steckt im Lift fest.',
     'Meine Mutter ist im Lift eingeschlossen.',

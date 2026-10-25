@@ -7,7 +7,7 @@ import {
   isUsablePhone,
 } from '../contact/contact-method.js';
 import { hasPriorContactStatus } from '../contact/prior-contact.js';
-import { stairTypeLabel } from '../lead/lead-options.js';
+import { stairTypeLabel, normalizeStairLocation, normalizeStairType, normalizeBuildingType, normalizeLiftType, normalizeCustomerSegment } from '../lead/lead-options.js';
 
 export type CollectedRequestData = Partial<LeadData & SupportData>;
 
@@ -174,7 +174,12 @@ export function mergeCollectedData(
 }
 
 export function normalizeCollectedData(data: CollectedRequestData): CollectedRequestData {
-  let normalized = data;
+  let normalized = { ...data };
+  if (data.stairLocation !== undefined) normalized.stairLocation = normalizeStairLocation(data.stairLocation);
+  if (data.stairType !== undefined) normalized.stairType = normalizeStairType(data.stairType);
+  if (data.buildingType !== undefined) normalized.buildingType = normalizeBuildingType(data.buildingType);
+  if (data.liftType !== undefined) normalized.liftType = normalizeLiftType(data.liftType);
+  if (data.customerSegment !== undefined) normalized.customerSegment = normalizeCustomerSegment(data.customerSegment);
   if (hasPhoneContactMethod(data) && data.phoneContactStatus !== 'provided') {
     normalized = { ...normalized, phoneContactStatus: 'provided' };
   }
@@ -543,6 +548,9 @@ export function buildAuthoritativeStateContext(state: IntakeState): string {
     `Modus: ${state.mode}`,
     `Bereits erfasste Daten: ${JSON.stringify(state.collectedData)}`,
     'Bereits erfasste Werte nicht erneut abfragen. Neue oder korrigierte Angaben im report_state vollständig übernehmen.',
+    state.mode === 'berater'
+      ? 'Die Person ist noch in der Orientierung im Chat. Wähle passende Vertiefungsfragen zum gewählten Thema: Alltag und Wünsche bei der Liftauswahl, Informationsbedarf und Antragsschritt bei Förderung, Informationsbedarf bei Service und Wartung. Stelle keine Formularfragen oder Kontaktabfragen. Ein bekannter Bedarf für einen neuen Lift allein startet keine Übergabe. Wechsle erst bei ausdrücklichem Wunsch nach einem Angebot, Rückruf oder Beratung durch einen Mitarbeiter zu mode = anfrage. Bei einem konkreten Serviceauftrag oder einer Störungsmeldung wechsle direkt zu mode = service; die Sicherheitsunterbrechung hat Vorrang.'
+      : '',
     state.mode === 'anfrage' && state.collectedData.message
       ? 'Das Neukauf-Anliegen ist bereits in message erfasst, einschließlich technischer Zeichnungen, Projektplanung und Einbaumaße. Frage NICHT erneut, worum es bei der Anfrage geht. Technische Begriffe ändern die bereits geklärte Situation new_lift nicht in eine Serviceanfrage.'
       : '',

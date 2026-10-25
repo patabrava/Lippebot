@@ -110,14 +110,39 @@ export function reconcileIntakeContext(
       if (!concerns.includes(concern)) concerns.push(concern);
     }
   }
-  const description = concerns.join('\n\n') || data.message || data.issueDescription;
+  const openingPattern = /^(?:welcher (?:treppen)?lift passt zu mir|förderung\s*&\s*zuschüsse|service\s*&\s*wartung)[?!.]*$/iu;
+  const hasAdvisoryOpening = turns.some((turn) => turn.role === 'user' && openingPattern.test(turn.content.trim()));
+  // Model summaries can shrink over a long intake. Preserve the customer's
+  // original discovery answers before the first form question as well.
+  const formStart = turns.findIndex((turn) => turn.role === 'assistant'
+    && /wie (?:ist|lautet).*name|wie heißt du|wie heisst du|e-mail|telefonnummer|kontaktdaten|bereits bestellten lift/i.test(turn.content));
+  const discovery = hasAdvisoryOpening ? turns.slice(0, formStart < 0 ? undefined : formStart)
+    .filter((turn) => turn.role === 'user' && !openingPattern.test(turn.content.trim())
+      && turn.content.trim().split(/\s+/).length >= 3)
+    .map((turn) => turn.content.trim()) : [];
+  const descriptions: string[] = [];
+  for (const part of [...discovery, ...concerns, data.message || data.issueDescription].filter((value): value is string => !!value)) {
+    if (descriptions.some((existing) => existing.includes(part))) continue;
+    for (let index = descriptions.length - 1; index >= 0; index -= 1) {
+      if (part.includes(descriptions[index])) descriptions.splice(index, 1);
+    }
+    descriptions.push(part);
+  }
+  const description = hasAdvisoryOpening ? descriptions.join('\n\n')
+    : concerns.join('\n\n') || data.message || data.issueDescription;
   if (description) {
     // One customer concern survives transitions between technical service and
     // sales intake, whose submission schemas use different description keys.
     data.message = description;
     data.issueDescription = description;
   }
-  const mode = situation === 'new_lift' ? 'anfrage'
+  // Choosing an informational opening starts discovery, not a handoff. Keep
+  // collecting facts without letting a new-lift mention start the form. The
+  // model switches to anfrage only after the customer requests a handoff.
+  const advisoryConversation = (state.mode === 'berater' || state.mode === 'undetermined')
+    && hasAdvisoryOpening;
+  const mode = advisoryConversation && (!situation || situation === 'new_lift') ? 'berater'
+    : situation === 'new_lift' ? 'anfrage'
     : situation === 'ordered_not_installed' || situation === 'installed_lift' ? 'service'
       : state.mode;
   if (situation) {

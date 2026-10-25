@@ -22,6 +22,21 @@ import {
 } from '../src/request/intake-verification.js';
 
 describe('intake verification', () => {
+  const optionVariants = ['innen', 'Innentreppe', 'drinnen'].flatMap((location) =>
+    ['gerade', 'Gerade'].flatMap((stair) =>
+      ['einfamilienhaus', 'Einfamilienhaus'].flatMap((building) =>
+        ['sitzlift', 'Sitzlift', 'Sitztreppenlift'].flatMap((lift) =>
+          ['privatperson', 'Privat'].map((segment) => [location, stair, building, lift, segment])))));
+  it.each(optionVariants)('normalizes mixed model labels %s / %s / %s / %s / %s for storage', (stairLocation, stairType, buildingType, liftType, customerSegment) => {
+    expect(normalizeCollectedData({ stairLocation, stairType, buildingType, liftType, customerSegment } as unknown as Parameters<typeof normalizeCollectedData>[0])).toMatchObject({
+      stairLocation: 'innen', stairType: 'gerade', buildingType: 'einfamilienhaus', liftType: 'sitzlift', customerSegment: 'privatperson',
+    });
+  });
+
+  it('keeps canonical fields and discovery answers when a later model report contains unsupported labels', () => {
+    const saved = { stairLocation: 'innen' as const, liftType: 'sitzlift' as const, message: 'Selbstständig in den Garten; einfache Bedienung.' };
+    expect(mergeCollectedData(saved, { stairLocation: 'weiß nicht', liftType: 'noch offen' })).toMatchObject(saved);
+  });
   it.each([
     'ja',
     'Ja, stimmt.',

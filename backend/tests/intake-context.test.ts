@@ -78,6 +78,38 @@ describe('customer intake context', () => {
     expect(reconcileIntakeContext({ ...emptyState, mode: 'berater' }, [], 'Was kostet der STL300?').mode).toBe('berater');
   });
 
+  it('recovers discovery after state loss even if the customer describes a new lift', () => {
+    const state = reconcileIntakeContext(emptyState, [user('Welcher Lift passt zu mir?')], 'Ich suche einen Lift für meine Mutter.');
+    expect(state.mode).toBe('berater');
+    expect(state.collectedData).toMatchObject({ requestSituation: 'new_lift', ownsLift: 'no' });
+  });
+
+  it('preserves the complete service concern instead of an earlier shortened advisory summary', () => {
+    const issue = 'Mein Sitzlift ist schon eingebaut und kaputt. Er bleibt auf halber Strecke stehen. Ich möchte das zur Reparatur weitergeben.';
+    const state = reconcileIntakeContext({ ...emptyState, mode: 'service', collectedData: {
+      message: 'Lift bleibt auf halber Strecke stehen.', issueDescription: 'Lift bleibt auf halber Strecke stehen.',
+    } }, [user('Service & Wartung'), user(issue)], 'test@example.invalid');
+    expect(state.mode).toBe('service');
+    expect(state.collectedData.issueDescription).toContain(issue);
+  });
+
+  it('retains funding discovery facts even when later model summaries shorten them', () => {
+    const history: ChatMessage[] = [user('Förderung & Zuschüsse'),
+      { role: 'assistant', content: 'Brauchst du Hilfe beim Antrag?', timestamp: 2 },
+      user('Ein Pflegegrad ist vorhanden. Ich brauche Hilfe beim Antrag.'),
+      { role: 'assistant', content: 'Wie ist dein vollständiger Name?', timestamp: 3 }, user('Alex Beispiel')];
+    const state = reconcileIntakeContext({ ...emptyState, mode: 'anfrage', collectedData: { message: 'Angebot für einen neuen Lift.' } }, history, 'test@example.invalid');
+    expect(state.collectedData.message).toContain('Ein Pflegegrad ist vorhanden');
+    expect(state.collectedData.message).toContain('Hilfe beim Antrag');
+    expect(state.collectedData.message).not.toContain('Alex Beispiel');
+  });
+
+  it('leaves discovery for an explicitly ordered or installed lift', () => {
+    const history = [user('Welcher Lift passt zu mir?')];
+    expect(reconcileIntakeContext(emptyState, history, 'Der Lift ist bereits bestellt').mode).toBe('service');
+    expect(reconcileIntakeContext(emptyState, history, 'Der Lift ist schon eingebaut').mode).toBe('service');
+  });
+
   it('does not reuse concerns from a completed request', () => {
     const history: ChatMessage[] = [user(stl300Inquiry), { role: 'assistant', content: 'Gerne. Beschreibe mir bitte kurz dein weiteres Anliegen.', timestamp: 2 }, user('Meine Rechnung ist falsch.')];
     expect(currentRequestHistory(history)).toHaveLength(1);

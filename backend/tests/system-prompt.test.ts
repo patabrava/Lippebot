@@ -21,6 +21,26 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('Service-Modus');
   });
 
+  it('starts lift selection with adaptive discovery before requesting a handoff', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('"Welcher Lift passt zu mir?" und "Förderung & Zuschüsse" starten im Berater-Modus');
+    expect(prompt).toContain('Was macht das Treppensteigen im Alltag gerade schwierig?');
+    expect(prompt).toContain('zwei bis drei passenden Vertiefungsfragen über mehrere Nachrichten');
+    expect(prompt).toContain('Wähle die nächste Frage aus der letzten Antwort');
+    expect(prompt).toContain('In dieser Orientierungsphase fragst du nicht nach Name, Kontaktdaten');
+    expect(prompt).toContain('Ein "Ja" auf eine Bedarfsfrage ist keine Zustimmung zur Übergabe');
+    expect(prompt).toContain('direkt ein Angebot oder einen Rückruf möchte');
+  });
+
+  it('gives funding and service their own contextual follow-ups without delaying concrete service requests', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('welche Fördermöglichkeiten es gibt, oder brauchst du Hilfe beim Antrag?');
+    expect(prompt).toContain('An welchem Schritt kommst du gerade nicht weiter?');
+    expect(prompt).toContain('Was möchtest du zu Service oder Wartung wissen?');
+    expect(prompt).toContain('Der Button allein ist noch kein konkreter Serviceauftrag');
+    expect(prompt).toContain('Verzögere das nicht durch zusätzliche Orientierungsfragen');
+  });
+
   it('asks for customer segment in lead capture', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('Kundensegment');

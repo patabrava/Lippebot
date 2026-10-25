@@ -406,6 +406,7 @@ export function createChatRoute(deps: ChatDeps): Hono {
       : inferExplicitLeadContext(message);
     if (explicitLeadContext
       && intakeState.mode !== 'service'
+      && intakeState.mode !== 'berater'
       && !['ordered_not_installed', 'installed_lift'].includes(String(intakeState.collectedData.requestSituation))) {
       intakeState = {
         ...intakeState,
@@ -566,6 +567,14 @@ export function createChatRoute(deps: ChatDeps): Hono {
 
     const ready = isRequestReady(intakeState.mode, intakeState.collectedData);
     verificationConfirmed = verificationReply && ready;
+    if (intakeState.mode === 'berater' || intakeState.mode === 'undetermined') {
+      intakeStates.set(requestId, intakeState);
+      await stream.writeSSE({ data: JSON.stringify({ type: 'token', content: assistantText }) });
+      await stream.writeSSE({
+        data: JSON.stringify({ type: 'done', mode: intakeState.mode, collectedData: intakeState.collectedData }),
+      });
+      return;
+    }
     if (!verificationConfirmed && needsPriorContactReferenceQuestion(intakeState)) {
       intakeState.awaitingVerification = false;
       intakeState.priorContactReferenceAsked = true;

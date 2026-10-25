@@ -7,6 +7,7 @@ import { EmailDeliveryError, type EmailService } from '../src/services/email.js'
 import type { ConversationTracker } from '../src/services/conversation-tracking.js';
 import { createRequestJournal } from '../src/request/request-journal.js';
 import { createRequestOrchestrator } from '../src/request/request-orchestrator.js';
+import type { ChatMessage, LeadData } from '../src/types/index.js';
 
 function createMockGemini(): GeminiService {
   return {
@@ -113,6 +114,116 @@ describe('POST /api/chat', () => {
       body: JSON.stringify({ sessionId: 'test-123', requestId: 'bad request id!', message: 'Hallo', history: [] }),
     });
     expect(res.status).toBe(400);
+  });
+
+  it.each([
+    ['Welcher Lift passt zu mir?', 'Was macht das Treppensteigen im Alltag gerade schwierig?'],
+    ['Förderung & Zuschüsse', 'Geht es dir um die Voraussetzungen für einen Zuschuss?'],
+    ['Service & Wartung', 'Was möchtest du zu Service oder Wartung wissen?'],
+  ])('preserves an advisory reply to %s instead of adding a form question', async (message, reply) => {
+    const execute = vi.fn();
+    const testApp = new Hono().route('/', createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'token' as const, content: reply };
+          yield { type: 'state' as const, state: { sessionId, mode: 'berater' as const, collectedData: {} } };
+        },
+      },
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      requestOrchestrator: { execute },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    }));
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'advisory', requestId: 'advisory-request', message, history: [] }),
+    })).text();
+
+    expect(text).toContain(JSON.stringify({ type: 'token', content: reply }));
+    expect(text).toContain('"mode":"berater"');
+    expect(text).not.toContain('bereits bestellten Lift');
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('continues discovery across new-lift answers and preserves the needs when starting a requested handoff', async () => {
+    const need = 'Ich suche einen Lift für meine Mutter an der Innentreppe.';
+    const summary = `${need} Sie möchte wieder selbstständig in den Garten; eine einfache Bedienung ist wichtig.`;
+    const steps: { message: string; reply: string; mode: 'berater' | 'anfrage'; data: LeadData }[] = [
+      { message: 'Welcher Lift passt zu mir?', reply: 'Was macht das Treppensteigen im Alltag gerade schwierig?', mode: 'berater', data: {} },
+      { message: need, reply: 'Welche Wege möchte deine Mutter wieder selbstständig schaffen?', mode: 'berater', data: { message: need, stairLocation: 'innen' } },
+      { message: 'Sie möchte wieder selbstständig in den Garten.', reply: 'Was ist ihr bei der Unterstützung besonders wichtig?', mode: 'berater', data: {} },
+      { message: 'Eine einfache Bedienung.', reply: 'Möchtest du eine kostenlose Beratung durch einen Mitarbeiter anfordern?', mode: 'berater', data: { message: summary } },
+      { message: 'Ja, gerne.', reply: 'Wie ist dein vollständiger Name?', mode: 'anfrage', data: {} },
+    ];
+    const streamChat = vi.fn(async function* (sessionId: string, message: string, _history: ChatMessage[], context?: string) {
+      const step = steps.find((entry) => entry.message === message)!;
+      expect(context).toContain('Modus: berater');
+      yield { type: 'token' as const, content: step.reply };
+      yield { type: 'state' as const, state: { sessionId, mode: step.mode, collectedData: step.data } };
+    });
+    const execute = vi.fn();
+    const testApp = new Hono().route('/', createChatRoute({
+      gemini: { streamChat },
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      requestOrchestrator: { execute },
+      notificationEmailTo: '',
+      serviceEmailTo: '',
+    }));
+    const history: ChatMessage[] = [];
+    for (const step of steps) {
+      const text = await (await testApp.request('/api/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: 'discovery', requestId: 'discovery-request', message: step.message, history }),
+      })).text();
+      expect(text).toContain(JSON.stringify({ type: 'token', content: step.reply }));
+      expect(text).toContain(`"mode":"${step.mode}"`);
+      if (step.mode === 'anfrage') {
+        expect(text).toContain(summary);
+        expect(text).toContain('"stairLocation":"innen"');
+        expect(text).toContain('"requestSituation":"new_lift"');
+      }
+      history.push(
+        { role: 'user', content: step.message, timestamp: history.length + 1 },
+        { role: 'assistant', content: step.reply, timestamp: history.length + 2 },
+      );
+    }
+    expect(streamChat).toHaveBeenCalledTimes(steps.length);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('starts intake immediately when a service-opening visitor reports an installed lift fault', async () => {
+    const execute = vi.fn();
+    const testApp = new Hono().route('/', createChatRoute({
+      gemini: {
+        async *streamChat(sessionId: string) {
+          yield { type: 'token' as const, content: 'Wie ist dein vollständiger Name?' };
+          yield { type: 'state' as const, state: { sessionId, mode: 'service' as const, collectedData: {
+            requestSituation: 'installed_lift' as const, ownsLift: 'yes' as const,
+          } } };
+        },
+      },
+      pipedrive: createMockPipedrive(),
+      email: createMockEmail(),
+      requestOrchestrator: { execute },
+      notificationEmailTo: '', serviceEmailTo: '',
+    }));
+    const text = await (await testApp.request('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'service-discovery', requestId: 'service-discovery-request',
+        message: 'Mein Lift ist schon eingebaut und jetzt kaputt.',
+        history: [
+          { role: 'user', content: 'Service & Wartung', timestamp: 1 },
+          { role: 'assistant', content: 'Was möchtest du zu Service oder Wartung wissen?', timestamp: 2 },
+        ],
+      }),
+    })).text();
+    expect(text).toContain('Wie ist dein vollständiger Name?');
+    expect(text).toContain('"mode":"service"');
+    expect(text).toContain('"serviceRequestType":"repair"');
+    expect(text).not.toContain('besonders wichtig');
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it('interrupts an emergency immediately without Gemini or side effects', async () => {

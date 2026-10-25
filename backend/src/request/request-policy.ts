@@ -117,7 +117,10 @@ const firePattern = /\b(?:brand|feuer|rauch|verbrannt(?:er|e|es|en)?\s+geruch)\b
 const dangerPattern = /\b(?:akute?|unmittelbare?)\s+gefahr\b/i;
 
 export function detectEmergency(message: string): { emergency: boolean; show112: boolean } {
+  // Ignore explicit statements that nobody is affected, while leaving any
+  // separate positive hazard in the same message available for detection.
+  const hazards = message.replace(/\b(?:niemand|keiner|keine person)\s+(?:ist|wurde)\s+(?:(?:im|in dem)\s+lift\s+)?(?:eingeschlossen|eingeklemmt|gefangen|verletzt|bewusstlos)\b/gi, '');
   const emergency = [trappedPattern, injuryPattern, firePattern, dangerPattern]
-    .some((pattern) => pattern.test(message));
+    .some((pattern) => pattern.test(hazards));
   return { emergency, show112: emergency };
 }
