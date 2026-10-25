@@ -9,6 +9,17 @@ const user = (content: string): ChatMessage => ({ role: 'user', content, timesta
 
 describe('customer intake context', () => {
   it.each([
+    ['Meine Mutter kommt die Innentreppe kaum noch herunter.', 'innen'],
+    ['Wir benötigen einen Lift an der Außentreppe.', 'aussen'],
+  ])('retains an explicitly described staircase in %s', (message, stairLocation) => {
+    expect(reconcileIntakeContext(emptyState, [], message).collectedData.stairLocation).toBe(stairLocation);
+  });
+  it.each(['Es geht nicht um die Innentreppe.', 'Entweder Innentreppe oder Außentreppe.'])(
+    'does not guess the staircase location from %s', (message) => {
+      expect(reconcileIntakeContext(emptyState, [], message).collectedData.stairLocation).toBeUndefined();
+    },
+  );
+  it.each([
     ['draußen', { stairLocation: 'aussen' }],
     ['Mehrfamilienhaus', { buildingType: 'mehrfamilienhaus' }],
     ['rollstuhlgeeignet', { liftType: 'rollstuhlgeeignet' }],

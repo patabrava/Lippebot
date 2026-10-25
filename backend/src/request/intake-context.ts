@@ -39,10 +39,14 @@ function explicitAnswer(message: string, previous?: ChatMessage): CollectedReque
   const normalized = text.toLocaleLowerCase('de-DE').replace(/[.!]$/, '');
   const data: CollectedRequestData = {};
   const stairLocation = normalizeStairLocation(normalized);
+  const describedLocations = [...normalized.matchAll(/\b(?:innen|außen|aussen)treppe\b/gu)]
+    .map((match) => normalizeStairLocation(match[0]));
   const stairType = normalizeStairType(normalized);
   const buildingType = normalizeBuildingType(normalized);
   const liftType = normalizeLiftType(normalized);
   if (stairLocation) data.stairLocation = stairLocation;
+  else if (describedLocations.length > 0 && new Set(describedLocations).size === 1
+    && !/\b(?:keine|nicht|statt|entweder|oder)\b/.test(normalized)) data.stairLocation = describedLocations[0];
   if (stairType) data.stairType = stairType;
   if (buildingType) data.buildingType = buildingType;
   if (liftType) data.liftType = liftType;
