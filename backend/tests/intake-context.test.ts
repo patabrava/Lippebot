@@ -6,8 +6,30 @@ import { stl300Inquiry, stl300Clarification } from './fixtures/stl300-inquiry.js
 
 const emptyState: IntakeState = { mode: 'undetermined', collectedData: {}, awaitingVerification: false, completed: false };
 const user = (content: string): ChatMessage => ({ role: 'user', content, timestamp: 1 });
+const assistant = (content: string): ChatMessage => ({ role: 'assistant', content, timestamp: 1 });
 
 describe('customer intake context', () => {
+  it('advances after the short answers in the reported conversation', () => {
+    const situationQuestion = assistant('Geht es um einen neuen Lift, einen bereits bestellten Lift oder einen bereits eingebauten Lift?');
+    const state = reconcileIntakeContext({ ...emptyState, mode: 'anfrage' }, [situationQuestion], 'Neu');
+    expect(state.collectedData).toMatchObject({ requestSituation: 'new_lift', ownsLift: 'no' });
+    expect(buildNextMissingQuestion(state.mode, state.collectedData)).toBe('Wie ist dein vollständiger Name?');
+
+    const readyForLift = { ...state, collectedData: { ...state.collectedData, firstName: 'Alex', lastName: 'Beispiel', email: 'test@example.invalid', phoneContactStatus: 'declined' as const, message: 'Anfrage', priorContact: 'no' as const, stairLocation: 'innen' as const, stairType: 'kurvig' as const } };
+    const lift = reconcileIntakeContext(readyForLift, [assistant('Brauchst du einen Sitzlift oder einen rollstuhlgeeigneten Lift?')], 'Sitz');
+    expect(lift.collectedData.liftType).toBe('sitzlift');
+    expect(buildNextMissingQuestion(lift.mode, lift.collectedData)).toContain('Einfamilienhaus');
+    expect(reconcileIntakeContext(emptyState, [assistant('Geht es um eine gerade oder eine kurvige Treppe?')], 'Kurve').collectedData.stairType).toBe('kurvig');
+  });
+
+  it('does not infer shorthand without the relevant question', () => {
+    for (const reply of ['Neu', 'Sitz', 'Kurve']) {
+      const data = reconcileIntakeContext(emptyState, [assistant('Wie kann ich helfen?')], reply).collectedData;
+      expect(data.requestSituation).toBeUndefined();
+      expect(data.liftType).toBeUndefined();
+      expect(data.stairType).toBeUndefined();
+    }
+  });
   it.each([
     ['Meine Mutter kommt die Innentreppe kaum noch herunter.', 'innen'],
     ['Wir benötigen einen Lift an der Außentreppe.', 'aussen'],

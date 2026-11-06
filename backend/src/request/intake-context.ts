@@ -25,8 +25,13 @@ export function currentRequestHistory(history: ChatMessage[]): ChatMessage[] {
   return history.slice(boundary + 1);
 }
 
-function explicitSituation(text: string): RequestSituation | undefined {
+function explicitSituation(text: string, previous?: ChatMessage): RequestSituation | undefined {
   const normalized = text.trim().toLocaleLowerCase('de-DE');
+  if (previous?.role === 'assistant' && /neuen lift.*bestellten lift.*eingebauten lift/i.test(previous.content)) {
+    if (/^(?:neu|neuen?|neuer)[.!]?$/.test(normalized)) return 'new_lift';
+    if (/^(?:bestellt|bestellten?)[.!]?$/.test(normalized)) return 'ordered_not_installed';
+    if (/^(?:eingebaut|eingebauten?)[.!]?$/.test(normalized)) return 'installed_lift';
+  }
   if (/\b(?:bereits|schon)\s+(?:einen\s+\w*\s*)?(?:bestellt|gekauft)\b|^(?:der lift ist )?(?:bereits )?bestellt[.!]?$/.test(normalized)) return 'ordered_not_installed';
   if (/\b(?:bereits|schon)\s+eingebaut\b|^(?:der lift ist )?eingebaut[.!]?$/.test(normalized)) return 'installed_lift';
   if (/^(?:(?:es geht um|für|fuer|einen|ein|der)\s+)*(?:neuen?|neuer)\s+(?:treppenlift|sitzlift|plattformlift|hublift|lift)[.!]?$/.test(normalized)) return 'new_lift';
@@ -50,6 +55,8 @@ function explicitAnswer(message: string, previous?: ChatMessage): CollectedReque
   if (stairType) data.stairType = stairType;
   if (buildingType) data.buildingType = buildingType;
   if (liftType) data.liftType = liftType;
+  if (previous?.role === 'assistant' && /sitzlift.*rollstuhlgeeignet/i.test(previous.content) && normalized === 'sitz') data.liftType = 'sitzlift';
+  if (previous?.role === 'assistant' && /gerade.*kurvig|kurvig.*gerade/i.test(previous.content) && normalized === 'kurve') data.stairType = 'kurvig';
   if (/^(?:privat|privatperson|private anfrage)$/.test(normalized)) data.customerSegment = 'privatperson';
   if (/^(?:geschäftlich|geschaeftlich|firma|firmenkunde|gewerblich)$/.test(normalized)) data.customerSegment = 'firma';
   const time = normalized.replace(/[–—]/g, '-').replace(/\s|uhr/g, '');
@@ -93,7 +100,7 @@ export function reconcileIntakeContext(
   for (const [index, turn] of turns.entries()) {
     if (turn.role !== 'user') continue;
     const message = turn.content;
-    situation = explicitSituation(message) ?? situation;
+    situation = explicitSituation(message, turns[index - 1]) ?? situation;
     data = mergeCollectedData(data, {
       ...inferContactDataFromMessage(message),
       ...inferPhoneContactStatusFromMessage(message),
